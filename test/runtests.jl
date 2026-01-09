@@ -144,6 +144,49 @@ try
         @test maximum(abs.(Fdn_sb .- Gdn_sb_ref)) < 1e-10
     end
 
+    @testset "Cached sliced window parity" begin
+        rng = MersenneTwister(31)
+        nj = 2
+        ns = 4
+        N = nj * ns
+        layout = HFDMRG.SliceLayout(fill(nj, ns))
+        V6 = randn(rng, nj, nj, nj, nj, ns, ns)
+        backend_proj = HFDMRG.SlicedBasisBackend(layout, V6)
+        backend_cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+
+        Lra = 1:2
+        Cra = 3:6
+        Rra = 7:8
+        Lphi = orthonormal_cols(rng, length(Lra), 1)
+        Rphi = orthonormal_cols(rng, length(Rra), 1)
+        Lvee_proj = HFDMRG.vee_init_block(:left, Lra, (Lra[end] + 1):N, Lphi, backend_proj)
+        Rvee_proj = HFDMRG.vee_init_block(:right, Rra, 1:(Rra[1] - 1), Rphi, backend_proj)
+        win_proj = HFDMRG.vee_window(Lvee_proj, Rvee_proj, Cra, backend_proj)
+
+        Lvee_cached = HFDMRG.vee_init_block(:left, Lra, (Lra[end] + 1):N, Lphi, backend_cached)
+        Rvee_cached = HFDMRG.vee_init_block(:right, Rra, 1:(Rra[1] - 1), Rphi, backend_cached)
+        win_cached = HFDMRG.vee_window(Lvee_cached, Rvee_cached, Cra, backend_cached)
+
+        superdim = size(Lphi, 2) + length(Cra) + size(Rphi, 2)
+        rho = randn(rng, superdim, superdim)
+        F_proj = zeros(superdim, superdim)
+        F_cached = zeros(superdim, superdim)
+        HFDMRG.vee_add_fock_r!(F_proj, rho, win_proj)
+        HFDMRG.vee_add_fock_r!(F_cached, rho, win_cached)
+        @test maximum(abs.(F_proj .- F_cached)) < 1e-10
+
+        rhoup = randn(rng, superdim, superdim)
+        rhodn = randn(rng, superdim, superdim)
+        Fup_proj = zeros(superdim, superdim)
+        Fdn_proj = zeros(superdim, superdim)
+        Fup_cached = zeros(superdim, superdim)
+        Fdn_cached = zeros(superdim, superdim)
+        HFDMRG.vee_add_fock!(Fup_proj, Fdn_proj, rhoup, rhodn, win_proj)
+        HFDMRG.vee_add_fock!(Fup_cached, Fdn_cached, rhoup, rhodn, win_cached)
+        @test maximum(abs.(Fup_proj .- Fup_cached)) < 1e-10
+        @test maximum(abs.(Fdn_proj .- Fdn_cached)) < 1e-10
+    end
+
     @testset "Sliced end-to-end sweep" begin
         rng = MersenneTwister(7)
         nj = 2
@@ -207,7 +250,7 @@ try
     @testset "Cached sliced backend vs projection" begin
         rng = MersenneTwister(23)
         nj = 2
-        ns = 4
+        ns = 6
         N = nj * ns
         layout = HFDMRG.SliceLayout(fill(nj, ns))
         H = randn(rng, N, N)
