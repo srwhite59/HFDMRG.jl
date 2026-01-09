@@ -18,6 +18,14 @@ try
         @test :solve_hfdmrg in names(HFDMRG, all = false)
     end
 
+    @testset "Sliced backend stub" begin
+        layout = HFDMRG.SliceLayout([2, 3])
+        backend = HFDMRG.SlicedBasisBackend(layout, nothing)
+        phi = zeros(2, 1)
+        err = ErrorException("SlicedBasisBackend not implemented yet")
+        @test_throws err HFDMRG.vee_init_block(:left, 1:2, 3:5, phi, backend)
+    end
+
     function orthonormal_cols(rng, n, m)
         Q = Matrix(qr(randn(rng, n, m)).Q)
         Q[:, 1:m]
