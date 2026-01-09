@@ -68,7 +68,7 @@ function vee_absorb_block(side, vee_old::DDBlockState, cra, Phi_old, Phi_C, phi_
         newVpp = trans2(vee_old.Vpp[lr, :, :], Phi_old)
     end
     Vpp = newVpp + VC
-    ra_new = side == :right ? cra[1]:vee_old.ra[end] : vee_old.ra[1]:cra[end]
+    ra_new = side == :right ? (cra[1]:vee_old.ra[end]) : (vee_old.ra[1]:cra[end])
     DDBlockState(ra_new, raV_new, pp, Vpp, Vijkl)
 end
 
