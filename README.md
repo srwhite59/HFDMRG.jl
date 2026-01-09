@@ -10,10 +10,18 @@ The core is interaction-agnostic: it owns the sweep schedule, basis transforms,
 and SCF loop, while backends manage interaction caches and add mean-field
 contributions to the Fock matrix.
 
+Entry points:
+- `solve_hfdmrg(H, V, psiup0; ...)` for density-density RHF.
+- `solve_hfdmrg(H, V, psiup0, psidn0; ...)` for density-density UHF.
+- `solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; ...)` for sliced-basis RHF
+  (projection-based).
+
 ## Repository layout
 - `src/core.jl`: generic HF-DMRG sweep engine.
 - `src/backend_api.jl`: backend API contract for interactions.
 - `src/backends/density_density.jl`: density-density backend for `V::Matrix`.
+- `src/backends/sliced_basis.jl`: sliced-basis backend (projection-based).
+- `src/slice_layout.jl`: slice layout helper for fixed-size slices.
 - `reference/HF_dmrg_legacy.jl`: legacy solver used for regression tests.
 
 ## How to run tests
@@ -29,4 +37,4 @@ Checklist:
 3. Add a regression test that compares against a known solution.
 
 The density-density backend is implemented today; a sliced-basis backend is
-future work.
+implemented via a projection-based window path (correctness-first, slow).

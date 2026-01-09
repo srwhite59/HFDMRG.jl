@@ -202,3 +202,21 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisWindow)
     sliced_add_fock_r!(G_full, rho_full, win.V6, win.nj, win.ns)
     F .+= B' * G_full * B
 end
+
+"""
+solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; kwargs...) -> (psiup, psidn, energy)
+
+Restricted HF (RHF) sweep using a sliced-basis backend.
+"""
+function solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; kwargs...)
+    solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
+end
+
+"""
+solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0, psidn0; kwargs...) -> (psiup, psidn, energy)
+
+Unrestricted HF (UHF) sweep using a sliced-basis backend.
+"""
+function solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0, psidn0; kwargs...)
+    solve_hfdmrg_core(H, backend, psiup0, psidn0; restricted = false, kwargs...)
+end
