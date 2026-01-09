@@ -13,6 +13,11 @@ try
     include(joinpath(testdir, "..", "reference", "HF_dmrg_legacy.jl"))
     Legacy = HF_dmrg
 
+    @testset "Public API" begin
+        @test isdefined(HFDMRG, :solve_hfdmrg)
+        @test :solve_hfdmrg in names(HFDMRG, all = false)
+    end
+
     function orthonormal_cols(rng, n, m)
         Q = Matrix(qr(randn(rng, n, m)).Q)
         Q[:, 1:m]

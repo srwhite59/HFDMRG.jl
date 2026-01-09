@@ -420,11 +420,27 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     psiallup, psialldn, energyiter
 end
 
+"""
+solve_hfdmrg(H, V, psiup0; kwargs...) -> (psiup, psidn, energy)
+
+Restricted HF (RHF) sweep using the density-density backend. H and V are N x N
+matrices. psiup0 is N x Nup with orthonormal columns. Returns the optimized
+orbitals in the physical site basis for the last sweep position and the final
+energy. For RHF, psidn == psiup.
+"""
 function solve_hfdmrg(H, V, psiup0; kwargs...)
     backend = DensityDensityBackend(V)
     solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
 end
 
+"""
+solve_hfdmrg(H, V, psiup0, psidn0; kwargs...) -> (psiup, psidn, energy)
+
+Unrestricted HF (UHF) sweep using the density-density backend. H and V are N x N
+matrices. psiup0/psidn0 are N x Nup/Ndn with orthonormal columns. Returns the
+optimized orbitals in the physical site basis for the last sweep position and
+the final energy.
+"""
 function solve_hfdmrg(H, V, psiup0, psidn0; kwargs...)
     backend = DensityDensityBackend(V)
     solve_hfdmrg_core(H, backend, psiup0, psidn0; restricted = false, kwargs...)
