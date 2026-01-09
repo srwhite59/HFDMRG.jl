@@ -19,11 +19,49 @@ try
     end
 
     @testset "Sliced backend stub" begin
-        layout = HFDMRG.SliceLayout([2, 3])
-        backend = HFDMRG.SlicedBasisBackend(layout, nothing)
-        phi = zeros(2, 1)
+        nj = 2
+        ns = 3
+        layout = HFDMRG.SliceLayout(fill(nj, ns))
+        V6 = zeros(nj, nj, nj, nj, ns, ns)
+        backend = HFDMRG.SlicedBasisBackend(layout, V6)
+        phi = zeros(nj, 1)
         err = ErrorException("SlicedBasisBackend not implemented yet")
-        @test_throws err HFDMRG.vee_init_block(:left, 1:2, 3:5, phi, backend)
+        @test_throws err HFDMRG.vee_init_block(:left, 1:nj, nj + 1:nj * ns, phi, backend)
+    end
+
+    @testset "Sliced RHF Fock" begin
+        nj = 2
+        ns = 3
+        N = nj * ns
+        V6 = randn(nj, nj, nj, nj, ns, ns)
+        rho = randn(N, N)
+        rho = (rho + rho') / 2
+        F1 = zeros(N, N)
+        HFDMRG.sliced_add_fock_r!(F1, rho, V6, nj, ns)
+
+        function slice_local(p, nj)
+            n = (p - 1) ÷ nj + 1
+            a = p - (n - 1) * nj
+            n, a
+        end
+
+        function v6_lookup(V6, p, q, r, s, nj)
+            np, a = slice_local(p, nj)
+            nq, c = slice_local(q, nj)
+            nr, b = slice_local(r, nj)
+            nslice, d = slice_local(s, nj)
+            if np == nr && nq == nslice
+                return V6[a, b, c, d, np, nq]
+            end
+            0.0
+        end
+
+        F2 = zeros(N, N)
+        for p = 1:N, q = 1:N, r = 1:N, s = 1:N
+            F2[p, q] += rho[r, s] * (2.0 * v6_lookup(V6, p, q, r, s, nj) -
+                                     v6_lookup(V6, p, r, q, s, nj))
+        end
+        @test maximum(abs.(F1 .- F2)) < 1e-10
     end
 
     function orthonormal_cols(rng, n, m)
