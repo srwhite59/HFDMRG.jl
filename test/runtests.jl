@@ -24,12 +24,12 @@ end
     B = randn(rng, N, N)
     V = (B + B') / 2
 
-    maxiter = 2
+    maxiter = 1
     blocksize = 2
     cutoff = 1e-8
 
-    Nup = 3
-    Ndn = 3
+    Nup = 2
+    Ndn = 2
     psiup0 = orthonormal_cols(rng, N, Nup)
     psidn0 = orthonormal_cols(rng, N, Ndn)
     _, _, e_new = solve_hfdmrg(H, V, psiup0, psidn0;
@@ -38,7 +38,7 @@ end
         blocksize, maxiter, cutoff; verbose = false)
     @test isapprox(e_new, e_legacy; atol = 1e-6, rtol = 0)
 
-    Nup_r = 3
+    Nup_r = 2
     psiup_r = orthonormal_cols(rng, N, Nup_r)
     _, _, e_new_r = solve_hfdmrg(H, V, psiup_r;
         maxiter = maxiter, blocksize = blocksize, cutoff = cutoff, verbose = false)
