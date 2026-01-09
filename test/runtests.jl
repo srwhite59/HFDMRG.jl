@@ -3,11 +3,12 @@ using LinearAlgebra
 using Random
 using HFDMRG
 
-if !(@__DIR__ in LOAD_PATH)
-    push!(LOAD_PATH, @__DIR__)
+testdir = @__DIR__
+if !(testdir in LOAD_PATH)
+    push!(LOAD_PATH, testdir)
 end
 
-include(joinpath(@__DIR__, "..", "reference", "HF_dmrg_legacy.jl"))
+include(joinpath(testdir, "..", "reference", "HF_dmrg_legacy.jl"))
 const Legacy = HF_dmrg
 
 function orthonormal_cols(rng, n, m)
