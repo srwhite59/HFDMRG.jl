@@ -9,6 +9,8 @@ struct SlicedBasisBackend{TL, TV}
     Vee::TV
 end
 
+struct SlicedBasisWindow end
+
 function _check_side(side)
     (side === :left || side === :right) || error("side must be :left or :right")
 end
@@ -43,10 +45,10 @@ function vee_window(Lvee, Rvee, Cra, backend::SlicedBasisBackend)
     _sliced_not_implemented()
 end
 
-function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisWindow)
     _sliced_not_implemented()
 end
 
-function vee_add_fock_r!(F, rho, win)
+function vee_add_fock_r!(F, rho, win::SlicedBasisWindow)
     _sliced_not_implemented()
 end
