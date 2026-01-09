@@ -15,6 +15,8 @@ Entry points:
 - `solve_hfdmrg(H, V, psiup0, psidn0; ...)` for density-density UHF.
 - `solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; ...)` for sliced-basis RHF
   (projection-based).
+You can also pass `layout::SliceLayout` and `V6` directly; the backend is constructed
+for you.
 
 ## Repository layout
 - `src/core.jl`: generic HF-DMRG sweep engine.

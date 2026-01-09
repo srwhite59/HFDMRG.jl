@@ -220,3 +220,23 @@ Unrestricted HF (UHF) sweep using a sliced-basis backend.
 function solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0, psidn0; kwargs...)
     solve_hfdmrg_core(H, backend, psiup0, psidn0; restricted = false, kwargs...)
 end
+
+"""
+solve_hfdmrg(H, layout::SliceLayout, V6, psiup0; kwargs...) -> (psiup, psidn, energy)
+
+Restricted HF (RHF) sweep using a sliced-basis backend constructed from layout and V6.
+"""
+function solve_hfdmrg(H, layout::SliceLayout, V6, psiup0; kwargs...)
+    backend = SlicedBasisBackend(layout, V6)
+    solve_hfdmrg(H, backend, psiup0; kwargs...)
+end
+
+"""
+solve_hfdmrg(H, layout::SliceLayout, V6, psiup0, psidn0; kwargs...) -> (psiup, psidn, energy)
+
+Unrestricted HF (UHF) sweep using a sliced-basis backend constructed from layout and V6.
+"""
+function solve_hfdmrg(H, layout::SliceLayout, V6, psiup0, psidn0; kwargs...)
+    backend = SlicedBasisBackend(layout, V6)
+    solve_hfdmrg(H, backend, psiup0, psidn0; kwargs...)
+end

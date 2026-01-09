@@ -166,6 +166,44 @@ try
         @test energy <= energy0 + 1e-6 * max(1.0, abs(energy0))
     end
 
+    @testset "Sliced convenience overloads" begin
+        rng = MersenneTwister(11)
+        nj = 2
+        ns = 4
+        N = nj * ns
+        layout = HFDMRG.SliceLayout(fill(nj, ns))
+        H = randn(rng, N, N)
+        H = (H + H') / 2
+        V6 = 0.01 * randn(rng, nj, nj, nj, nj, ns, ns)
+        backend = HFDMRG.SlicedBasisBackend(layout, V6)
+        Nup = 2
+        psiup0 = orthonormal_cols(rng, N, Nup)
+        _, _, e_backend = solve_hfdmrg(H, backend, psiup0; maxiter = 2, blocksize = 2, cutoff = 1e-8)
+        _, _, e_layout = solve_hfdmrg(H, layout, V6, psiup0; maxiter = 2, blocksize = 2, cutoff = 1e-8)
+        @test isapprox(e_backend, e_layout; atol = 1e-10, rtol = 0)
+    end
+
+    @testset "Sliced end-to-end sanity" begin
+        rng = MersenneTwister(19)
+        nj = 2
+        ns = 6
+        N = nj * ns
+        layout = HFDMRG.SliceLayout(fill(nj, ns))
+        H = randn(rng, N, N)
+        H = (H + H') / 2
+        V6 = 0.01 * randn(rng, nj, nj, nj, nj, ns, ns)
+        Nup = 3
+        psiup0 = orthonormal_cols(rng, N, Nup)
+        rho0 = psiup0 * psiup0'
+        F0 = copy(H)
+        HFDMRG.sliced_add_fock_r!(F0, rho0, V6, nj, ns)
+        energy0 = tr(rho0 * (F0 + H))
+        _, _, energy = solve_hfdmrg(H, layout, V6, psiup0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        @test isfinite(energy)
+        @test energy <= energy0 + 1e-6 * max(1.0, abs(energy0))
+    end
+
     @testset "HF-DMRG regression" begin
         rng = MersenneTwister(1234)
         N = 16
