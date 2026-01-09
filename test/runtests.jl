@@ -30,6 +30,11 @@ try
         0.0
     end
 
+    function orthonormal_cols(rng, n, m)
+        Q = Matrix(qr(randn(rng, n, m)).Q)
+        Q[:, 1:m]
+    end
+
     @testset "Public API" begin
         @test isdefined(HFDMRG, :solve_hfdmrg)
         @test :solve_hfdmrg in names(HFDMRG, all = false)
@@ -38,12 +43,14 @@ try
     @testset "Sliced backend stub" begin
         nj = 2
         ns = 3
+        N = nj * ns
         layout = HFDMRG.SliceLayout(fill(nj, ns))
         V6 = zeros(nj, nj, nj, nj, ns, ns)
         backend = HFDMRG.SlicedBasisBackend(layout, V6)
-        phi = zeros(nj, 1)
-        err = ErrorException("SlicedBasisBackend not implemented yet")
-        @test_throws err HFDMRG.vee_init_block(:left, 1:nj, nj + 1:nj * ns, phi, backend)
+        phi = orthonormal_cols(MersenneTwister(1), nj, 1)
+        state = HFDMRG.vee_init_block(:left, 1:nj, (nj + 1):N, phi, backend)
+        @test state.ra == 1:nj
+        @test size(state.phi) == size(phi)
     end
 
     @testset "Sliced RHF Fock" begin
@@ -89,9 +96,52 @@ try
         @test maximum(abs.(Fdn1 .- Fdn2)) < 1e-10
     end
 
-    function orthonormal_cols(rng, n, m)
-        Q = Matrix(qr(randn(rng, n, m)).Q)
-        Q[:, 1:m]
+    @testset "Sliced window projection" begin
+        rng = MersenneTwister(42)
+        nj = 2
+        ns = 4
+        N = nj * ns
+        layout = HFDMRG.SliceLayout(fill(nj, ns))
+        V6 = randn(rng, nj, nj, nj, nj, ns, ns)
+        backend = HFDMRG.SlicedBasisBackend(layout, V6)
+
+        Lra = 1:2
+        Cra = 3:6
+        Rra = 7:8
+        Lphi = orthonormal_cols(rng, length(Lra), 1)
+        Rphi = orthonormal_cols(rng, length(Rra), 1)
+        Lvee = HFDMRG.vee_init_block(:left, Lra, (Lra[end] + 1):N, Lphi, backend)
+        Rvee = HFDMRG.vee_init_block(:right, Rra, 1:(Rra[1] - 1), Rphi, backend)
+        win = HFDMRG.vee_window(Lvee, Rvee, Cra, backend)
+        B = win.B
+        superdim = size(B, 2)
+
+        rho_sb = randn(rng, superdim, superdim)
+        rho_sb = (rho_sb + rho_sb') / 2
+        F_sb = zeros(superdim, superdim)
+        HFDMRG.vee_add_fock_r!(F_sb, rho_sb, win)
+        rho_full = B * rho_sb * B'
+        G_full = zeros(N, N)
+        HFDMRG.sliced_add_fock_r!(G_full, rho_full, V6, nj, ns)
+        G_sb_ref = B' * G_full * B
+        @test maximum(abs.(F_sb .- G_sb_ref)) < 1e-10
+
+        rhoup_sb = randn(rng, superdim, superdim)
+        rhoup_sb = (rhoup_sb + rhoup_sb') / 2
+        rhodn_sb = randn(rng, superdim, superdim)
+        rhodn_sb = (rhodn_sb + rhodn_sb') / 2
+        Fup_sb = zeros(superdim, superdim)
+        Fdn_sb = zeros(superdim, superdim)
+        HFDMRG.vee_add_fock!(Fup_sb, Fdn_sb, rhoup_sb, rhodn_sb, win)
+        rhoup_full = B * rhoup_sb * B'
+        rhodn_full = B * rhodn_sb * B'
+        Gup_full = zeros(N, N)
+        Gdn_full = zeros(N, N)
+        HFDMRG.sliced_add_fock_uhf!(Gup_full, Gdn_full, rhoup_full, rhodn_full, V6, nj, ns)
+        Gup_sb_ref = B' * Gup_full * B
+        Gdn_sb_ref = B' * Gdn_full * B
+        @test maximum(abs.(Fup_sb .- Gup_sb_ref)) < 1e-10
+        @test maximum(abs.(Fdn_sb .- Gdn_sb_ref)) < 1e-10
     end
 
     @testset "HF-DMRG regression" begin
