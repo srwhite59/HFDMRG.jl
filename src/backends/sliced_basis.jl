@@ -71,7 +71,7 @@ function vee_window(::Nothing, ::Nothing, Cra, backend::SlicedBasisBackend)
 end
 
 function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisWindow)
-    error("SlicedBasisBackend UHF not implemented yet")
+    sliced_add_fock_uhf!(Fup, Fdn, rhoup, rhodn, win.V6, win.nj, win.ns)
 end
 
 """
@@ -109,6 +109,50 @@ function sliced_add_fock_r!(F, rho, V6::Array{Float64,6}, nj::Int, ns::Int)
         end
     end
     F
+end
+
+"""
+Add UHF mean-field contributions using sliced integrals.
+
+Fup[p,q] += sum_{r,s} (rhoup + rhodn)[r,s] * (p q| r s) - rhoup[r,s] * (p r| q s)
+Fdn[p,q] += sum_{r,s} (rhoup + rhodn)[r,s] * (p q| r s) - rhodn[r,s] * (p r| q s)
+
+With the slice-preserving mapping, exchange terms only contribute when p and q
+belong to the same slice.
+"""
+function sliced_add_fock_uhf!(Fup, Fdn, rhoup, rhodn, V6::Array{Float64,6}, nj::Int, ns::Int)
+    N = nj * ns
+    size(Fup, 1) == N || error("Fup has wrong size")
+    size(Fup, 2) == N || error("Fup has wrong size")
+    size(Fdn) == size(Fup) || error("Fdn has wrong size")
+    size(rhoup) == size(Fup) || error("rhoup has wrong size")
+    size(rhodn) == size(Fup) || error("rhodn has wrong size")
+    size(V6) == (nj, nj, nj, nj, ns, ns) || error("V6 has wrong size")
+
+    rtot = rhoup + rhodn
+    for np = 1:ns, nq = 1:ns
+        for a = 1:nj, c = 1:nj
+            p = (np - 1) * nj + a
+            q = (nq - 1) * nj + c
+            for b = 1:nj, d = 1:nj
+                r = (np - 1) * nj + b
+                s = (nq - 1) * nj + d
+                v = V6[a, b, c, d, np, nq]
+                Fup[p, q] += rtot[r, s] * v
+                Fdn[p, q] += rtot[r, s] * v
+            end
+            if np == nq
+                for ms = 1:ns, b = 1:nj, d = 1:nj
+                    r = (ms - 1) * nj + b
+                    s = (ms - 1) * nj + d
+                    v = V6[a, c, b, d, np, ms]
+                    Fup[p, q] -= rhoup[r, s] * v
+                    Fdn[p, q] -= rhodn[r, s] * v
+                end
+            end
+        end
+    end
+    Fup, Fdn
 end
 
 function vee_add_fock_r!(F, rho, win::SlicedBasisWindow)

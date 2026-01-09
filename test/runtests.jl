@@ -13,6 +13,23 @@ try
     include(joinpath(testdir, "..", "reference", "HF_dmrg_legacy.jl"))
     Legacy = HF_dmrg
 
+    function slice_local(p, nj)
+        n = (p - 1) ÷ nj + 1
+        a = p - (n - 1) * nj
+        n, a
+    end
+
+    function v6_lookup(V6, p, q, r, s, nj)
+        np, a = slice_local(p, nj)
+        nq, c = slice_local(q, nj)
+        nr, b = slice_local(r, nj)
+        nslice, d = slice_local(s, nj)
+        if np == nr && nq == nslice
+            return V6[a, b, c, d, np, nq]
+        end
+        0.0
+    end
+
     @testset "Public API" begin
         @test isdefined(HFDMRG, :solve_hfdmrg)
         @test :solve_hfdmrg in names(HFDMRG, all = false)
@@ -39,29 +56,37 @@ try
         F1 = zeros(N, N)
         HFDMRG.sliced_add_fock_r!(F1, rho, V6, nj, ns)
 
-        function slice_local(p, nj)
-            n = (p - 1) ÷ nj + 1
-            a = p - (n - 1) * nj
-            n, a
-        end
-
-        function v6_lookup(V6, p, q, r, s, nj)
-            np, a = slice_local(p, nj)
-            nq, c = slice_local(q, nj)
-            nr, b = slice_local(r, nj)
-            nslice, d = slice_local(s, nj)
-            if np == nr && nq == nslice
-                return V6[a, b, c, d, np, nq]
-            end
-            0.0
-        end
-
         F2 = zeros(N, N)
         for p = 1:N, q = 1:N, r = 1:N, s = 1:N
             F2[p, q] += rho[r, s] * (2.0 * v6_lookup(V6, p, q, r, s, nj) -
                                      v6_lookup(V6, p, r, q, s, nj))
         end
         @test maximum(abs.(F1 .- F2)) < 1e-10
+    end
+
+    @testset "Sliced UHF Fock" begin
+        nj = 2
+        ns = 3
+        N = nj * ns
+        V6 = randn(nj, nj, nj, nj, ns, ns)
+        rhoup = randn(N, N)
+        rhoup = (rhoup + rhoup') / 2
+        rhodn = randn(N, N)
+        rhodn = (rhodn + rhodn') / 2
+        Fup1 = zeros(N, N)
+        Fdn1 = zeros(N, N)
+        HFDMRG.sliced_add_fock_uhf!(Fup1, Fdn1, rhoup, rhodn, V6, nj, ns)
+
+        Fup2 = zeros(N, N)
+        Fdn2 = zeros(N, N)
+        for p = 1:N, q = 1:N, r = 1:N, s = 1:N
+            vdir = v6_lookup(V6, p, q, r, s, nj)
+            vex = v6_lookup(V6, p, r, q, s, nj)
+            Fup2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhoup[r, s] * vex
+            Fdn2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhodn[r, s] * vex
+        end
+        @test maximum(abs.(Fup1 .- Fup2)) < 1e-10
+        @test maximum(abs.(Fdn1 .- Fdn2)) < 1e-10
     end
 
     function orthonormal_cols(rng, n, m)
