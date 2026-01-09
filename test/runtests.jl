@@ -3,15 +3,8 @@ using LinearAlgebra
 using Random
 using HFDMRG
 
-module HFnn end
-
-module Util
-using LinearAlgebra
-export eigsym
-function eigsym(A)
-    E = eigen(Symmetric(A))
-    E.values, E.vectors
-end
+if !(@__DIR__ in LOAD_PATH)
+    push!(LOAD_PATH, @__DIR__)
 end
 
 include(joinpath(@__DIR__, "..", "reference", "HF_dmrg_legacy.jl"))
