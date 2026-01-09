@@ -204,6 +204,28 @@ try
         @test energy <= energy0 + 1e-6 * max(1.0, abs(energy0))
     end
 
+    @testset "Cached sliced backend vs projection" begin
+        rng = MersenneTwister(23)
+        nj = 2
+        ns = 4
+        N = nj * ns
+        layout = HFDMRG.SliceLayout(fill(nj, ns))
+        H = randn(rng, N, N)
+        H = (H + H') / 2
+        V6 = 0.01 * randn(rng, nj, nj, nj, nj, ns, ns)
+        backend_proj = HFDMRG.SlicedBasisBackend(layout, V6)
+        backend_cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+        Nup = 1
+        Ndn = 1
+        psiup0 = orthonormal_cols(rng, N, Nup)
+        psidn0 = orthonormal_cols(rng, N, Ndn)
+        _, _, e_proj = solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        _, _, e_cached = solve_hfdmrg(H, backend_cached, psiup0, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        @test isapprox(e_proj, e_cached; atol = 1e-9, rtol = 0)
+    end
+
     @testset "HF-DMRG regression" begin
         rng = MersenneTwister(1234)
         N = 16

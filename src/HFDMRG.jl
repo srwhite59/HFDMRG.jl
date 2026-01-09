@@ -27,6 +27,7 @@ include("slice_layout.jl")
 include("core.jl")
 include("backends/density_density.jl")
 include("backends/sliced_basis.jl")
+include("backends/sliced_basis_cached.jl")
 
 export solve_hfdmrg
 
