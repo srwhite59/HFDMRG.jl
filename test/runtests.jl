@@ -11,7 +11,7 @@ try
     end
 
     include(joinpath(testdir, "..", "reference", "HF_dmrg_legacy.jl"))
-    const Legacy = HF_dmrg
+    Legacy = HF_dmrg
 
     function orthonormal_cols(rng, n, m)
         Q = Matrix(qr(randn(rng, n, m)).Q)
