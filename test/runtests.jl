@@ -185,6 +185,24 @@ try
         HFDMRG.vee_add_fock!(Fup_cached, Fdn_cached, rhoup, rhodn, win_cached)
         @test maximum(abs.(Fup_proj .- Fup_cached)) < 1e-10
         @test maximum(abs.(Fdn_proj .- Fdn_cached)) < 1e-10
+
+        rho2 = randn(rng, superdim, superdim)
+        F1 = zeros(superdim, superdim)
+        F2 = zeros(superdim, superdim)
+        HFDMRG.vee_add_fock_r!(F1, rho2, win_cached)
+        HFDMRG.vee_add_fock_r!(F2, rho2, win_cached)
+        @test maximum(abs.(F1 .- F2)) < 1e-12
+
+        rhoup2 = randn(rng, superdim, superdim)
+        rhodn2 = randn(rng, superdim, superdim)
+        Fup1 = zeros(superdim, superdim)
+        Fdn1 = zeros(superdim, superdim)
+        Fup2 = zeros(superdim, superdim)
+        Fdn2 = zeros(superdim, superdim)
+        HFDMRG.vee_add_fock!(Fup1, Fdn1, rhoup2, rhodn2, win_cached)
+        HFDMRG.vee_add_fock!(Fup2, Fdn2, rhoup2, rhodn2, win_cached)
+        @test maximum(abs.(Fup1 .- Fup2)) < 1e-12
+        @test maximum(abs.(Fdn1 .- Fdn2)) < 1e-12
     end
 
     @testset "Sliced end-to-end sweep" begin

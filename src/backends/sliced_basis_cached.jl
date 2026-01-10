@@ -34,6 +34,16 @@ struct SlicedBasisCachedWindow
     center_slice::Vector{Int}
     center_local::Vector{Int}
     center_cols::Vector{Vector{Int}}
+    Srho::Vector{Matrix{Float64}}
+    Srho_up::Vector{Matrix{Float64}}
+    Srho_dn::Vector{Matrix{Float64}}
+    rho_slice::Vector{Matrix{Float64}}
+    rho_slice_up::Vector{Matrix{Float64}}
+    rho_slice_dn::Vector{Matrix{Float64}}
+    tmp_nm::Matrix{Float64}
+    Jnm::Matrix{Float64}
+    K::Matrix{Float64}
+    tmp_nj_n::Matrix{Float64}
 end
 
 function SlicedBasisBackendCached(layout::SliceLayout, V6::Array{Float64,6})
@@ -153,8 +163,21 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
         center_cols[n][a] = ml + idx
     end
 
+    Srho = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
+    Srho_up = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
+    Srho_dn = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
+    rho_slice = [zeros(Float64, backend.nj, backend.nj) for _ = 1:backend.ns]
+    rho_slice_up = [zeros(Float64, backend.nj, backend.nj) for _ = 1:backend.ns]
+    rho_slice_dn = [zeros(Float64, backend.nj, backend.nj) for _ = 1:backend.ns]
+    tmp_nm = zeros(Float64, backend.nj, backend.nj)
+    Jnm = zeros(Float64, backend.nj, backend.nj)
+    K = zeros(Float64, backend.nj, backend.nj)
+    tmp_nj_n = zeros(Float64, backend.nj, superdim)
+
     SlicedBasisCachedWindow(S, backend.V6, backend.nj, backend.ns, ml, lc, mr,
-        Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, center_slice, center_local, center_cols)
+        Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, center_slice, center_local, center_cols,
+        Srho, Srho_up, Srho_dn, rho_slice, rho_slice_up, rho_slice_dn, tmp_nm, Jnm, K,
+        tmp_nj_n)
 end
 
 function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
@@ -255,43 +278,45 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
         end
     end
 
-    J = [zeros(Float64, nj, nj) for _ = 1:ns, _ = 1:ns]
-    for n1 = 1:ns
+    Srho = win.Srho
+    tmp_nm = win.tmp_nm
+    Jnm = win.Jnm
+    tmp_nj_n = win.tmp_nj_n
+
+    @views for n1 = 1:ns
+        mul!(Srho[n1], S[n1], rho, 1.0, 0.0)
+    end
+
+    @views for n1 = 1:ns
         S1 = S[n1]
         for n2 = 1:ns
             S2 = S[n2]
-            rho_nm = S1 * rho * S2'
-            Jnm = J[n1, n2]
+            mul!(tmp_nm, Srho[n1], S2', 1.0, 0.0)
             for a = 1:nj, c = 1:nj
                 acc = 0.0
                 for b = 1:nj, d = 1:nj
-                    acc += V6[a, b, c, d, n1, n2] * rho_nm[b, d]
+                    acc += V6[a, b, c, d, n1, n2] * tmp_nm[b, d]
                 end
                 Jnm[a, c] = acc
             end
-        end
-    end
-
-    for n1 = 1:ns
-        S1 = S[n1]
-        for n2 = 1:ns
-            S2 = S[n2]
-            Jnm = J[n1, n2]
-            F[Crng, Lrng] .+= 2.0 * (S1[:, Crng]' * Jnm * S2[:, Lrng])
-            F[Crng, Rrng] .+= 2.0 * (S1[:, Crng]' * Jnm * S2[:, Rrng])
-            F[Lrng, Rrng] .+= 2.0 * (S1[:, Lrng]' * Jnm * S2[:, Rrng])
-            F[Rrng, Lrng] .+= 2.0 * (S1[:, Rrng]' * Jnm * S2[:, Lrng])
+            mul!(view(tmp_nj_n, :, Lrng), Jnm, view(S2, :, Lrng), 1.0, 0.0)
+            mul!(view(F, Crng, Lrng), view(S1, :, Crng)', view(tmp_nj_n, :, Lrng), 2.0, 1.0)
+            mul!(view(F, Rrng, Lrng), view(S1, :, Rrng)', view(tmp_nj_n, :, Lrng), 2.0, 1.0)
+            mul!(view(tmp_nj_n, :, Rrng), Jnm, view(S2, :, Rrng), 1.0, 0.0)
+            mul!(view(F, Crng, Rrng), view(S1, :, Crng)', view(tmp_nj_n, :, Rrng), 2.0, 1.0)
+            mul!(view(F, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 2.0, 1.0)
         end
     end
 
     # Direct uses (p q| r s) and can couple slices in p,q.
     # Exchange uses (p r| q s) and is nonzero only when slice(p) == slice(q).
-    rho_slice = Vector{Matrix{Float64}}(undef, ns)
-    for n1 = 1:ns
-        rho_slice[n1] = S[n1] * rho * S[n1]'
+    rho_slice = win.rho_slice
+    K = win.K
+    @views for n1 = 1:ns
+        mul!(rho_slice[n1], Srho[n1], S[n1]', 1.0, 0.0)
     end
-    for n1 = 1:ns
-        K = zeros(Float64, nj, nj)
+    @views for n1 = 1:ns
+        fill!(K, 0.0)
         for n2 = 1:ns
             rho_m = rho_slice[n2]
             for a = 1:nj, b = 1:nj
@@ -302,7 +327,8 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
                 K[a, b] += acc
             end
         end
-        F .-= S[n1]' * K * S[n1]
+        mul!(tmp_nj_n, K, S[n1], 1.0, 0.0)
+        mul!(F, S[n1]', tmp_nj_n, -1.0, 1.0)
     end
 end
 
@@ -323,6 +349,21 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
     Rrng = ml + lc + 1:n
 
     rtot = rhoup + rhodn
+
+    Srho = win.Srho
+    Srho_up = win.Srho_up
+    Srho_dn = win.Srho_dn
+    tmp_nm = win.tmp_nm
+    Jnm = win.Jnm
+    tmp_nj_n = win.tmp_nj_n
+
+    @views for n1 = 1:ns
+        S1 = S[n1]
+        mul!(Srho_up[n1], S1, rhoup, 1.0, 0.0)
+        mul!(Srho_dn[n1], S1, rhodn, 1.0, 0.0)
+        mul!(Srho[n1], S1, rhoup, 1.0, 0.0)
+        mul!(Srho[n1], S1, rhodn, 1.0, 1.0)
+    end
 
     VLL = win.VLL
     for i = 1:ml, j = 1:ml
@@ -412,72 +453,69 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
         end
     end
 
-    J = [zeros(Float64, nj, nj) for _ = 1:ns, _ = 1:ns]
-    for n1 = 1:ns
+    @views for n1 = 1:ns
         S1 = S[n1]
         for n2 = 1:ns
             S2 = S[n2]
-            rho_nm = S1 * rtot * S2'
-            Jnm = J[n1, n2]
+            mul!(tmp_nm, Srho[n1], S2', 1.0, 0.0)
             for a = 1:nj, c = 1:nj
                 acc = 0.0
                 for b = 1:nj, d = 1:nj
-                    acc += V6[a, b, c, d, n1, n2] * rho_nm[b, d]
+                    acc += V6[a, b, c, d, n1, n2] * tmp_nm[b, d]
                 end
                 Jnm[a, c] = acc
             end
+            mul!(view(tmp_nj_n, :, Lrng), Jnm, view(S2, :, Lrng), 1.0, 0.0)
+            mul!(view(Fup, Crng, Lrng), view(S1, :, Crng)', view(tmp_nj_n, :, Lrng), 1.0, 1.0)
+            mul!(view(Fdn, Crng, Lrng), view(S1, :, Crng)', view(tmp_nj_n, :, Lrng), 1.0, 1.0)
+            mul!(view(Fup, Rrng, Lrng), view(S1, :, Rrng)', view(tmp_nj_n, :, Lrng), 1.0, 1.0)
+            mul!(view(Fdn, Rrng, Lrng), view(S1, :, Rrng)', view(tmp_nj_n, :, Lrng), 1.0, 1.0)
+            mul!(view(tmp_nj_n, :, Rrng), Jnm, view(S2, :, Rrng), 1.0, 0.0)
+            mul!(view(Fup, Crng, Rrng), view(S1, :, Crng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
+            mul!(view(Fdn, Crng, Rrng), view(S1, :, Crng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
+            mul!(view(Fup, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
+            mul!(view(Fdn, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
         end
     end
 
-    for n1 = 1:ns
-        S1 = S[n1]
-        for n2 = 1:ns
-            S2 = S[n2]
-            Jnm = J[n1, n2]
-            block_CL = S1[:, Crng]' * Jnm * S2[:, Lrng]
-            block_CR = S1[:, Crng]' * Jnm * S2[:, Rrng]
-            block_LR = S1[:, Lrng]' * Jnm * S2[:, Rrng]
-            block_RL = S1[:, Rrng]' * Jnm * S2[:, Lrng]
-            Fup[Crng, Lrng] .+= block_CL
-            Fdn[Crng, Lrng] .+= block_CL
-            Fup[Crng, Rrng] .+= block_CR
-            Fdn[Crng, Rrng] .+= block_CR
-            Fup[Lrng, Rrng] .+= block_LR
-            Fdn[Lrng, Rrng] .+= block_LR
-            Fup[Rrng, Lrng] .+= block_RL
-            Fdn[Rrng, Lrng] .+= block_RL
-        end
-    end
-
-    rho_slice_up = Vector{Matrix{Float64}}(undef, ns)
-    rho_slice_dn = Vector{Matrix{Float64}}(undef, ns)
-    for n1 = 1:ns
+    rho_slice_up = win.rho_slice_up
+    rho_slice_dn = win.rho_slice_dn
+    @views for n1 = 1:ns
         Sn = S[n1]
-        rho_slice_up[n1] = Sn * rhoup * Sn'
-        rho_slice_dn[n1] = Sn * rhodn * Sn'
+        mul!(rho_slice_up[n1], Srho_up[n1], Sn', 1.0, 0.0)
+        mul!(rho_slice_dn[n1], Srho_dn[n1], Sn', 1.0, 0.0)
     end
     # Direct uses (p q| r s) and can couple slices in p,q.
     # Exchange uses (p r| q s) and is nonzero only when slice(p) == slice(q).
-    for n1 = 1:ns
-        Kup = zeros(Float64, nj, nj)
-        Kdn = zeros(Float64, nj, nj)
+    K = win.K
+    @views for n1 = 1:ns
+        fill!(K, 0.0)
         for n2 = 1:ns
             rup = rho_slice_up[n2]
-            rdn = rho_slice_dn[n2]
             for a = 1:nj, b = 1:nj
-                acc_up = 0.0
-                acc_dn = 0.0
+                acc = 0.0
                 for c = 1:nj, d = 1:nj
-                    v = V6[a, b, c, d, n1, n2]
-                    acc_up += rup[c, d] * v
-                    acc_dn += rdn[c, d] * v
+                    acc += rup[c, d] * V6[a, b, c, d, n1, n2]
                 end
-                Kup[a, b] += acc_up
-                Kdn[a, b] += acc_dn
+                K[a, b] += acc
             end
         end
-        Fup .-= S[n1]' * Kup * S[n1]
-        Fdn .-= S[n1]' * Kdn * S[n1]
+        mul!(tmp_nj_n, K, S[n1], 1.0, 0.0)
+        mul!(Fup, S[n1]', tmp_nj_n, -1.0, 1.0)
+
+        fill!(K, 0.0)
+        for n2 = 1:ns
+            rdn = rho_slice_dn[n2]
+            for a = 1:nj, b = 1:nj
+                acc = 0.0
+                for c = 1:nj, d = 1:nj
+                    acc += rdn[c, d] * V6[a, b, c, d, n1, n2]
+                end
+                K[a, b] += acc
+            end
+        end
+        mul!(tmp_nj_n, K, S[n1], 1.0, 0.0)
+        mul!(Fdn, S[n1]', tmp_nj_n, -1.0, 1.0)
     end
 end
 
