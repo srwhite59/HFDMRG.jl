@@ -259,6 +259,11 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
     size(rho) == size(F) || error("rho has wrong size")
     ml + lc + mr == n || error("window dimensions do not match F")
 
+    Srho = win.Srho
+    @views for n1 = 1:ns
+        mul!(Srho[n1], S[n1], rho, 1.0, 0.0)
+    end
+
     # Direct (J) contributions.
     VLL = win.VLL
     for i = 1:ml, j = 1:ml
@@ -278,29 +283,29 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
         F[ml + lc + i, ml + lc + j] += 2.0 * acc
     end
 
-    center_slice = win.center_slice
-    center_local = win.center_local
     center_cols = win.center_cols
-    for pidx = 1:lc
-        np = center_slice[pidx]
-        a = center_local[pidx]
-        p = ml + pidx
-        for qidx = 1:lc
-            nq = center_slice[qidx]
-            c = center_local[qidx]
-            q = ml + qidx
-            acc = 0.0
-            cols_p = center_cols[np]
+    for np = 1:ns
+        cols_p = center_cols[np]
+        any(c -> c != 0, cols_p) || continue
+        for nq = 1:ns
             cols_q = center_cols[nq]
+            any(c -> c != 0, cols_q) || continue
+            rho_nm = Matrix{Float64}(undef, length(cols_p), length(cols_q))
+            mul!(rho_nm, Srho[np], S[nq]', 1.0, 0.0)
             Vpq = _slice_vee(V, np, nq)
-            for b = 1:length(cols_p), d = 1:length(cols_q)
-                rcol = cols_p[b]
-                scol = cols_q[d]
-                if rcol != 0 && scol != 0
-                    acc += rho[rcol, scol] * Vpq[a, b, c, d]
+            for a = 1:length(cols_p)
+                col_a = cols_p[a]
+                col_a == 0 && continue
+                for c = 1:length(cols_q)
+                    col_c = cols_q[c]
+                    col_c == 0 && continue
+                    acc = 0.0
+                    for b = 1:length(cols_p), d = 1:length(cols_q)
+                        acc += rho_nm[b, d] * Vpq[a, b, c, d]
+                    end
+                    F[col_a, col_c] += 2.0 * acc
                 end
             end
-            F[p, q] += 2.0 * acc
         end
     end
 
@@ -352,13 +357,8 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
         end
     end
 
-    Srho = win.Srho
     VLR = win.VLR
     VRL = win.VRL
-
-    @views for n1 = 1:ns
-        mul!(Srho[n1], S[n1], rho, 1.0, 0.0)
-    end
 
     for i = 1:ml, k = 1:mr
         acc = 0.0
@@ -420,6 +420,7 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
 
     rtot = rhoup + rhodn
 
+    Srho = win.Srho
     Srho_up = win.Srho_up
     Srho_dn = win.Srho_dn
     VLR = win.VLR
@@ -429,6 +430,8 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
         S1 = S[n1]
         mul!(Srho_up[n1], S1, rhoup, 1.0, 0.0)
         mul!(Srho_dn[n1], S1, rhodn, 1.0, 0.0)
+        Srho[n1] .= Srho_up[n1]
+        Srho[n1] .+= Srho_dn[n1]
     end
 
     VLL = win.VLL
@@ -451,30 +454,30 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
         Fdn[ml + lc + i, ml + lc + j] += acc
     end
 
-    center_slice = win.center_slice
-    center_local = win.center_local
     center_cols = win.center_cols
-    for pidx = 1:lc
-        np = center_slice[pidx]
-        a = center_local[pidx]
-        p = ml + pidx
-        for qidx = 1:lc
-            nq = center_slice[qidx]
-            c = center_local[qidx]
-            q = ml + qidx
-            acc = 0.0
-            cols_p = center_cols[np]
+    for np = 1:ns
+        cols_p = center_cols[np]
+        any(c -> c != 0, cols_p) || continue
+        for nq = 1:ns
             cols_q = center_cols[nq]
+            any(c -> c != 0, cols_q) || continue
+            rho_nm = Matrix{Float64}(undef, length(cols_p), length(cols_q))
+            mul!(rho_nm, Srho[np], S[nq]', 1.0, 0.0)
             Vpq = _slice_vee(V, np, nq)
-            for b = 1:length(cols_p), d = 1:length(cols_q)
-                rcol = cols_p[b]
-                scol = cols_q[d]
-                if rcol != 0 && scol != 0
-                    acc += rtot[rcol, scol] * Vpq[a, b, c, d]
+            for a = 1:length(cols_p)
+                col_a = cols_p[a]
+                col_a == 0 && continue
+                for c = 1:length(cols_q)
+                    col_c = cols_q[c]
+                    col_c == 0 && continue
+                    acc = 0.0
+                    for b = 1:length(cols_p), d = 1:length(cols_q)
+                        acc += rho_nm[b, d] * Vpq[a, b, c, d]
+                    end
+                    Fup[col_a, col_c] += acc
+                    Fdn[col_a, col_c] += acc
                 end
             end
-            Fup[p, q] += acc
-            Fdn[p, q] += acc
         end
     end
 
