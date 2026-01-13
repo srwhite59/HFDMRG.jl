@@ -30,6 +30,17 @@ try
         0.0
     end
 
+    function vblocks_lookup(layout, Vblocks, p, q, r, s)
+        np, a = HFDMRG.slice_local(layout, p)
+        nq, c = HFDMRG.slice_local(layout, q)
+        nr, b = HFDMRG.slice_local(layout, r)
+        nslice, d = HFDMRG.slice_local(layout, s)
+        if np == nr && nq == nslice
+            return Vblocks[np][nq][a, b, c, d]
+        end
+        0.0
+    end
+
     function orthonormal_cols(rng, n, m)
         Q = Matrix(qr(randn(rng, n, m)).Q)
         Q[:, 1:m]
@@ -89,6 +100,57 @@ try
         for p = 1:N, q = 1:N, r = 1:N, s = 1:N
             vdir = v6_lookup(V6, p, q, r, s, nj)
             vex = v6_lookup(V6, p, r, q, s, nj)
+            Fup2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhoup[r, s] * vex
+            Fdn2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhodn[r, s] * vex
+        end
+        @test maximum(abs.(Fup1 .- Fup2)) < 1e-10
+        @test maximum(abs.(Fdn1 .- Fdn2)) < 1e-10
+    end
+
+    @testset "Sliced ragged RHF Fock" begin
+        rng = MersenneTwister(202)
+        dims = [1, 2, 3]
+        layout = HFDMRG.SliceLayout(dims)
+        ns = length(dims)
+        N = layout.offs[end]
+        Vblocks = [[randn(rng, dims[n], dims[n], dims[m], dims[m]) for m in 1:ns]
+                   for n in 1:ns]
+        rho = randn(rng, N, N)
+        rho = (rho + rho') / 2
+        vee = HFDMRG.SlicedVeeRagged(layout, Vblocks)
+
+        F1 = zeros(N, N)
+        HFDMRG.sliced_add_fock_r!(F1, rho, vee)
+        F2 = zeros(N, N)
+        for p = 1:N, q = 1:N, r = 1:N, s = 1:N
+            F2[p, q] += rho[r, s] * (2.0 * vblocks_lookup(layout, Vblocks, p, q, r, s) -
+                                     vblocks_lookup(layout, Vblocks, p, r, q, s))
+        end
+        @test maximum(abs.(F1 .- F2)) < 1e-10
+    end
+
+    @testset "Sliced ragged UHF Fock" begin
+        rng = MersenneTwister(203)
+        dims = [1, 2, 3]
+        layout = HFDMRG.SliceLayout(dims)
+        ns = length(dims)
+        N = layout.offs[end]
+        Vblocks = [[randn(rng, dims[n], dims[n], dims[m], dims[m]) for m in 1:ns]
+                   for n in 1:ns]
+        rhoup = randn(rng, N, N)
+        rhoup = (rhoup + rhoup') / 2
+        rhodn = randn(rng, N, N)
+        rhodn = (rhodn + rhodn') / 2
+        vee = HFDMRG.SlicedVeeRagged(layout, Vblocks)
+
+        Fup1 = zeros(N, N)
+        Fdn1 = zeros(N, N)
+        HFDMRG.sliced_add_fock_uhf!(Fup1, Fdn1, rhoup, rhodn, vee)
+        Fup2 = zeros(N, N)
+        Fdn2 = zeros(N, N)
+        for p = 1:N, q = 1:N, r = 1:N, s = 1:N
+            vdir = vblocks_lookup(layout, Vblocks, p, q, r, s)
+            vex = vblocks_lookup(layout, Vblocks, p, r, q, s)
             Fup2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhoup[r, s] * vex
             Fdn2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhodn[r, s] * vex
         end
@@ -220,6 +282,30 @@ try
         rho0 = psiup0 * psiup0'
         F0 = copy(H)
         HFDMRG.sliced_add_fock_r!(F0, rho0, V6, nj, ns)
+        energy0 = tr(rho0 * (F0 + H))
+        _, _, energy = solve_hfdmrg(H, backend, psiup0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        @test isfinite(energy)
+        @test energy <= energy0 + 1e-6 * max(1.0, abs(energy0))
+    end
+
+    @testset "Sliced ragged end-to-end sweep" begin
+        rng = MersenneTwister(91)
+        dims = [2, 3, 2, 3]
+        layout = HFDMRG.SliceLayout(dims)
+        ns = length(dims)
+        N = layout.offs[end]
+        H = randn(rng, N, N)
+        H = (H + H') / 2
+        Vblocks = [[0.01 * randn(rng, dims[n], dims[n], dims[m], dims[m]) for m in 1:ns]
+                   for n in 1:ns]
+        vee = HFDMRG.SlicedVeeRagged(layout, Vblocks)
+        backend = HFDMRG.SlicedBasisBackend(vee)
+        Nup = 2
+        psiup0 = orthonormal_cols(rng, N, Nup)
+        rho0 = psiup0 * psiup0'
+        F0 = copy(H)
+        HFDMRG.sliced_add_fock_r!(F0, rho0, vee)
         energy0 = tr(rho0 * (F0 + H))
         _, _, energy = solve_hfdmrg(H, backend, psiup0;
             maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
