@@ -12,20 +12,19 @@ Vblocks[n][m] has size dims[n]×dims[n]×dims[m]×dims[m] with the same mapping.
 struct SlicedVeeRagged
     layout::SliceLayout
     V::Vector{Vector{Array{Float64,4}}}
-end
-
-function SlicedVeeRagged(layout::SliceLayout, V::Vector{Vector{Array{Float64,4}}})
-    ns = nslices(layout)
-    length(V) == ns || error("Vblocks must have length ns")
-    for n = 1:ns
-        length(V[n]) == ns || error("Vblocks[$n] must have length ns")
+    function SlicedVeeRagged(layout::SliceLayout, V::Vector{Vector{Array{Float64,4}}})
+        ns = nslices(layout)
+        length(V) == ns || error("Vblocks must have length ns")
+        for n = 1:ns
+            length(V[n]) == ns || error("Vblocks[$n] must have length ns")
+        end
+        dims = layout.dims
+        for n = 1:ns, m = 1:ns
+            size(V[n][m]) == (dims[n], dims[n], dims[m], dims[m]) ||
+                error("Vblocks[$n][$m] has wrong size")
+        end
+        new(layout, V)
     end
-    dims = layout.dims
-    for n = 1:ns, m = 1:ns
-        size(V[n][m]) == (dims[n], dims[n], dims[m], dims[m]) ||
-            error("Vblocks[$n][$m] has wrong size")
-    end
-    SlicedVeeRagged(layout, V)
 end
 
 struct SlicedBasisBackend{T}
