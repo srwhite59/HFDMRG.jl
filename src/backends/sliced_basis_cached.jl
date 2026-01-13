@@ -16,6 +16,7 @@ struct SlicedCachedBlockState
     phi::Matrix{Float64}
     Vijkl::Array{Float64,4}
     W::Vector{Array{Float64,4}}
+    Wswap::Vector{Array{Float64,4}}
     P::Vector{Matrix{Float64}}
 end
 
@@ -31,9 +32,13 @@ struct SlicedBasisCachedWindow
     VRR::Array{Float64,4}
     WL::Vector{Array{Float64,4}}
     WR::Vector{Array{Float64,4}}
+    WLswap::Vector{Array{Float64,4}}
+    WRswap::Vector{Array{Float64,4}}
     center_slice::Vector{Int}
     center_local::Vector{Int}
     center_cols::Vector{Vector{Int}}
+    lslices::Vector{Int}
+    rslices::Vector{Int}
     Srho::Vector{Matrix{Float64}}
     Srho_up::Vector{Matrix{Float64}}
     Srho_dn::Vector{Matrix{Float64}}
@@ -94,21 +99,26 @@ function _build_cached_state(ra::UnitRange{Int}, phi::Matrix{Float64},
     end
 
     W = [zeros(Float64, m, m, nj, nj) for _ = 1:ns]
+    Wswap = [zeros(Float64, m, m, nj, nj) for _ = 1:ns]
     for s = 1:ns
         Ws = W[s]
+        Wt = Wswap[s]
         for i = 1:m, j = 1:m, a = 1:nj, b = 1:nj
             acc = 0.0
+            acc_swap = 0.0
             for n = 1:ns
                 Pn = P[n]
                 for c = 1:nj, d = 1:nj
                     acc += Pn[c, i] * Pn[d, j] * backend.V6[c, d, a, b, n, s]
+                    acc_swap += Pn[c, i] * Pn[d, j] * backend.V6[a, b, c, d, s, n]
                 end
             end
             Ws[i, j, a, b] = acc
+            Wt[i, j, a, b] = acc_swap
         end
     end
 
-    SlicedCachedBlockState(ra, phi, Vijkl, W, P)
+    SlicedCachedBlockState(ra, phi, Vijkl, W, Wswap, P)
 end
 
 function vee_init_block(side, ra, raV, phi, backend::SlicedBasisBackendCached)
@@ -163,6 +173,29 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
         center_cols[n][a] = ml + idx
     end
 
+    lslices = Int[]
+    rslices = Int[]
+    for s = 1:backend.ns
+        has_left = false
+        has_right = false
+        Ls = Lvee.P[s]
+        Rs = Rvee.P[s]
+        for idx in eachindex(Ls)
+            if Ls[idx] != 0.0
+                has_left = true
+                break
+            end
+        end
+        for idx in eachindex(Rs)
+            if Rs[idx] != 0.0
+                has_right = true
+                break
+            end
+        end
+        has_left && push!(lslices, s)
+        has_right && push!(rslices, s)
+    end
+
     Srho = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
     Srho_up = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
     Srho_dn = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
@@ -175,9 +208,9 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
     tmp_nj_n = zeros(Float64, backend.nj, superdim)
 
     SlicedBasisCachedWindow(S, backend.V6, backend.nj, backend.ns, ml, lc, mr,
-        Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, center_slice, center_local, center_cols,
-        Srho, Srho_up, Srho_dn, rho_slice, rho_slice_up, rho_slice_dn, tmp_nm, Jnm, K,
-        tmp_nj_n)
+        Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, Lvee.Wswap, Rvee.Wswap,
+        center_slice, center_local, center_cols, lslices, rslices, Srho, Srho_up, Srho_dn,
+        rho_slice, rho_slice_up, rho_slice_dn, tmp_nm, Jnm, K, tmp_nj_n)
 end
 
 function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
@@ -239,41 +272,49 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
     end
 
     WL = win.WL
+    WLswap = win.WLswap
     for s = 1:ns
         cols = center_cols[s]
         for a = 1:length(cols)
             col_a = cols[a]
             col_a == 0 && continue
             for i = 1:ml
-                acc = 0.0
+                acc_lc = 0.0
+                acc_cl = 0.0
                 for b = 1:length(cols)
                     col_b = cols[b]
                     col_b == 0 && continue
                     for j = 1:ml
-                        acc += rho[j, col_b] * WL[s][i, j, a, b]
+                        acc_lc += rho[j, col_b] * WL[s][i, j, a, b]
+                        acc_cl += rho[col_b, j] * WLswap[s][i, j, a, b]
                     end
                 end
-                F[i, col_a] += 2.0 * acc
+                F[i, col_a] += 2.0 * acc_lc
+                F[col_a, i] += 2.0 * acc_cl
             end
         end
     end
 
     WR = win.WR
+    WRswap = win.WRswap
     for s = 1:ns
         cols = center_cols[s]
         for a = 1:length(cols)
             col_a = cols[a]
             col_a == 0 && continue
             for i = 1:mr
-                acc = 0.0
+                acc_rc = 0.0
+                acc_cr = 0.0
                 for b = 1:length(cols)
                     col_b = cols[b]
                     col_b == 0 && continue
                     for j = 1:mr
-                        acc += rho[ml + lc + j, col_b] * WR[s][i, j, a, b]
+                        acc_rc += rho[ml + lc + j, col_b] * WR[s][i, j, a, b]
+                        acc_cr += rho[col_b, ml + lc + j] * WRswap[s][i, j, a, b]
                     end
                 end
-                F[ml + lc + i, col_a] += 2.0 * acc
+                F[ml + lc + i, col_a] += 2.0 * acc_rc
+                F[col_a, ml + lc + i] += 2.0 * acc_cr
             end
         end
     end
@@ -287,9 +328,27 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
         mul!(Srho[n1], S[n1], rho, 1.0, 0.0)
     end
 
-    @views for n1 = 1:ns
+    lslices = win.lslices
+    rslices = win.rslices
+    @views for n1 in lslices
         S1 = S[n1]
-        for n2 = 1:ns
+        for n2 in rslices
+            S2 = S[n2]
+            mul!(tmp_nm, Srho[n1], S2', 1.0, 0.0)
+            for a = 1:nj, c = 1:nj
+                acc = 0.0
+                for b = 1:nj, d = 1:nj
+                    acc += V6[a, b, c, d, n1, n2] * tmp_nm[b, d]
+                end
+                Jnm[a, c] = acc
+            end
+            mul!(view(tmp_nj_n, :, Rrng), Jnm, view(S2, :, Rrng), 1.0, 0.0)
+            mul!(view(F, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 2.0, 1.0)
+        end
+    end
+    @views for n1 in rslices
+        S1 = S[n1]
+        for n2 in lslices
             S2 = S[n2]
             mul!(tmp_nm, Srho[n1], S2', 1.0, 0.0)
             for a = 1:nj, c = 1:nj
@@ -300,11 +359,7 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
                 Jnm[a, c] = acc
             end
             mul!(view(tmp_nj_n, :, Lrng), Jnm, view(S2, :, Lrng), 1.0, 0.0)
-            mul!(view(F, Crng, Lrng), view(S1, :, Crng)', view(tmp_nj_n, :, Lrng), 2.0, 1.0)
             mul!(view(F, Rrng, Lrng), view(S1, :, Rrng)', view(tmp_nj_n, :, Lrng), 2.0, 1.0)
-            mul!(view(tmp_nj_n, :, Rrng), Jnm, view(S2, :, Rrng), 1.0, 0.0)
-            mul!(view(F, Crng, Rrng), view(S1, :, Crng)', view(tmp_nj_n, :, Rrng), 2.0, 1.0)
-            mul!(view(F, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 2.0, 1.0)
         end
     end
 
@@ -412,50 +467,79 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
     end
 
     WL = win.WL
+    WLswap = win.WLswap
     for s = 1:ns
         cols = center_cols[s]
         for a = 1:length(cols)
             col_a = cols[a]
             col_a == 0 && continue
             for i = 1:ml
-                acc = 0.0
+                acc_lc = 0.0
+                acc_cl = 0.0
                 for b = 1:length(cols)
                     col_b = cols[b]
                     col_b == 0 && continue
                     for j = 1:ml
-                        acc += rtot[j, col_b] * WL[s][i, j, a, b]
+                        acc_lc += rtot[j, col_b] * WL[s][i, j, a, b]
+                        acc_cl += rtot[col_b, j] * WLswap[s][i, j, a, b]
                     end
                 end
-                Fup[i, col_a] += acc
-                Fdn[i, col_a] += acc
+                Fup[i, col_a] += acc_lc
+                Fdn[i, col_a] += acc_lc
+                Fup[col_a, i] += acc_cl
+                Fdn[col_a, i] += acc_cl
             end
         end
     end
 
     WR = win.WR
+    WRswap = win.WRswap
     for s = 1:ns
         cols = center_cols[s]
         for a = 1:length(cols)
             col_a = cols[a]
             col_a == 0 && continue
             for i = 1:mr
-                acc = 0.0
+                acc_rc = 0.0
+                acc_cr = 0.0
                 for b = 1:length(cols)
                     col_b = cols[b]
                     col_b == 0 && continue
                     for j = 1:mr
-                        acc += rtot[ml + lc + j, col_b] * WR[s][i, j, a, b]
+                        acc_rc += rtot[ml + lc + j, col_b] * WR[s][i, j, a, b]
+                        acc_cr += rtot[col_b, ml + lc + j] * WRswap[s][i, j, a, b]
                     end
                 end
-                Fup[ml + lc + i, col_a] += acc
-                Fdn[ml + lc + i, col_a] += acc
+                Fup[ml + lc + i, col_a] += acc_rc
+                Fdn[ml + lc + i, col_a] += acc_rc
+                Fup[col_a, ml + lc + i] += acc_cr
+                Fdn[col_a, ml + lc + i] += acc_cr
             end
         end
     end
 
-    @views for n1 = 1:ns
+    lslices = win.lslices
+    rslices = win.rslices
+    @views for n1 in lslices
         S1 = S[n1]
-        for n2 = 1:ns
+        for n2 in rslices
+            S2 = S[n2]
+            mul!(tmp_nm, Srho[n1], S2', 1.0, 0.0)
+            for a = 1:nj, c = 1:nj
+                acc = 0.0
+                for b = 1:nj, d = 1:nj
+                    acc += V6[a, b, c, d, n1, n2] * tmp_nm[b, d]
+                end
+                Jnm[a, c] = acc
+            end
+            mul!(view(tmp_nj_n, :, Rrng), Jnm, view(S2, :, Rrng), 1.0, 0.0)
+            mul!(view(Fup, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
+            mul!(view(Fdn, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
+        end
+    end
+    @views for n1 in rslices
+        S1 = S[n1]
+        for n2 in lslices
             S2 = S[n2]
             mul!(tmp_nm, Srho[n1], S2', 1.0, 0.0)
             for a = 1:nj, c = 1:nj
@@ -466,15 +550,8 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
                 Jnm[a, c] = acc
             end
             mul!(view(tmp_nj_n, :, Lrng), Jnm, view(S2, :, Lrng), 1.0, 0.0)
-            mul!(view(Fup, Crng, Lrng), view(S1, :, Crng)', view(tmp_nj_n, :, Lrng), 1.0, 1.0)
-            mul!(view(Fdn, Crng, Lrng), view(S1, :, Crng)', view(tmp_nj_n, :, Lrng), 1.0, 1.0)
             mul!(view(Fup, Rrng, Lrng), view(S1, :, Rrng)', view(tmp_nj_n, :, Lrng), 1.0, 1.0)
             mul!(view(Fdn, Rrng, Lrng), view(S1, :, Rrng)', view(tmp_nj_n, :, Lrng), 1.0, 1.0)
-            mul!(view(tmp_nj_n, :, Rrng), Jnm, view(S2, :, Rrng), 1.0, 0.0)
-            mul!(view(Fup, Crng, Rrng), view(S1, :, Crng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
-            mul!(view(Fdn, Crng, Rrng), view(S1, :, Crng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
-            mul!(view(Fup, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
-            mul!(view(Fdn, Lrng, Rrng), view(S1, :, Lrng)', view(tmp_nj_n, :, Rrng), 1.0, 1.0)
         end
     end
 
