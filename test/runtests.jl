@@ -313,6 +313,83 @@ try
         @test energy <= energy0 + 1e-6 * max(1.0, abs(energy0))
     end
 
+    @testset "Cached sliced ragged window parity" begin
+        rng = MersenneTwister(92)
+        dims = [1, 2, 3]
+        layout = HFDMRG.SliceLayout(dims)
+        ns = length(dims)
+        N = layout.offs[end]
+        Vblocks = [[randn(rng, dims[n], dims[n], dims[m], dims[m]) for m in 1:ns]
+                   for n in 1:ns]
+        backend_proj = HFDMRG.SlicedBasisBackend(layout, Vblocks)
+        backend_cached = HFDMRG.SlicedBasisBackendCached(layout, Vblocks)
+
+        Lra = 1:2
+        Cra = 3:4
+        Rra = 5:6
+        Lphi = orthonormal_cols(rng, length(Lra), 1)
+        Rphi = orthonormal_cols(rng, length(Rra), 1)
+        Lvee_proj = HFDMRG.vee_init_block(:left, Lra, (Lra[end] + 1):N, Lphi, backend_proj)
+        Rvee_proj = HFDMRG.vee_init_block(:right, Rra, 1:(Rra[1] - 1), Rphi, backend_proj)
+        win_proj = HFDMRG.vee_window(Lvee_proj, Rvee_proj, Cra, backend_proj)
+
+        Lvee_cached = HFDMRG.vee_init_block(:left, Lra, (Lra[end] + 1):N, Lphi, backend_cached)
+        Rvee_cached = HFDMRG.vee_init_block(:right, Rra, 1:(Rra[1] - 1), Rphi, backend_cached)
+        win_cached = HFDMRG.vee_window(Lvee_cached, Rvee_cached, Cra, backend_cached)
+
+        superdim = size(Lphi, 2) + length(Cra) + size(Rphi, 2)
+        rho = randn(rng, superdim, superdim)
+        rho = (rho + rho') / 2
+        F_proj = zeros(superdim, superdim)
+        F_cached = zeros(superdim, superdim)
+        HFDMRG.vee_add_fock_r!(F_proj, rho, win_proj)
+        HFDMRG.vee_add_fock_r!(F_cached, rho, win_cached)
+        @test maximum(abs.(F_proj .- F_cached)) < 1e-10
+
+        rhoup = randn(rng, superdim, superdim)
+        rhoup = (rhoup + rhoup') / 2
+        rhodn = randn(rng, superdim, superdim)
+        rhodn = (rhodn + rhodn') / 2
+        Fup_proj = zeros(superdim, superdim)
+        Fdn_proj = zeros(superdim, superdim)
+        Fup_cached = zeros(superdim, superdim)
+        Fdn_cached = zeros(superdim, superdim)
+        HFDMRG.vee_add_fock!(Fup_proj, Fdn_proj, rhoup, rhodn, win_proj)
+        HFDMRG.vee_add_fock!(Fup_cached, Fdn_cached, rhoup, rhodn, win_cached)
+        @test maximum(abs.(Fup_proj .- Fup_cached)) < 1e-10
+        @test maximum(abs.(Fdn_proj .- Fdn_cached)) < 1e-10
+    end
+
+    @testset "Cached ragged backend vs projection" begin
+        rng = MersenneTwister(93)
+        dims = [1, 2, 3]
+        layout = HFDMRG.SliceLayout(dims)
+        ns = length(dims)
+        N = layout.offs[end]
+        H = randn(rng, N, N)
+        H = (H + H') / 2
+        Vblocks = [[0.01 * randn(rng, dims[n], dims[n], dims[m], dims[m]) for m in 1:ns]
+                   for n in 1:ns]
+        backend_proj = HFDMRG.SlicedBasisBackend(layout, Vblocks)
+        backend_cached = HFDMRG.SlicedBasisBackendCached(layout, Vblocks)
+        Nup = 1
+        Ndn = 1
+        psiup0 = orthonormal_cols(rng, N, Nup)
+        psidn0 = orthonormal_cols(rng, N, Ndn)
+        _, _, e_proj = solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        _, _, e_cached = solve_hfdmrg(H, backend_cached, psiup0, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        @test isapprox(e_proj, e_cached; atol = 1e-9, rtol = 0)
+
+        psiup0_r = orthonormal_cols(rng, N, Nup)
+        _, _, e_proj_r = solve_hfdmrg(H, backend_proj, psiup0_r;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        _, _, e_cached_r = solve_hfdmrg(H, backend_cached, psiup0_r;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        @test isapprox(e_proj_r, e_cached_r; atol = 1e-9, rtol = 0)
+    end
+
     @testset "Sliced convenience overloads" begin
         rng = MersenneTwister(11)
         nj = 2
