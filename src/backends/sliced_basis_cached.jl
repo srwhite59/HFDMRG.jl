@@ -59,12 +59,7 @@ function SlicedBasisBackendCached(layout::SliceLayout, V6::Array{Float64,6})
     SlicedBasisBackendCached(layout, V6, nj, ns)
 end
 
-function _slice_local(layout::SliceLayout, p::Int)
-    n = searchsortedlast(layout.offs, p - 1)
-    1 <= n <= nslices(layout) || error("orbital index out of bounds")
-    a = p - layout.offs[n]
-    n, a
-end
+_slice_local(layout::SliceLayout, p::Int) = slice_local(layout, p)
 
 function _build_slice_basis(layout::SliceLayout, ra::UnitRange{Int}, phi::Matrix{Float64})
     ns = nslices(layout)

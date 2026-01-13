@@ -48,3 +48,13 @@ function orb_range(layout::SliceLayout, ns::UnitRange{Int})
     1 <= n1 <= n2 <= length(layout.dims) || error("slice range out of bounds")
     (layout.offs[n1] + 1):layout.offs[n2 + 1]
 end
+
+"""
+Map a flattened orbital index p to (slice, local index) in the layout.
+"""
+function slice_local(layout::SliceLayout, p::Int)
+    1 <= p <= layout.offs[end] || error("orbital index out of bounds")
+    n = searchsortedlast(layout.offs, p - 1)
+    a = p - layout.offs[n]
+    n, a
+end
