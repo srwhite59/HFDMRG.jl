@@ -30,6 +30,7 @@ for you.
 ```
 ~/codexhome/cjulia -e 'using Pkg; Pkg.test()'
 ```
+For quick performance sanity, see `scripts/bench_sliced.jl`.
 
 ## How to add a backend
 Checklist:

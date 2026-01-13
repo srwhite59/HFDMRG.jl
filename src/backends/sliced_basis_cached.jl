@@ -77,9 +77,10 @@ function _build_slice_basis(layout::SliceLayout, ra::UnitRange{Int}, phi::Matrix
     P
 end
 
-function _pair_map_mat(P::Matrix{Float64})
+function _pair_map_mat!(U::Matrix{Float64}, P::Matrix{Float64})
     nj, m = size(P)
-    U = zeros(Float64, nj * nj, m * m)
+    size(U, 1) == nj * nj || error("pair map has wrong row count")
+    size(U, 2) == m * m || error("pair map has wrong column count")
     for a = 1:nj, b = 1:nj
         row = a + (b - 1) * nj
         for k = 1:m, l = 1:m
@@ -88,6 +89,12 @@ function _pair_map_mat(P::Matrix{Float64})
         end
     end
     U
+end
+
+function _pair_map_mat(P::Matrix{Float64})
+    nj, m = size(P)
+    U = zeros(Float64, nj * nj, m * m)
+    _pair_map_mat!(U, P)
 end
 
 function _build_cached_state(ra::UnitRange{Int}, phi::Matrix{Float64},
@@ -199,16 +206,18 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
     VRL = zeros(Float64, mr, mr, ml, ml)
     VLR_mat = reshape(VLR, ml * ml, mr * mr)
     VRL_mat = reshape(VRL, mr * mr, ml * ml)
+    Utmp_R = zeros(Float64, backend.nj * backend.nj, mr * mr)
+    Utmp_L = zeros(Float64, backend.nj * backend.nj, ml * ml)
     for s = 1:backend.ns
         if any(!iszero, Rvee.P[s])
-            UR = _pair_map_mat(Rvee.P[s])
+            _pair_map_mat!(Utmp_R, Rvee.P[s])
             WL_mat = reshape(Lvee.W[s], ml * ml, backend.nj * backend.nj)
-            mul!(VLR_mat, WL_mat, UR, 1.0, 1.0)
+            mul!(VLR_mat, WL_mat, Utmp_R, 1.0, 1.0)
         end
         if any(!iszero, Lvee.P[s])
-            UL = _pair_map_mat(Lvee.P[s])
+            _pair_map_mat!(Utmp_L, Lvee.P[s])
             WR_mat = reshape(Rvee.W[s], mr * mr, backend.nj * backend.nj)
-            mul!(VRL_mat, WR_mat, UL, 1.0, 1.0)
+            mul!(VRL_mat, WR_mat, Utmp_L, 1.0, 1.0)
         end
     end
 
