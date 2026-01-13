@@ -4,10 +4,9 @@ Cached sliced-basis backend (correctness-first).
 Uses per-slice basis coefficients to build superblock Fock contributions without
 embedding into the full orbital basis.
 """
-struct SlicedBasisBackendCached
+struct SlicedBasisBackendCached{T}
     layout::SliceLayout
-    V6::Array{Float64,6}
-    nj::Int
+    V::T
     ns::Int
 end
 
@@ -22,10 +21,10 @@ struct SlicedCachedBlockState
     P::Vector{Matrix{Float64}}
 end
 
-struct SlicedBasisCachedWindow
+struct SlicedBasisCachedWindow{T}
     S::Vector{Matrix{Float64}}
-    V6::Array{Float64,6}
-    nj::Int
+    V::T
+    layout::SliceLayout
     ns::Int
     ml::Int
     lc::Int
@@ -47,8 +46,8 @@ struct SlicedBasisCachedWindow
     rho_slice::Vector{Matrix{Float64}}
     rho_slice_up::Vector{Matrix{Float64}}
     rho_slice_dn::Vector{Matrix{Float64}}
-    K::Matrix{Float64}
-    tmp_nj_n::Matrix{Float64}
+    K::Vector{Matrix{Float64}}
+    tmp_n::Vector{Matrix{Float64}}
 end
 
 function SlicedBasisBackendCached(layout::SliceLayout, V6::Array{Float64,6})
@@ -56,8 +55,22 @@ function SlicedBasisBackendCached(layout::SliceLayout, V6::Array{Float64,6})
     nj = layout.dims[1]
     any(d -> d != nj, layout.dims) && error("layout must have fixed slice size")
     size(V6) == (nj, nj, nj, nj, ns, ns) || error("V6 must have size (nj,nj,nj,nj,ns,ns)")
-    SlicedBasisBackendCached(layout, V6, nj, ns)
+    SlicedBasisBackendCached{Array{Float64,6}}(layout, V6, ns)
 end
+
+function SlicedBasisBackendCached(layout::SliceLayout, vee::SlicedVeeRagged)
+    layout.dims == vee.layout.dims || error("layout does not match ragged interaction")
+    ns = nslices(layout)
+    SlicedBasisBackendCached{SlicedVeeRagged}(layout, vee, ns)
+end
+
+SlicedBasisBackendCached(vee::SlicedVeeRagged) = SlicedBasisBackendCached(vee.layout, vee)
+
+SlicedBasisBackendCached(layout::SliceLayout, Vblocks::Vector{Vector{Array{Float64,4}}}) =
+    SlicedBasisBackendCached(SlicedVeeRagged(layout, Vblocks))
+
+_slice_vee(V::Array{Float64,6}, n::Int, m::Int) = @view V[:, :, :, :, n, m]
+_slice_vee(vee::SlicedVeeRagged, n::Int, m::Int) = vee.V[n][m]
 
 _slice_local(layout::SliceLayout, p::Int) = slice_local(layout, p)
 
@@ -72,7 +85,7 @@ function _build_slice_basis(layout::SliceLayout, ra::UnitRange{Int}, phi::Matrix
     P
 end
 
-function _pair_map_mat!(U::Matrix{Float64}, P::Matrix{Float64})
+function _pair_map_mat!(U::AbstractMatrix{Float64}, P::Matrix{Float64})
     nj, m = size(P)
     size(U, 1) == nj * nj || error("pair map has wrong row count")
     size(U, 2) == m * m || error("pair map has wrong column count")
@@ -94,38 +107,45 @@ end
 
 function _build_cached_state(ra::UnitRange{Int}, phi::Matrix{Float64},
     backend::SlicedBasisBackendCached)
+    layout = backend.layout
+    dims = layout.dims
     ns = backend.ns
-    nj = backend.nj
     m = size(phi, 2)
-    P = _build_slice_basis(backend.layout, ra, phi)
+    P = _build_slice_basis(layout, ra, phi)
 
     Vijkl = zeros(Float64, m, m, m, m)
     for n = 1:ns, m2 = 1:ns
         Pn = P[n]
         Pm = P[m2]
+        Vnm = _slice_vee(backend.V, n, m2)
+        dn = size(Pn, 1)
+        dm = size(Pm, 1)
         for i = 1:m, j = 1:m, k = 1:m, l = 1:m
             acc = 0.0
-            for a = 1:nj, b = 1:nj, c = 1:nj, d = 1:nj
-                acc += Pn[a, i] * Pn[b, k] * backend.V6[a, b, c, d, n, m2] *
-                       Pm[c, j] * Pm[d, l]
+            for a = 1:dn, b = 1:dn, c = 1:dm, d = 1:dm
+                acc += Pn[a, i] * Pn[b, k] * Vnm[a, b, c, d] * Pm[c, j] * Pm[d, l]
             end
             Vijkl[i, j, k, l] += acc
         end
     end
 
-    W = [zeros(Float64, m, m, nj, nj) for _ = 1:ns]
-    Wswap = [zeros(Float64, m, m, nj, nj) for _ = 1:ns]
+    W = [zeros(Float64, m, m, dims[s], dims[s]) for s = 1:ns]
+    Wswap = [zeros(Float64, m, m, dims[s], dims[s]) for s = 1:ns]
     for s = 1:ns
         Ws = W[s]
         Wt = Wswap[s]
-        for i = 1:m, j = 1:m, a = 1:nj, b = 1:nj
+        ds = dims[s]
+        for i = 1:m, j = 1:m, a = 1:ds, b = 1:ds
             acc = 0.0
             acc_swap = 0.0
             for n = 1:ns
                 Pn = P[n]
-                for c = 1:nj, d = 1:nj
-                    acc += Pn[c, i] * Pn[d, j] * backend.V6[c, d, a, b, n, s]
-                    acc_swap += Pn[c, i] * Pn[d, j] * backend.V6[a, b, c, d, s, n]
+                dn = size(Pn, 1)
+                Vns = _slice_vee(backend.V, n, s)
+                Vsn = _slice_vee(backend.V, s, n)
+                for c = 1:dn, d = 1:dn
+                    acc += Pn[c, i] * Pn[d, j] * Vns[c, d, a, b]
+                    acc_swap += Pn[c, i] * Pn[d, j] * Vsn[a, b, c, d]
                 end
             end
             Ws[i, j, a, b] = acc
@@ -162,15 +182,17 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
     Rra = Rvee.ra
     Lra[end] < Cra[1] || error("Lra must end before Cra")
     Cra[end] < Rra[1] || error("Cra must end before Rra")
-    N = backend.nj * backend.ns
+    N = backend.layout.offs[end]
     Rra[end] <= N || error("ranges exceed full basis size")
 
     ml = size(Lvee.phi, 2)
     mr = size(Rvee.phi, 2)
     lc = length(Cra)
     superdim = ml + lc + mr
-    S = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
-    for s = 1:backend.ns
+    ns = backend.ns
+    dims = backend.layout.dims
+    S = [zeros(Float64, dims[s], superdim) for s = 1:ns]
+    for s = 1:ns
         S[s][:, 1:ml] = Lvee.P[s]
         S[s][:, ml + lc + 1:end] = Rvee.P[s]
     end
@@ -180,7 +202,7 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
     end
     center_slice = zeros(Int, lc)
     center_local = zeros(Int, lc)
-    center_cols = [fill(0, backend.layout.dims[s]) for s in 1:backend.ns]
+    center_cols = [fill(0, dims[s]) for s in 1:ns]
     for (idx, p) in enumerate(Cra)
         n, a = _slice_local(backend.layout, p)
         center_slice[idx] = n
@@ -188,53 +210,54 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
         center_cols[n][a] = ml + idx
     end
 
-    Srho = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
-    Srho_up = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
-    Srho_dn = [zeros(Float64, backend.nj, superdim) for _ = 1:backend.ns]
-    rho_slice = [zeros(Float64, backend.nj, backend.nj) for _ = 1:backend.ns]
-    rho_slice_up = [zeros(Float64, backend.nj, backend.nj) for _ = 1:backend.ns]
-    rho_slice_dn = [zeros(Float64, backend.nj, backend.nj) for _ = 1:backend.ns]
-    K = zeros(Float64, backend.nj, backend.nj)
-    tmp_nj_n = zeros(Float64, backend.nj, superdim)
+    Srho = [zeros(Float64, dims[s], superdim) for s = 1:ns]
+    Srho_up = [zeros(Float64, dims[s], superdim) for s = 1:ns]
+    Srho_dn = [zeros(Float64, dims[s], superdim) for s = 1:ns]
+    rho_slice = [zeros(Float64, dims[s], dims[s]) for s = 1:ns]
+    rho_slice_up = [zeros(Float64, dims[s], dims[s]) for s = 1:ns]
+    rho_slice_dn = [zeros(Float64, dims[s], dims[s]) for s = 1:ns]
+    K = [zeros(Float64, dims[s], dims[s]) for s = 1:ns]
+    tmp_n = [zeros(Float64, dims[s], superdim) for s = 1:ns]
 
     VLR = zeros(Float64, ml, ml, mr, mr)
     VRL = zeros(Float64, mr, mr, ml, ml)
     VLR_mat = reshape(VLR, ml * ml, mr * mr)
     VRL_mat = reshape(VRL, mr * mr, ml * ml)
-    Utmp_R = zeros(Float64, backend.nj * backend.nj, mr * mr)
-    Utmp_L = zeros(Float64, backend.nj * backend.nj, ml * ml)
-    for s = 1:backend.ns
+    maxd = maximum(dims)
+    Utmp_R = zeros(Float64, maxd * maxd, mr * mr)
+    Utmp_L = zeros(Float64, maxd * maxd, ml * ml)
+    for s = 1:ns
+        ds = dims[s]
         if any(!iszero, Rvee.P[s])
-            _pair_map_mat!(Utmp_R, Rvee.P[s])
-            WL_mat = reshape(Lvee.W[s], ml * ml, backend.nj * backend.nj)
-            mul!(VLR_mat, WL_mat, Utmp_R, 1.0, 1.0)
+            Uview = view(Utmp_R, 1:(ds * ds), :)
+            _pair_map_mat!(Uview, Rvee.P[s])
+            WL_mat = reshape(Lvee.W[s], ml * ml, ds * ds)
+            mul!(VLR_mat, WL_mat, Uview, 1.0, 1.0)
         end
         if any(!iszero, Lvee.P[s])
-            _pair_map_mat!(Utmp_L, Lvee.P[s])
-            WR_mat = reshape(Rvee.W[s], mr * mr, backend.nj * backend.nj)
-            mul!(VRL_mat, WR_mat, Utmp_L, 1.0, 1.0)
+            Uview = view(Utmp_L, 1:(ds * ds), :)
+            _pair_map_mat!(Uview, Lvee.P[s])
+            WR_mat = reshape(Rvee.W[s], mr * mr, ds * ds)
+            mul!(VRL_mat, WR_mat, Uview, 1.0, 1.0)
         end
     end
 
-    SlicedBasisCachedWindow(S, backend.V6, backend.nj, backend.ns, ml, lc, mr,
+    SlicedBasisCachedWindow(S, backend.V, backend.layout, ns, ml, lc, mr,
         Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, Lvee.Wswap, Rvee.Wswap, VLR, VRL,
         center_slice, center_local, center_cols, Srho, Srho_up, Srho_dn, rho_slice,
-        rho_slice_up, rho_slice_dn, K, tmp_nj_n)
+        rho_slice_up, rho_slice_dn, K, tmp_n)
 end
 
 function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
     S = win.S
-    V6 = win.V6
-    nj, ns = win.nj, win.ns
+    V = win.V
+    dims = win.layout.dims
+    ns = win.ns
     ml, lc, mr = win.ml, win.lc, win.mr
     n = size(F, 1)
     size(F) == (n, n) || error("F has wrong size")
     size(rho) == size(F) || error("rho has wrong size")
     ml + lc + mr == n || error("window dimensions do not match F")
-
-    Lrng = 1:ml
-    Crng = ml + 1:ml + lc
-    Rrng = ml + lc + 1:n
 
     # Direct (J) contributions.
     VLL = win.VLL
@@ -269,11 +292,12 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
             acc = 0.0
             cols_p = center_cols[np]
             cols_q = center_cols[nq]
+            Vpq = _slice_vee(V, np, nq)
             for b = 1:length(cols_p), d = 1:length(cols_q)
                 rcol = cols_p[b]
                 scol = cols_q[d]
                 if rcol != 0 && scol != 0
-                    acc += rho[rcol, scol] * V6[a, b, c, d, np, nq]
+                    acc += rho[rcol, scol] * Vpq[a, b, c, d]
                 end
             end
             F[p, q] += 2.0 * acc
@@ -329,7 +353,6 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
     end
 
     Srho = win.Srho
-    tmp_nj_n = win.tmp_nj_n
     VLR = win.VLR
     VRL = win.VRL
 
@@ -356,30 +379,37 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
     # Exchange uses (p r| q s) and is nonzero only when slice(p) == slice(q).
     rho_slice = win.rho_slice
     K = win.K
+    tmp_n = win.tmp_n
     @views for n1 = 1:ns
         mul!(rho_slice[n1], Srho[n1], S[n1]', 1.0, 0.0)
     end
     @views for n1 = 1:ns
-        fill!(K, 0.0)
+        K1 = K[n1]
+        fill!(K1, 0.0)
         for n2 = 1:ns
             rho_m = rho_slice[n2]
-            for a = 1:nj, b = 1:nj
+            Vnm = _slice_vee(V, n1, n2)
+            dn1 = dims[n1]
+            dn2 = dims[n2]
+            for a = 1:dn1, b = 1:dn1
                 acc = 0.0
-                for c = 1:nj, d = 1:nj
-                    acc += rho_m[c, d] * V6[a, b, c, d, n1, n2]
+                for c = 1:dn2, d = 1:dn2
+                    acc += rho_m[c, d] * Vnm[a, b, c, d]
                 end
-                K[a, b] += acc
+                K1[a, b] += acc
             end
         end
-        mul!(tmp_nj_n, K, S[n1], 1.0, 0.0)
-        mul!(F, S[n1]', tmp_nj_n, -1.0, 1.0)
+        tmp = tmp_n[n1]
+        mul!(tmp, K1, S[n1], 1.0, 0.0)
+        mul!(F, S[n1]', tmp, -1.0, 1.0)
     end
 end
 
 function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
     S = win.S
-    V6 = win.V6
-    nj, ns = win.nj, win.ns
+    V = win.V
+    dims = win.layout.dims
+    ns = win.ns
     ml, lc, mr = win.ml, win.lc, win.mr
     n = size(Fup, 1)
     size(Fup) == (n, n) || error("Fup has wrong size")
@@ -388,15 +418,10 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
     size(rhodn) == size(Fup) || error("rhodn has wrong size")
     ml + lc + mr == n || error("window dimensions do not match F")
 
-    Lrng = 1:ml
-    Crng = ml + 1:ml + lc
-    Rrng = ml + lc + 1:n
-
     rtot = rhoup + rhodn
 
     Srho_up = win.Srho_up
     Srho_dn = win.Srho_dn
-    tmp_nj_n = win.tmp_nj_n
     VLR = win.VLR
     VRL = win.VRL
 
@@ -440,11 +465,12 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
             acc = 0.0
             cols_p = center_cols[np]
             cols_q = center_cols[nq]
+            Vpq = _slice_vee(V, np, nq)
             for b = 1:length(cols_p), d = 1:length(cols_q)
                 rcol = cols_p[b]
                 scol = cols_q[d]
                 if rcol != 0 && scol != 0
-                    acc += rtot[rcol, scol] * V6[a, b, c, d, np, nq]
+                    acc += rtot[rcol, scol] * Vpq[a, b, c, d]
                 end
             end
             Fup[p, q] += acc
@@ -531,34 +557,44 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
     # Direct uses (p q| r s) and can couple slices in p,q.
     # Exchange uses (p r| q s) and is nonzero only when slice(p) == slice(q).
     K = win.K
+    tmp_n = win.tmp_n
     @views for n1 = 1:ns
-        fill!(K, 0.0)
+        K1 = K[n1]
+        fill!(K1, 0.0)
         for n2 = 1:ns
             rup = rho_slice_up[n2]
-            for a = 1:nj, b = 1:nj
+            Vnm = _slice_vee(V, n1, n2)
+            dn1 = dims[n1]
+            dn2 = dims[n2]
+            for a = 1:dn1, b = 1:dn1
                 acc = 0.0
-                for c = 1:nj, d = 1:nj
-                    acc += rup[c, d] * V6[a, b, c, d, n1, n2]
+                for c = 1:dn2, d = 1:dn2
+                    acc += rup[c, d] * Vnm[a, b, c, d]
                 end
-                K[a, b] += acc
+                K1[a, b] += acc
             end
         end
-        mul!(tmp_nj_n, K, S[n1], 1.0, 0.0)
-        mul!(Fup, S[n1]', tmp_nj_n, -1.0, 1.0)
+        tmp = tmp_n[n1]
+        mul!(tmp, K1, S[n1], 1.0, 0.0)
+        mul!(Fup, S[n1]', tmp, -1.0, 1.0)
 
-        fill!(K, 0.0)
+        fill!(K1, 0.0)
         for n2 = 1:ns
             rdn = rho_slice_dn[n2]
-            for a = 1:nj, b = 1:nj
+            Vnm = _slice_vee(V, n1, n2)
+            dn1 = dims[n1]
+            dn2 = dims[n2]
+            for a = 1:dn1, b = 1:dn1
                 acc = 0.0
-                for c = 1:nj, d = 1:nj
-                    acc += rdn[c, d] * V6[a, b, c, d, n1, n2]
+                for c = 1:dn2, d = 1:dn2
+                    acc += rdn[c, d] * Vnm[a, b, c, d]
                 end
-                K[a, b] += acc
+                K1[a, b] += acc
             end
         end
-        mul!(tmp_nj_n, K, S[n1], 1.0, 0.0)
-        mul!(Fdn, S[n1]', tmp_nj_n, -1.0, 1.0)
+        tmp = tmp_n[n1]
+        mul!(tmp, K1, S[n1], 1.0, 0.0)
+        mul!(Fdn, S[n1]', tmp, -1.0, 1.0)
     end
 end
 
