@@ -97,8 +97,8 @@ println("  sweep RHF energy proj = ", res_sweep.energy_proj,
     ", cached = ", res_sweep.energy_cached,
     ", |ΔE| = ", res_sweep.energy_diff)
 
-println("Ragged dims [1,2,3]")
-dims = [1, 2, 3]
+println("Ragged dims [1,2,3,2,2]")
+dims = [1, 2, 3, 2, 2]
 layout_r = HFDMRG.SliceLayout(dims)
 ns_r = length(dims)
 N_r = layout_r.offs[end]
@@ -108,8 +108,8 @@ H_r = randn(rng, N_r, N_r)
 H_r = (H_r + H_r') / 2
 
 Lra = 1:2
-Cra = 3:4
-Rra = 5:6
+Cra = 3:6
+Rra = 7:10
 Lphi = orthonormal_cols(rng, length(Lra), 1)
 Rphi = orthonormal_cols(rng, length(Rra), 1)
 
