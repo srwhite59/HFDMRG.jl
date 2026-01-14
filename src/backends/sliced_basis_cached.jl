@@ -29,7 +29,7 @@ struct SlicedBasisCachedWindow{T}
     ml::Int
     lc::Int
     mr::Int
-    has_split::Bool
+    split_slices::Vector{Int}
     VLL::Array{Float64,4}
     VRR::Array{Float64,4}
     WL::Vector{Array{Float64,4}}
@@ -72,17 +72,6 @@ SlicedBasisBackendCached(layout::SliceLayout, Vblocks::Vector{Vector{Array{Float
 
 _slice_vee(V::Array{Float64,6}, n::Int, m::Int) = @view V[:, :, :, :, n, m]
 _slice_vee(vee::SlicedVeeRagged, n::Int, m::Int) = vee.V[n][m]
-
-function _build_full_B(S::Vector{Matrix{Float64}}, layout::SliceLayout)
-    ns = length(S)
-    superdim = size(S[1], 2)
-    N = layout.offs[end]
-    B = zeros(Float64, N, superdim)
-    for s = 1:ns
-        B[orb_range(layout, s), :] = S[s]
-    end
-    B
-end
 
 _slice_local(layout::SliceLayout, p::Int) = slice_local(layout, p)
 
@@ -222,13 +211,12 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
         center_cols[n][a] = ml + idx
     end
 
-    has_split = false
+    split_slices = Int[]
     for s = 1:ns
         has_center = any(c -> c != 0, center_cols[s])
         has_block = any(!iszero, Lvee.P[s]) || any(!iszero, Rvee.P[s])
         if has_center && has_block
-            has_split = true
-            break
+            push!(split_slices, s)
         end
     end
 
@@ -264,7 +252,7 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
         end
     end
 
-    SlicedBasisCachedWindow(S, backend.V, backend.layout, ns, ml, lc, mr, has_split,
+    SlicedBasisCachedWindow(S, backend.V, backend.layout, ns, ml, lc, mr, split_slices,
         Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, Lvee.Wswap, Rvee.Wswap, VLR, VRL,
         center_slice, center_local, center_cols, Srho, Srho_up, Srho_dn, rho_slice,
         rho_slice_up, rho_slice_dn, K, tmp_n)
@@ -281,130 +269,145 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
     size(rho) == size(F) || error("rho has wrong size")
     ml + lc + mr == n || error("window dimensions do not match F")
 
-    if win.has_split
-        B = _build_full_B(S, win.layout)
-        rho_full = B * rho * B'
-        N = size(B, 1)
-        G_full = zeros(Float64, N, N)
-        sliced_add_fock_r!(G_full, rho_full, V, win.layout)
-        F .+= B' * G_full * B
-        return
-    end
-
+    center_cols = win.center_cols
     Srho = win.Srho
     @views for n1 = 1:ns
         mul!(Srho[n1], S[n1], rho, 1.0, 0.0)
     end
-
-    # Direct (J) contributions.
-    VLL = win.VLL
-    for i = 1:ml, j = 1:ml
-        acc = 0.0
-        for k = 1:ml, l = 1:ml
-            acc += rho[k, l] * VLL[i, j, k, l]
+    split_slices = win.split_slices
+    if isempty(split_slices)
+        # Direct (J) contributions via cached tensors.
+        VLL = win.VLL
+        for i = 1:ml, j = 1:ml
+            acc = 0.0
+            for k = 1:ml, l = 1:ml
+                acc += rho[k, l] * VLL[i, j, k, l]
+            end
+            F[i, j] += 2.0 * acc
         end
-        F[i, j] += 2.0 * acc
-    end
 
-    VRR = win.VRR
-    for i = 1:mr, j = 1:mr
-        acc = 0.0
-        for k = 1:mr, l = 1:mr
-            acc += rho[ml + lc + k, ml + lc + l] * VRR[i, j, k, l]
+        VRR = win.VRR
+        for i = 1:mr, j = 1:mr
+            acc = 0.0
+            for k = 1:mr, l = 1:mr
+                acc += rho[ml + lc + k, ml + lc + l] * VRR[i, j, k, l]
+            end
+            F[ml + lc + i, ml + lc + j] += 2.0 * acc
         end
-        F[ml + lc + i, ml + lc + j] += 2.0 * acc
-    end
 
-    center_cols = win.center_cols
-    for np = 1:ns
-        cols_p = center_cols[np]
-        any(c -> c != 0, cols_p) || continue
-        for nq = 1:ns
-            cols_q = center_cols[nq]
-            any(c -> c != 0, cols_q) || continue
-            rho_nm = Matrix{Float64}(undef, length(cols_p), length(cols_q))
-            mul!(rho_nm, Srho[np], S[nq]', 1.0, 0.0)
-            Vpq = _slice_vee(V, np, nq)
-            for a = 1:length(cols_p)
-                col_a = cols_p[a]
+        for np = 1:ns
+            cols_p = center_cols[np]
+            any(c -> c != 0, cols_p) || continue
+            for nq = 1:ns
+                cols_q = center_cols[nq]
+                any(c -> c != 0, cols_q) || continue
+                rho_nm = Matrix{Float64}(undef, length(cols_p), length(cols_q))
+                mul!(rho_nm, Srho[np], S[nq]', 1.0, 0.0)
+                Vpq = _slice_vee(V, np, nq)
+                for a = 1:length(cols_p)
+                    col_a = cols_p[a]
+                    col_a == 0 && continue
+                    for c = 1:length(cols_q)
+                        col_c = cols_q[c]
+                        col_c == 0 && continue
+                        acc = 0.0
+                        for b = 1:length(cols_p), d = 1:length(cols_q)
+                            acc += rho_nm[b, d] * Vpq[a, b, c, d]
+                        end
+                        F[col_a, col_c] += 2.0 * acc
+                    end
+                end
+            end
+        end
+
+        WL = win.WL
+        WLswap = win.WLswap
+        for s = 1:ns
+            cols = center_cols[s]
+            for a = 1:length(cols)
+                col_a = cols[a]
                 col_a == 0 && continue
-                for c = 1:length(cols_q)
-                    col_c = cols_q[c]
-                    col_c == 0 && continue
+                for i = 1:ml
+                    acc_lc = 0.0
+                    acc_cl = 0.0
+                    for b = 1:length(cols)
+                        col_b = cols[b]
+                        col_b == 0 && continue
+                        for j = 1:ml
+                            acc_lc += rho[j, col_b] * WL[s][i, j, a, b]
+                            acc_cl += rho[col_b, j] * WLswap[s][i, j, a, b]
+                        end
+                    end
+                    F[i, col_a] += 2.0 * acc_lc
+                    F[col_a, i] += 2.0 * acc_cl
+                end
+            end
+        end
+
+        WR = win.WR
+        WRswap = win.WRswap
+        for s = 1:ns
+            cols = center_cols[s]
+            for a = 1:length(cols)
+                col_a = cols[a]
+                col_a == 0 && continue
+                for i = 1:mr
+                    acc_rc = 0.0
+                    acc_cr = 0.0
+                    for b = 1:length(cols)
+                        col_b = cols[b]
+                        col_b == 0 && continue
+                        for j = 1:mr
+                            acc_rc += rho[ml + lc + j, col_b] * WR[s][i, j, a, b]
+                            acc_cr += rho[col_b, ml + lc + j] * WRswap[s][i, j, a, b]
+                        end
+                    end
+                    F[ml + lc + i, col_a] += 2.0 * acc_rc
+                    F[col_a, ml + lc + i] += 2.0 * acc_cr
+                end
+            end
+        end
+
+        VLR = win.VLR
+        VRL = win.VRL
+
+        for i = 1:ml, k = 1:mr
+            acc = 0.0
+            for j = 1:ml, l = 1:mr
+                acc += rho[j, ml + lc + l] * VLR[i, j, k, l]
+            end
+            F[i, ml + lc + k] += 2.0 * acc
+        end
+        for k = 1:mr, i = 1:ml
+            acc = 0.0
+            for l = 1:mr, j = 1:ml
+                acc += rho[ml + lc + l, j] * VRL[k, l, i, j]
+            end
+            F[ml + lc + k, i] += 2.0 * acc
+        end
+    else
+        # Direct (J) contributions via slice projection when a slice is split.
+        superdim = size(F, 1)
+        for n1 = 1:ns
+            dn = dims[n1]
+            for m = 1:ns
+                dm = dims[m]
+                rho_nm = Matrix{Float64}(undef, dn, dm)
+                mul!(rho_nm, Srho[n1], S[m]', 1.0, 0.0)
+                Vnm = _slice_vee(V, n1, m)
+                J = Matrix{Float64}(undef, dn, dm)
+                for a = 1:dn, c = 1:dm
                     acc = 0.0
-                    for b = 1:length(cols_p), d = 1:length(cols_q)
-                        acc += rho_nm[b, d] * Vpq[a, b, c, d]
+                    for b = 1:dn, d = 1:dm
+                        acc += rho_nm[b, d] * Vnm[a, b, c, d]
                     end
-                    F[col_a, col_c] += 2.0 * acc
+                    J[a, c] = acc
                 end
+                tmp = Matrix{Float64}(undef, dn, superdim)
+                mul!(tmp, J, S[m], 1.0, 0.0)
+                mul!(F, S[n1]', tmp, 2.0, 1.0)
             end
         end
-    end
-
-    WL = win.WL
-    WLswap = win.WLswap
-    for s = 1:ns
-        cols = center_cols[s]
-        for a = 1:length(cols)
-            col_a = cols[a]
-            col_a == 0 && continue
-            for i = 1:ml
-                acc_lc = 0.0
-                acc_cl = 0.0
-                for b = 1:length(cols)
-                    col_b = cols[b]
-                    col_b == 0 && continue
-                    for j = 1:ml
-                        acc_lc += rho[j, col_b] * WL[s][i, j, a, b]
-                        acc_cl += rho[col_b, j] * WLswap[s][i, j, a, b]
-                    end
-                end
-                F[i, col_a] += 2.0 * acc_lc
-                F[col_a, i] += 2.0 * acc_cl
-            end
-        end
-    end
-
-    WR = win.WR
-    WRswap = win.WRswap
-    for s = 1:ns
-        cols = center_cols[s]
-        for a = 1:length(cols)
-            col_a = cols[a]
-            col_a == 0 && continue
-            for i = 1:mr
-                acc_rc = 0.0
-                acc_cr = 0.0
-                for b = 1:length(cols)
-                    col_b = cols[b]
-                    col_b == 0 && continue
-                    for j = 1:mr
-                        acc_rc += rho[ml + lc + j, col_b] * WR[s][i, j, a, b]
-                        acc_cr += rho[col_b, ml + lc + j] * WRswap[s][i, j, a, b]
-                    end
-                end
-                F[ml + lc + i, col_a] += 2.0 * acc_rc
-                F[col_a, ml + lc + i] += 2.0 * acc_cr
-            end
-        end
-    end
-
-    VLR = win.VLR
-    VRL = win.VRL
-
-    for i = 1:ml, k = 1:mr
-        acc = 0.0
-        for j = 1:ml, l = 1:mr
-            acc += rho[j, ml + lc + l] * VLR[i, j, k, l]
-        end
-        F[i, ml + lc + k] += 2.0 * acc
-    end
-    for k = 1:mr, i = 1:ml
-        acc = 0.0
-        for l = 1:mr, j = 1:ml
-            acc += rho[ml + lc + l, j] * VRL[k, l, i, j]
-        end
-        F[ml + lc + k, i] += 2.0 * acc
     end
 
     # Direct uses (p q| r s) and can couple slices in p,q.
@@ -435,6 +438,7 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
         mul!(tmp, K1, S[n1], 1.0, 0.0)
         mul!(F, S[n1]', tmp, -1.0, 1.0)
     end
+
 end
 
 function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
@@ -450,21 +454,9 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
     size(rhodn) == size(Fup) || error("rhodn has wrong size")
     ml + lc + mr == n || error("window dimensions do not match F")
 
-    if win.has_split
-        B = _build_full_B(S, win.layout)
-        rhoup_full = B * rhoup * B'
-        rhodn_full = B * rhodn * B'
-        N = size(B, 1)
-        Gup_full = zeros(Float64, N, N)
-        Gdn_full = zeros(Float64, N, N)
-        sliced_add_fock_uhf!(Gup_full, Gdn_full, rhoup_full, rhodn_full, V, win.layout)
-        Fup .+= B' * Gup_full * B
-        Fdn .+= B' * Gdn_full * B
-        return
-    end
-
     rtot = rhoup + rhodn
 
+    center_cols = win.center_cols
     Srho = win.Srho
     Srho_up = win.Srho_up
     Srho_dn = win.Srho_dn
@@ -478,121 +470,146 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
         Srho[n1] .= Srho_up[n1]
         Srho[n1] .+= Srho_dn[n1]
     end
-
-    VLL = win.VLL
-    for i = 1:ml, j = 1:ml
-        acc = 0.0
-        for k = 1:ml, l = 1:ml
-            acc += rtot[k, l] * VLL[i, j, k, l]
+    split_slices = win.split_slices
+    if isempty(split_slices)
+        VLL = win.VLL
+        for i = 1:ml, j = 1:ml
+            acc = 0.0
+            for k = 1:ml, l = 1:ml
+                acc += rtot[k, l] * VLL[i, j, k, l]
+            end
+            Fup[i, j] += acc
+            Fdn[i, j] += acc
         end
-        Fup[i, j] += acc
-        Fdn[i, j] += acc
-    end
 
-    VRR = win.VRR
-    for i = 1:mr, j = 1:mr
-        acc = 0.0
-        for k = 1:mr, l = 1:mr
-            acc += rtot[ml + lc + k, ml + lc + l] * VRR[i, j, k, l]
+        VRR = win.VRR
+        for i = 1:mr, j = 1:mr
+            acc = 0.0
+            for k = 1:mr, l = 1:mr
+                acc += rtot[ml + lc + k, ml + lc + l] * VRR[i, j, k, l]
+            end
+            Fup[ml + lc + i, ml + lc + j] += acc
+            Fdn[ml + lc + i, ml + lc + j] += acc
         end
-        Fup[ml + lc + i, ml + lc + j] += acc
-        Fdn[ml + lc + i, ml + lc + j] += acc
-    end
 
-    center_cols = win.center_cols
-    for np = 1:ns
-        cols_p = center_cols[np]
-        any(c -> c != 0, cols_p) || continue
-        for nq = 1:ns
-            cols_q = center_cols[nq]
-            any(c -> c != 0, cols_q) || continue
-            rho_nm = Matrix{Float64}(undef, length(cols_p), length(cols_q))
-            mul!(rho_nm, Srho[np], S[nq]', 1.0, 0.0)
-            Vpq = _slice_vee(V, np, nq)
-            for a = 1:length(cols_p)
-                col_a = cols_p[a]
+        for np = 1:ns
+            cols_p = center_cols[np]
+            any(c -> c != 0, cols_p) || continue
+            for nq = 1:ns
+                cols_q = center_cols[nq]
+                any(c -> c != 0, cols_q) || continue
+                rho_nm = Matrix{Float64}(undef, length(cols_p), length(cols_q))
+                mul!(rho_nm, Srho[np], S[nq]', 1.0, 0.0)
+                Vpq = _slice_vee(V, np, nq)
+                for a = 1:length(cols_p)
+                    col_a = cols_p[a]
+                    col_a == 0 && continue
+                    for c = 1:length(cols_q)
+                        col_c = cols_q[c]
+                        col_c == 0 && continue
+                        acc = 0.0
+                        for b = 1:length(cols_p), d = 1:length(cols_q)
+                            acc += rho_nm[b, d] * Vpq[a, b, c, d]
+                        end
+                        Fup[col_a, col_c] += acc
+                        Fdn[col_a, col_c] += acc
+                    end
+                end
+            end
+        end
+
+        WL = win.WL
+        WLswap = win.WLswap
+        for s = 1:ns
+            cols = center_cols[s]
+            for a = 1:length(cols)
+                col_a = cols[a]
                 col_a == 0 && continue
-                for c = 1:length(cols_q)
-                    col_c = cols_q[c]
-                    col_c == 0 && continue
+                for i = 1:ml
+                    acc_lc = 0.0
+                    acc_cl = 0.0
+                    for b = 1:length(cols)
+                        col_b = cols[b]
+                        col_b == 0 && continue
+                        for j = 1:ml
+                            acc_lc += rtot[j, col_b] * WL[s][i, j, a, b]
+                            acc_cl += rtot[col_b, j] * WLswap[s][i, j, a, b]
+                        end
+                    end
+                    Fup[i, col_a] += acc_lc
+                    Fdn[i, col_a] += acc_lc
+                    Fup[col_a, i] += acc_cl
+                    Fdn[col_a, i] += acc_cl
+                end
+            end
+        end
+
+        WR = win.WR
+        WRswap = win.WRswap
+        for s = 1:ns
+            cols = center_cols[s]
+            for a = 1:length(cols)
+                col_a = cols[a]
+                col_a == 0 && continue
+                for i = 1:mr
+                    acc_rc = 0.0
+                    acc_cr = 0.0
+                    for b = 1:length(cols)
+                        col_b = cols[b]
+                        col_b == 0 && continue
+                        for j = 1:mr
+                            acc_rc += rtot[ml + lc + j, col_b] * WR[s][i, j, a, b]
+                            acc_cr += rtot[col_b, ml + lc + j] * WRswap[s][i, j, a, b]
+                        end
+                    end
+                    Fup[ml + lc + i, col_a] += acc_rc
+                    Fdn[ml + lc + i, col_a] += acc_rc
+                    Fup[col_a, ml + lc + i] += acc_cr
+                    Fdn[col_a, ml + lc + i] += acc_cr
+                end
+            end
+        end
+
+        for i = 1:ml, k = 1:mr
+            acc = 0.0
+            for j = 1:ml, l = 1:mr
+                acc += rtot[j, ml + lc + l] * VLR[i, j, k, l]
+            end
+            Fup[i, ml + lc + k] += acc
+            Fdn[i, ml + lc + k] += acc
+        end
+        for k = 1:mr, i = 1:ml
+            acc = 0.0
+            for l = 1:mr, j = 1:ml
+                acc += rtot[ml + lc + l, j] * VRL[k, l, i, j]
+            end
+            Fup[ml + lc + k, i] += acc
+            Fdn[ml + lc + k, i] += acc
+        end
+    else
+        # Direct (J) contributions via slice projection when a slice is split.
+        superdim = size(Fup, 1)
+        for n1 = 1:ns
+            dn = dims[n1]
+            for m = 1:ns
+                dm = dims[m]
+                rho_nm = Matrix{Float64}(undef, dn, dm)
+                mul!(rho_nm, Srho[n1], S[m]', 1.0, 0.0)
+                Vnm = _slice_vee(V, n1, m)
+                J = Matrix{Float64}(undef, dn, dm)
+                for a = 1:dn, c = 1:dm
                     acc = 0.0
-                    for b = 1:length(cols_p), d = 1:length(cols_q)
-                        acc += rho_nm[b, d] * Vpq[a, b, c, d]
+                    for b = 1:dn, d = 1:dm
+                        acc += rho_nm[b, d] * Vnm[a, b, c, d]
                     end
-                    Fup[col_a, col_c] += acc
-                    Fdn[col_a, col_c] += acc
+                    J[a, c] = acc
                 end
+                tmp = Matrix{Float64}(undef, dn, superdim)
+                mul!(tmp, J, S[m], 1.0, 0.0)
+                mul!(Fup, S[n1]', tmp, 1.0, 1.0)
+                mul!(Fdn, S[n1]', tmp, 1.0, 1.0)
             end
         end
-    end
-
-    WL = win.WL
-    WLswap = win.WLswap
-    for s = 1:ns
-        cols = center_cols[s]
-        for a = 1:length(cols)
-            col_a = cols[a]
-            col_a == 0 && continue
-            for i = 1:ml
-                acc_lc = 0.0
-                acc_cl = 0.0
-                for b = 1:length(cols)
-                    col_b = cols[b]
-                    col_b == 0 && continue
-                    for j = 1:ml
-                        acc_lc += rtot[j, col_b] * WL[s][i, j, a, b]
-                        acc_cl += rtot[col_b, j] * WLswap[s][i, j, a, b]
-                    end
-                end
-                Fup[i, col_a] += acc_lc
-                Fdn[i, col_a] += acc_lc
-                Fup[col_a, i] += acc_cl
-                Fdn[col_a, i] += acc_cl
-            end
-        end
-    end
-
-    WR = win.WR
-    WRswap = win.WRswap
-    for s = 1:ns
-        cols = center_cols[s]
-        for a = 1:length(cols)
-            col_a = cols[a]
-            col_a == 0 && continue
-            for i = 1:mr
-                acc_rc = 0.0
-                acc_cr = 0.0
-                for b = 1:length(cols)
-                    col_b = cols[b]
-                    col_b == 0 && continue
-                    for j = 1:mr
-                        acc_rc += rtot[ml + lc + j, col_b] * WR[s][i, j, a, b]
-                        acc_cr += rtot[col_b, ml + lc + j] * WRswap[s][i, j, a, b]
-                    end
-                end
-                Fup[ml + lc + i, col_a] += acc_rc
-                Fdn[ml + lc + i, col_a] += acc_rc
-                Fup[col_a, ml + lc + i] += acc_cr
-                Fdn[col_a, ml + lc + i] += acc_cr
-            end
-        end
-    end
-
-    for i = 1:ml, k = 1:mr
-        acc = 0.0
-        for j = 1:ml, l = 1:mr
-            acc += rtot[j, ml + lc + l] * VLR[i, j, k, l]
-        end
-        Fup[i, ml + lc + k] += acc
-        Fdn[i, ml + lc + k] += acc
-    end
-    for k = 1:mr, i = 1:ml
-        acc = 0.0
-        for l = 1:mr, j = 1:ml
-            acc += rtot[ml + lc + l, j] * VRL[k, l, i, j]
-        end
-        Fup[ml + lc + k, i] += acc
-        Fdn[ml + lc + k, i] += acc
     end
 
     rho_slice_up = win.rho_slice_up
@@ -644,6 +661,7 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
         mul!(tmp, K1, S[n1], 1.0, 0.0)
         mul!(Fdn, S[n1]', tmp, -1.0, 1.0)
     end
+
 end
 
 """
