@@ -468,19 +468,16 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
     end
     @views for n1 = 1:ns
         K1 = K[n1]
-        fill!(K1, 0.0)
+        Kvec = reshape(K1, :)
+        fill!(Kvec, 0.0)
+        dn1 = dims[n1]
+        dn1sq = dn1 * dn1
         for n2 = 1:ns
-            rho_m = rho_slice[n2]
-            Vnm = _slice_vee(V, n1, n2)
-            dn1 = dims[n1]
             dn2 = dims[n2]
-            for a = 1:dn1, b = 1:dn1
-                acc = 0.0
-                for c = 1:dn2, d = 1:dn2
-                    acc += rho_m[c, d] * Vnm[a, b, c, d]
-                end
-                K1[a, b] += acc
-            end
+            Vnm = _slice_vee(V, n1, n2)
+            Vpair = reshape(Vnm, dn1sq, dn2 * dn2)
+            rvec = reshape(rho_slice[n2], dn2 * dn2)
+            mul!(Kvec, Vpair, rvec, 1.0, 1.0)
         end
         tmp = tmp_n[n1]
         mul!(tmp, K1, S[n1], 1.0, 0.0)
@@ -706,37 +703,28 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
     tmp_n = win.tmp_n
     @views for n1 = 1:ns
         K1 = K[n1]
-        fill!(K1, 0.0)
+        Kvec = reshape(K1, :)
+        fill!(Kvec, 0.0)
+        dn1 = dims[n1]
+        dn1sq = dn1 * dn1
         for n2 = 1:ns
-            rup = rho_slice_up[n2]
-            Vnm = _slice_vee(V, n1, n2)
-            dn1 = dims[n1]
             dn2 = dims[n2]
-            for a = 1:dn1, b = 1:dn1
-                acc = 0.0
-                for c = 1:dn2, d = 1:dn2
-                    acc += rup[c, d] * Vnm[a, b, c, d]
-                end
-                K1[a, b] += acc
-            end
+            Vnm = _slice_vee(V, n1, n2)
+            Vpair = reshape(Vnm, dn1sq, dn2 * dn2)
+            rvec = reshape(rho_slice_up[n2], dn2 * dn2)
+            mul!(Kvec, Vpair, rvec, 1.0, 1.0)
         end
         tmp = tmp_n[n1]
         mul!(tmp, K1, S[n1], 1.0, 0.0)
         mul!(Fup, S[n1]', tmp, -1.0, 1.0)
 
-        fill!(K1, 0.0)
+        fill!(Kvec, 0.0)
         for n2 = 1:ns
-            rdn = rho_slice_dn[n2]
-            Vnm = _slice_vee(V, n1, n2)
-            dn1 = dims[n1]
             dn2 = dims[n2]
-            for a = 1:dn1, b = 1:dn1
-                acc = 0.0
-                for c = 1:dn2, d = 1:dn2
-                    acc += rdn[c, d] * Vnm[a, b, c, d]
-                end
-                K1[a, b] += acc
-            end
+            Vnm = _slice_vee(V, n1, n2)
+            Vpair = reshape(Vnm, dn1sq, dn2 * dn2)
+            rvec = reshape(rho_slice_dn[n2], dn2 * dn2)
+            mul!(Kvec, Vpair, rvec, 1.0, 1.0)
         end
         tmp = tmp_n[n1]
         mul!(tmp, K1, S[n1], 1.0, 0.0)

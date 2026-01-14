@@ -3,22 +3,22 @@
 # H norm = 85.22616536592902
 # == Projection backend ==
 #   split slices: n/a
-#   RHF: 1.17 ms/call, 0.423 MB/call
-#   UHF: 1.5 ms/call, 0.977 MB/call
+#   RHF: 1.233 ms/call, 0.423 MB/call
+#   UHF: 1.459 ms/call, 0.977 MB/call
 # == Cached backend ==
 #   split slices: none
-#   RHF: 0.337 ms/call, 0.021 MB/call
+#   RHF: 0.269 ms/call, 0.051 MB/call
 #   RHF timing breakdown (ms/call):
 #   direct_LL_RR: 0.011
-#   direct_CL_CR: 0.097
+#   direct_CL_CR: 0.099
 #   direct_LR: 0.011
-#   exchange: 0.18
-#   UHF: 0.561 ms/call, 0.05 MB/call
+#   exchange: 0.111
+#   UHF: 0.435 ms/call, 0.109 MB/call
 #   UHF timing breakdown (ms/call):
 #   direct_LL_RR: 0.012
-#   direct_CL_CR: 0.107
+#   direct_CL_CR: 0.106
 #   direct_LR: 0.012
-#   exchange: 0.352
+#   exchange: 0.224
 ENV["HFDMRG_BENCH_TIMING"] = "1"
 
 using LinearAlgebra
