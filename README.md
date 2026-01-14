@@ -32,6 +32,11 @@ for you.
 ```
 For quick performance sanity, see `scripts/bench_sliced.jl`.
 
+## Developer commands
+- `make test`: run the package tests via `cjulia`.
+- `make bench`: run `scripts/bench_sliced.jl`.
+- `make verify`: run `scripts/verify_cached_vs_projection.jl`.
+
 ## How to add a backend
 Checklist:
 1. Define a backend type and any block/window state you need.
