@@ -386,7 +386,9 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
             F[ml + lc + k, i] += 2.0 * acc
         end
     else
-        # Direct (J) contributions via slice projection when a slice is split.
+        # Correctness-first path: when any slice is split, direct terms fall back to
+        # full slice-projection to maintain parity with the projection backend.
+        # This is intentionally non-local.
         superdim = size(F, 1)
         for n1 = 1:ns
             dn = dims[n1]
@@ -587,7 +589,9 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
             Fdn[ml + lc + k, i] += acc
         end
     else
-        # Direct (J) contributions via slice projection when a slice is split.
+        # Correctness-first path: when any slice is split, direct terms fall back to
+        # full slice-projection to maintain parity with the projection backend.
+        # This is intentionally non-local.
         superdim = size(Fup, 1)
         for n1 = 1:ns
             dn = dims[n1]
