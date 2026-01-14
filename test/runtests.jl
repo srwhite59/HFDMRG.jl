@@ -362,7 +362,7 @@ try
 
     @testset "Cached ragged backend vs projection" begin
         rng = MersenneTwister(93)
-        dims = [1, 2, 3]
+        dims = [1, 2, 3, 2, 2]
         layout = HFDMRG.SliceLayout(dims)
         ns = length(dims)
         N = layout.offs[end]
