@@ -1,3 +1,26 @@
+# Benchmark snapshot (make bench):
+# N = 120, ns = 30, nj = 4, ml = 10, lc = 40, mr = 10, nrep = 200
+# H norm = 85.22616536592902
+# == Projection backend ==
+#   split slices: n/a
+#   RHF: 1.17 ms/call, 0.423 MB/call
+#   UHF: 1.5 ms/call, 0.977 MB/call
+# == Cached backend ==
+#   split slices: none
+#   RHF: 0.337 ms/call, 0.021 MB/call
+#   RHF timing breakdown (ms/call):
+#   direct_LL_RR: 0.011
+#   direct_CL_CR: 0.097
+#   direct_LR: 0.011
+#   exchange: 0.18
+#   UHF: 0.561 ms/call, 0.05 MB/call
+#   UHF timing breakdown (ms/call):
+#   direct_LL_RR: 0.012
+#   direct_CL_CR: 0.107
+#   direct_LR: 0.012
+#   exchange: 0.352
+ENV["HFDMRG_BENCH_TIMING"] = "1"
+
 using LinearAlgebra
 using Random
 
@@ -14,47 +37,108 @@ function build_window(backend, Lra, Cra, Rra, Lphi, Rphi, N)
     HFDMRG.vee_window(Lvee, Rvee, Cra, backend)
 end
 
-function bench_backend(name, backend, Lra, Cra, Rra, Lphi, Rphi, N, rho, rhoup, rhodn)
-    superdim = size(rho, 1)
-    println("== ", name, " ==")
+function split_label(win)
+    if hasproperty(win, :split_slices)
+        isempty(win.split_slices) ? "none" : join(win.split_slices, ",")
+    else
+        "n/a"
+    end
+end
 
-    # Warmup
-    win = build_window(backend, Lra, Cra, Rra, Lphi, Rphi, N)
-    F = zeros(superdim, superdim)
+function bench_rhf!(win, rho; nrep)
+    F = zeros(size(rho))
     HFDMRG.vee_add_fock_r!(F, rho, win)
-    Fup = zeros(superdim, superdim)
-    Fdn = zeros(superdim, superdim)
+
+    if win isa HFDMRG.SlicedBasisCachedWindow
+        HFDMRG._bench_timing_reset!()
+    end
+
+    t0 = time_ns()
+    for _ = 1:nrep
+        fill!(F, 0.0)
+        HFDMRG.vee_add_fock_r!(F, rho, win)
+    end
+    dt = (time_ns() - t0) * 1e-9
+
+    timing = win isa HFDMRG.SlicedBasisCachedWindow ? HFDMRG._bench_timing_snapshot() : Dict{Symbol, Float64}()
+
+    env_flag = get(ENV, "HFDMRG_BENCH_TIMING", "")
+    if win isa HFDMRG.SlicedBasisCachedWindow
+        ENV["HFDMRG_BENCH_TIMING"] = ""
+    end
+    alloc = @allocated begin
+        for _ = 1:nrep
+            fill!(F, 0.0)
+            HFDMRG.vee_add_fock_r!(F, rho, win)
+        end
+    end
+    if win isa HFDMRG.SlicedBasisCachedWindow
+        ENV["HFDMRG_BENCH_TIMING"] = env_flag
+    end
+    (time_per_call = dt / nrep, alloc_per_call = alloc / nrep, timing = timing)
+end
+
+function bench_uhf!(win, rhoup, rhodn; nrep)
+    Fup = zeros(size(rhoup))
+    Fdn = zeros(size(rhoup))
     HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
 
-    println("RHF (window + Fock)")
-    t = @elapsed begin
-        win = build_window(backend, Lra, Cra, Rra, Lphi, Rphi, N)
-        F = zeros(superdim, superdim)
-        HFDMRG.vee_add_fock_r!(F, rho, win)
+    if win isa HFDMRG.SlicedBasisCachedWindow
+        HFDMRG._bench_timing_reset!()
     end
-    b = @allocated begin
-        win = build_window(backend, Lra, Cra, Rra, Lphi, Rphi, N)
-        F = zeros(superdim, superdim)
-        HFDMRG.vee_add_fock_r!(F, rho, win)
-    end
-    println("  elapsed: ", round(t, digits = 3), " s")
-    println("  allocated: ", round(b / 1e6, digits = 2), " MB")
 
-    println("UHF (window + Fock)")
-    t = @elapsed begin
-        win = build_window(backend, Lra, Cra, Rra, Lphi, Rphi, N)
-        Fup = zeros(superdim, superdim)
-        Fdn = zeros(superdim, superdim)
+    t0 = time_ns()
+    for _ = 1:nrep
+        fill!(Fup, 0.0)
+        fill!(Fdn, 0.0)
         HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
     end
-    b = @allocated begin
-        win = build_window(backend, Lra, Cra, Rra, Lphi, Rphi, N)
-        Fup = zeros(superdim, superdim)
-        Fdn = zeros(superdim, superdim)
-        HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+    dt = (time_ns() - t0) * 1e-9
+
+    timing = win isa HFDMRG.SlicedBasisCachedWindow ? HFDMRG._bench_timing_snapshot() : Dict{Symbol, Float64}()
+
+    env_flag = get(ENV, "HFDMRG_BENCH_TIMING", "")
+    if win isa HFDMRG.SlicedBasisCachedWindow
+        ENV["HFDMRG_BENCH_TIMING"] = ""
     end
-    println("  elapsed: ", round(t, digits = 3), " s")
-    println("  allocated: ", round(b / 1e6, digits = 2), " MB")
+    alloc = @allocated begin
+        for _ = 1:nrep
+            fill!(Fup, 0.0)
+            fill!(Fdn, 0.0)
+            HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+        end
+    end
+    if win isa HFDMRG.SlicedBasisCachedWindow
+        ENV["HFDMRG_BENCH_TIMING"] = env_flag
+    end
+    (time_per_call = dt / nrep, alloc_per_call = alloc / nrep, timing = timing)
+end
+
+function print_timing(label, res)
+    println(label, ": ", round(res.time_per_call * 1e3, digits = 3), " ms/call, ",
+        round(res.alloc_per_call / 1e6, digits = 3), " MB/call")
+end
+
+function print_cached_breakdown(label, timing, nrep)
+    isempty(timing) && return
+    println(label, " timing breakdown (ms/call):")
+    println("  direct_LL_RR: ", round(timing[:direct_LL_RR] / nrep * 1e3, digits = 3))
+    println("  direct_CL_CR: ", round(timing[:direct_CL_CR] / nrep * 1e3, digits = 3))
+    println("  direct_LR: ", round(timing[:direct_LR] / nrep * 1e3, digits = 3))
+    println("  exchange: ", round(timing[:exchange] / nrep * 1e3, digits = 3))
+end
+
+function bench_backend(name, win, rho, rhoup, rhodn; nrep)
+    println("== ", name, " ==")
+    println("  split slices: ", split_label(win))
+
+    rhf = bench_rhf!(win, rho; nrep = nrep)
+    print_timing("  RHF", rhf)
+    print_cached_breakdown("  RHF", rhf.timing, nrep)
+
+    uhf = bench_uhf!(win, rhoup, rhodn; nrep = nrep)
+    print_timing("  UHF", uhf)
+    print_cached_breakdown("  UHF", uhf.timing, nrep)
 end
 
 function main()
@@ -62,6 +146,7 @@ function main()
     ns = 30
     nj = 4
     N = ns * nj
+    nrep = 200
 
     A = randn(rng, N, N)
     H = (A + A') / 2
@@ -87,12 +172,16 @@ function main()
     backend_proj = HFDMRG.SlicedBasisBackend(layout, V6)
     backend_cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
 
-    println("N = ", N, ", ml = ", ml, ", lc = ", length(Cra), ", mr = ", mr)
+    win_proj = build_window(backend_proj, Lra, Cra, Rra, Lphi, Rphi, N)
+    win_cached = build_window(backend_cached, Lra, Cra, Rra, Lphi, Rphi, N)
+
+    println("N = ", N, ", ns = ", ns, ", nj = ", nj,
+        ", ml = ", ml, ", lc = ", length(Cra), ", mr = ", mr,
+        ", nrep = ", nrep)
     println("H norm = ", norm(H))
-    bench_backend("Projection backend", backend_proj, Lra, Cra, Rra, Lphi, Rphi, N, rho,
-        rhoup, rhodn)
-    bench_backend("Cached backend", backend_cached, Lra, Cra, Rra, Lphi, Rphi, N, rho,
-        rhoup, rhodn)
+
+    bench_backend("Projection backend", win_proj, rho, rhoup, rhodn; nrep = nrep)
+    bench_backend("Cached backend", win_cached, rho, rhoup, rhodn; nrep = nrep)
 end
 
 main()

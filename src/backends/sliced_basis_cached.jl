@@ -51,6 +51,24 @@ struct SlicedBasisCachedWindow{T}
     tmp_n::Vector{Matrix{Float64}}
 end
 
+const _bench_timing = Dict{Symbol, Float64}(
+    :direct_LL_RR => 0.0,
+    :direct_CL_CR => 0.0,
+    :direct_LR => 0.0,
+    :exchange => 0.0,
+)
+
+_bench_timing_enabled() = !isempty(get(ENV, "HFDMRG_BENCH_TIMING", ""))
+
+function _bench_timing_reset!()
+    for key in keys(_bench_timing)
+        _bench_timing[key] = 0.0
+    end
+    nothing
+end
+
+_bench_timing_snapshot() = Dict(key => value for (key, value) in _bench_timing)
+
 function SlicedBasisBackendCached(layout::SliceLayout, V6::Array{Float64,6})
     ns = nslices(layout)
     nj = layout.dims[1]
@@ -275,9 +293,13 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
         mul!(Srho[n1], S[n1], rho, 1.0, 0.0)
     end
     split_slices = win.split_slices
+    timing = _bench_timing_enabled()
     if isempty(split_slices)
         # Direct (J) contributions via cached tensors.
         VLL = win.VLL
+        if timing
+            t0 = time_ns()
+        end
         for i = 1:ml, j = 1:ml
             acc = 0.0
             for k = 1:ml, l = 1:ml
@@ -294,7 +316,13 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
             end
             F[ml + lc + i, ml + lc + j] += 2.0 * acc
         end
+        if timing
+            _bench_timing[:direct_LL_RR] += (time_ns() - t0) * 1e-9
+        end
 
+        if timing
+            t0 = time_ns()
+        end
         for np = 1:ns
             cols_p = center_cols[np]
             any(c -> c != 0, cols_p) || continue
@@ -367,10 +395,16 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
                 end
             end
         end
+        if timing
+            _bench_timing[:direct_CL_CR] += (time_ns() - t0) * 1e-9
+        end
 
         VLR = win.VLR
         VRL = win.VRL
 
+        if timing
+            t0 = time_ns()
+        end
         for i = 1:ml, k = 1:mr
             acc = 0.0
             for j = 1:ml, l = 1:mr
@@ -385,10 +419,16 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
             end
             F[ml + lc + k, i] += 2.0 * acc
         end
+        if timing
+            _bench_timing[:direct_LR] += (time_ns() - t0) * 1e-9
+        end
     else
         # Correctness-first path: when any slice is split, direct terms fall back to
         # full slice-projection to maintain parity with the projection backend.
         # This is intentionally non-local.
+        if timing
+            t0 = time_ns()
+        end
         superdim = size(F, 1)
         for n1 = 1:ns
             dn = dims[n1]
@@ -410,10 +450,16 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
                 mul!(F, S[n1]', tmp, 2.0, 1.0)
             end
         end
+        if timing
+            _bench_timing[:direct_CL_CR] += (time_ns() - t0) * 1e-9
+        end
     end
 
     # Direct uses (p q| r s) and can couple slices in p,q.
     # Exchange uses (p r| q s) and is nonzero only when slice(p) == slice(q).
+    if timing
+        t0 = time_ns()
+    end
     rho_slice = win.rho_slice
     K = win.K
     tmp_n = win.tmp_n
@@ -439,6 +485,9 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
         tmp = tmp_n[n1]
         mul!(tmp, K1, S[n1], 1.0, 0.0)
         mul!(F, S[n1]', tmp, -1.0, 1.0)
+    end
+    if timing
+        _bench_timing[:exchange] += (time_ns() - t0) * 1e-9
     end
 
 end
@@ -473,8 +522,12 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
         Srho[n1] .+= Srho_dn[n1]
     end
     split_slices = win.split_slices
+    timing = _bench_timing_enabled()
     if isempty(split_slices)
         VLL = win.VLL
+        if timing
+            t0 = time_ns()
+        end
         for i = 1:ml, j = 1:ml
             acc = 0.0
             for k = 1:ml, l = 1:ml
@@ -493,7 +546,13 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
             Fup[ml + lc + i, ml + lc + j] += acc
             Fdn[ml + lc + i, ml + lc + j] += acc
         end
+        if timing
+            _bench_timing[:direct_LL_RR] += (time_ns() - t0) * 1e-9
+        end
 
+        if timing
+            t0 = time_ns()
+        end
         for np = 1:ns
             cols_p = center_cols[np]
             any(c -> c != 0, cols_p) || continue
@@ -571,7 +630,13 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
                 end
             end
         end
+        if timing
+            _bench_timing[:direct_CL_CR] += (time_ns() - t0) * 1e-9
+        end
 
+        if timing
+            t0 = time_ns()
+        end
         for i = 1:ml, k = 1:mr
             acc = 0.0
             for j = 1:ml, l = 1:mr
@@ -588,10 +653,16 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
             Fup[ml + lc + k, i] += acc
             Fdn[ml + lc + k, i] += acc
         end
+        if timing
+            _bench_timing[:direct_LR] += (time_ns() - t0) * 1e-9
+        end
     else
         # Correctness-first path: when any slice is split, direct terms fall back to
         # full slice-projection to maintain parity with the projection backend.
         # This is intentionally non-local.
+        if timing
+            t0 = time_ns()
+        end
         superdim = size(Fup, 1)
         for n1 = 1:ns
             dn = dims[n1]
@@ -614,8 +685,14 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
                 mul!(Fdn, S[n1]', tmp, 1.0, 1.0)
             end
         end
+        if timing
+            _bench_timing[:direct_CL_CR] += (time_ns() - t0) * 1e-9
+        end
     end
 
+    if timing
+        t0 = time_ns()
+    end
     rho_slice_up = win.rho_slice_up
     rho_slice_dn = win.rho_slice_dn
     @views for n1 = 1:ns
@@ -664,6 +741,9 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
         tmp = tmp_n[n1]
         mul!(tmp, K1, S[n1], 1.0, 0.0)
         mul!(Fdn, S[n1]', tmp, -1.0, 1.0)
+    end
+    if timing
+        _bench_timing[:exchange] += (time_ns() - t0) * 1e-9
     end
 
 end
