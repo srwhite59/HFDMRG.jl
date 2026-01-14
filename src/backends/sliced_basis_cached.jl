@@ -29,6 +29,7 @@ struct SlicedBasisCachedWindow{T}
     ml::Int
     lc::Int
     mr::Int
+    has_split::Bool
     VLL::Array{Float64,4}
     VRR::Array{Float64,4}
     WL::Vector{Array{Float64,4}}
@@ -71,6 +72,17 @@ SlicedBasisBackendCached(layout::SliceLayout, Vblocks::Vector{Vector{Array{Float
 
 _slice_vee(V::Array{Float64,6}, n::Int, m::Int) = @view V[:, :, :, :, n, m]
 _slice_vee(vee::SlicedVeeRagged, n::Int, m::Int) = vee.V[n][m]
+
+function _build_full_B(S::Vector{Matrix{Float64}}, layout::SliceLayout)
+    ns = length(S)
+    superdim = size(S[1], 2)
+    N = layout.offs[end]
+    B = zeros(Float64, N, superdim)
+    for s = 1:ns
+        B[orb_range(layout, s), :] = S[s]
+    end
+    B
+end
 
 _slice_local(layout::SliceLayout, p::Int) = slice_local(layout, p)
 
@@ -210,6 +222,16 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
         center_cols[n][a] = ml + idx
     end
 
+    has_split = false
+    for s = 1:ns
+        has_center = any(c -> c != 0, center_cols[s])
+        has_block = any(!iszero, Lvee.P[s]) || any(!iszero, Rvee.P[s])
+        if has_center && has_block
+            has_split = true
+            break
+        end
+    end
+
     Srho = [zeros(Float64, dims[s], superdim) for s = 1:ns]
     Srho_up = [zeros(Float64, dims[s], superdim) for s = 1:ns]
     Srho_dn = [zeros(Float64, dims[s], superdim) for s = 1:ns]
@@ -242,7 +264,7 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
         end
     end
 
-    SlicedBasisCachedWindow(S, backend.V, backend.layout, ns, ml, lc, mr,
+    SlicedBasisCachedWindow(S, backend.V, backend.layout, ns, ml, lc, mr, has_split,
         Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, Lvee.Wswap, Rvee.Wswap, VLR, VRL,
         center_slice, center_local, center_cols, Srho, Srho_up, Srho_dn, rho_slice,
         rho_slice_up, rho_slice_dn, K, tmp_n)
@@ -258,6 +280,16 @@ function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
     size(F) == (n, n) || error("F has wrong size")
     size(rho) == size(F) || error("rho has wrong size")
     ml + lc + mr == n || error("window dimensions do not match F")
+
+    if win.has_split
+        B = _build_full_B(S, win.layout)
+        rho_full = B * rho * B'
+        N = size(B, 1)
+        G_full = zeros(Float64, N, N)
+        sliced_add_fock_r!(G_full, rho_full, V, win.layout)
+        F .+= B' * G_full * B
+        return
+    end
 
     Srho = win.Srho
     @views for n1 = 1:ns
@@ -417,6 +449,19 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
     size(rhoup) == size(Fup) || error("rhoup has wrong size")
     size(rhodn) == size(Fup) || error("rhodn has wrong size")
     ml + lc + mr == n || error("window dimensions do not match F")
+
+    if win.has_split
+        B = _build_full_B(S, win.layout)
+        rhoup_full = B * rhoup * B'
+        rhodn_full = B * rhodn * B'
+        N = size(B, 1)
+        Gup_full = zeros(Float64, N, N)
+        Gdn_full = zeros(Float64, N, N)
+        sliced_add_fock_uhf!(Gup_full, Gdn_full, rhoup_full, rhodn_full, V, win.layout)
+        Fup .+= B' * Gup_full * B
+        Fdn .+= B' * Gdn_full * B
+        return
+    end
 
     rtot = rhoup + rhodn
 
