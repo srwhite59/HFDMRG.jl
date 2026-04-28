@@ -1,10 +1,13 @@
 .PHONY: test bench verify
 
+CODEX_HOME ?= $(abspath ../..)
+CJULIA ?= $(CODEX_HOME)/cjulia
+
 test:
-	~/codexhome/cjulia -e 'using Pkg; Pkg.test()'
+	$(CJULIA) -e 'using Pkg; Pkg.test()'
 
 bench:
-	~/codexhome/cjulia scripts/bench_sliced.jl
+	$(CJULIA) scripts/bench_sliced.jl
 
 verify:
-	~/codexhome/cjulia scripts/verify_cached_vs_projection.jl
+	$(CJULIA) scripts/verify_cached_vs_projection.jl

@@ -619,7 +619,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     nblockcenter = 1,
     blocksize = 200,
     maxiter = 1000,
-    cutoff = 1e-10,
+    cutoff = 1e-11,
     scf_cutoff = nothing,
     verbose = false)
 
