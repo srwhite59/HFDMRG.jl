@@ -15,9 +15,12 @@ Public entrypoints:
   backend.
 - solve_hfdmrg(H, V, psiup0, psidn0; kwargs...): unrestricted HF using the
   density-density backend.
+- solve_hfdmrg(Hup, Hdn, V, psiup0, psidn0; kwargs...): unrestricted HF with
+  spin-dependent one-body Hamiltonians and the same density-density backend.
 
 Inputs:
 - H, V: N x N real/symmetric matrices (one-body Hamiltonian and interaction).
+- Hup, Hdn: N x N up/down one-body Hamiltonians for spin-dependent UHF.
 - psiup0/psidn0: N x Nspin matrices with orthonormal columns (initial orbitals).
 """
 module HFDMRG

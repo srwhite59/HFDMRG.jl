@@ -13,10 +13,16 @@ contributions to the Fock matrix.
 Entry points:
 - `solve_hfdmrg(H, V, psiup0; ...)` for density-density RHF.
 - `solve_hfdmrg(H, V, psiup0, psidn0; ...)` for density-density UHF.
+- `solve_hfdmrg(Hup, Hdn, V, psiup0, psidn0; ...)` for UHF with
+  spin-dependent one-body terms and density-density interactions.
+- `solve_hfdmrg(H, layout::SliceLayout, V6, psiup0; ...)` for sliced-basis RHF
+  with uniform slice sizes.
+- `solve_hfdmrg(H, layout::SliceLayout, Vblocks, psiup0; ...)` for sliced-basis
+  RHF with ragged slice sizes.
 - `solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; ...)` for sliced-basis RHF
   (projection-based).
-You can also pass `layout::SliceLayout` and `V6` directly; the backend is constructed
-for you.
+The corresponding sliced UHF forms take `psiup0, psidn0`, and split one-body
+UHF forms take `Hup, Hdn` before the interaction/backend arguments.
 
 ## Usage
 
@@ -53,6 +59,67 @@ psidn0 = Matrix(qr(randn(rng, N, Ndn)).Q)
 psiup, psidn, energy = solve_hfdmrg(H, V, psiup0, psidn0; maxiter = 10, blocksize = 4)
 ```
 
+Spin-dependent one-body UHF passes separate up/down one-body Hamiltonians while
+leaving the two-body interaction unchanged:
+
+```julia
+Hup = H + Diagonal(field)
+Hdn = H - Diagonal(field)
+
+psiup, psidn, energy = solve_hfdmrg(Hup, Hdn, V, psiup0, psidn0;
+    maxiter = 10, blocksize = 4)
+```
+
+The existing `solve_hfdmrg(H, V, psiup0, psidn0; ...)` path remains the
+common-H fast path with one projected one-body cache. Passing the same matrix
+object as both `Hup` and `Hdn` also routes to that path; only genuinely split
+one-body operators allocate split one-body caches.
+
+### External sliced Hamiltonians
+
+For block- or slice-structured Hamiltonians from another package, such as an
+atomic sliced export, the normal HFDMRG route is the sliced solver:
+
+```julia
+using HFDMRG
+
+# Produced by the consumer package in HFDMRG's slice-ordered orbital basis:
+# H::AbstractMatrix          dense one-body term
+# dims::Vector{Int}          orbitals per slice
+# Vblocks                    ragged sliced two-body tensor
+# psiup0                     initial occupied orbitals in the full basis
+layout = HFDMRG.SliceLayout(dims)
+
+psiup, psidn, energy = HFDMRG.solve_hfdmrg(H, layout, Vblocks, psiup0;
+    maxiter = 10, blocksize = 16)
+```
+
+This path does not densify the two-body interaction. The public solver still
+accepts the one-body term as a dense global matrix `H`, while the two-body term
+stays in the native sliced representation (`V6` or `Vblocks`). There is not a
+separate high-level conserved-`m` Hamiltonian entry point; map that structure
+onto `H + SliceLayout + V6/Vblocks` before calling `solve_hfdmrg`.
+
+When all slice sizes are equal, prefer the fixed-size `V6` representation over
+ragged `Vblocks`:
+
+```julia
+layout = HFDMRG.SliceLayout(fill(nj, ns))
+psiup, psidn, energy = HFDMRG.solve_hfdmrg(H, layout, V6, psiup0;
+    maxiter = 10, blocksize = 16)
+```
+
+`V6` is the faster sliced format for uniform slices and should usually be the
+first choice in that case.
+
+For spin-dependent one-body terms with sliced interactions, put `Hup, Hdn`
+before the sliced layout or backend:
+
+```julia
+psiup, psidn, energy = HFDMRG.solve_hfdmrg(Hup, Hdn, layout, V6,
+    psiup0, psidn0; maxiter = 10, blocksize = 16)
+```
+
 ### Sliced-basis interaction (fixed per-slice size)
 
 For fixed slice size `nj`, the sliced interaction is stored as
@@ -67,7 +134,7 @@ using HFDMRG
 rng = MersenneTwister(1)
 ns = 4
 nj = 2
-layout = SliceLayout(fill(nj, ns))
+layout = HFDMRG.SliceLayout(fill(nj, ns))
 N = layout.offs[end]
 
 H = randn(rng, N, N); H = (H + H') / 2
@@ -76,7 +143,7 @@ V6 = randn(rng, nj, nj, nj, nj, ns, ns)
 Nup = 2
 psiup0 = Matrix(qr(randn(rng, N, Nup)).Q)
 
-psiup, psidn, energy = solve_hfdmrg(H, layout, V6, psiup0; maxiter = 5, blocksize = 2)
+psiup, psidn, energy = HFDMRG.solve_hfdmrg(H, layout, V6, psiup0; maxiter = 5, blocksize = 2)
 ```
 
 ### Sliced-basis interaction (ragged per-slice sizes)
@@ -92,7 +159,7 @@ using HFDMRG
 
 rng = MersenneTwister(2)
 dims = [1, 2, 3, 2, 2]
-layout = SliceLayout(dims)
+layout = HFDMRG.SliceLayout(dims)
 ns = length(dims)
 N = layout.offs[end]
 
@@ -103,7 +170,7 @@ Vblocks = [[randn(rng, dims[n], dims[n], dims[m], dims[m]) for m in 1:ns]
 Nup = 2
 psiup0 = Matrix(qr(randn(rng, N, Nup)).Q)
 
-psiup, psidn, energy = solve_hfdmrg(H, layout, Vblocks, psiup0; maxiter = 5, blocksize = 2)
+psiup, psidn, energy = HFDMRG.solve_hfdmrg(H, layout, Vblocks, psiup0; maxiter = 5, blocksize = 2)
 ```
 
 ### Cached sliced backend
@@ -113,8 +180,8 @@ the same interaction conventions as the projection backend and can be constructe
 directly from `layout` and `V6`/`Vblocks`:
 
 ```julia
-backend = SlicedBasisBackendCached(layout, V6)
-psiup, psidn, energy = solve_hfdmrg(H, backend, psiup0; maxiter = 5, blocksize = 2)
+backend = HFDMRG.SlicedBasisBackendCached(layout, V6)
+psiup, psidn, energy = HFDMRG.solve_hfdmrg(H, backend, psiup0; maxiter = 5, blocksize = 2)
 ```
 
 For ragged interactions, pass `Vblocks` instead of `V6`.
@@ -127,8 +194,10 @@ Supported representations:
 - Ragged sliced: `Vblocks::Vector{Vector{Array{Float64,4}}}` with per-slice sizes.
 
 Backend constructors:
-- `SlicedBasisBackend(layout, V6)` or `SlicedBasisBackend(layout, Vblocks)`
-- `SlicedBasisBackendCached(layout, V6)` or `SlicedBasisBackendCached(layout, Vblocks)`
+- `HFDMRG.SlicedBasisBackend(layout, V6)` or
+  `HFDMRG.SlicedBasisBackend(layout, Vblocks)`
+- `HFDMRG.SlicedBasisBackendCached(layout, V6)` or
+  `HFDMRG.SlicedBasisBackendCached(layout, Vblocks)`
 
 ## Repository layout
 - `src/core.jl`: generic HF-DMRG sweep engine.

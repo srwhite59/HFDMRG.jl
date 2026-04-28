@@ -51,6 +51,39 @@ try
         @test :solve_hfdmrg in names(HFDMRG, all = false)
     end
 
+    @testset "Split one-body UHF API" begin
+        rng = MersenneTwister(301)
+        N = 12
+        A = randn(rng, N, N)
+        H = (A + A') / 2
+        B = randn(rng, N, N)
+        V = 0.01 * ((B + B') / 2)
+        Nup = 1
+        Ndn = 1
+        psiup0 = orthonormal_cols(rng, N, Nup)
+        psidn0 = orthonormal_cols(rng, N, Ndn)
+
+        _, _, e_old = solve_hfdmrg(H, V, psiup0, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        _, _, e_same = solve_hfdmrg(H, H, V, psiup0, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
+        @test e_same == e_old
+
+        diag_up = [3.0, -2.0, 1.0, 4.0, 0.5, 2.0, 6.0, 5.0]
+        diag_dn = [1.0, 4.0, 3.0, 0.25, -1.5, 2.0, 5.0, 6.0]
+        Hup = Matrix(Diagonal(diag_up))
+        Hdn = Matrix(Diagonal(diag_dn))
+        V0 = zeros(length(diag_up), length(diag_up))
+        psiup_exact = zeros(length(diag_up), 1)
+        psiup_exact[argmin(diag_up), 1] = 1.0
+        psidn_exact = zeros(length(diag_dn), 1)
+        psidn_exact[argmin(diag_dn), 1] = 1.0
+        _, _, e_split = solve_hfdmrg(Hup, Hdn, V0, psiup_exact, psidn_exact;
+            maxiter = 2, blocksize = 1, cutoff = 1e-12, verbose = false)
+        @test isapprox(e_split, minimum(diag_up) + minimum(diag_dn); atol = 1e-10,
+            rtol = 0)
+    end
+
     @testset "Sliced backend stub" begin
         nj = 2
         ns = 3
@@ -405,6 +438,17 @@ try
         _, _, e_backend = solve_hfdmrg(H, backend, psiup0; maxiter = 2, blocksize = 2, cutoff = 1e-8)
         _, _, e_layout = solve_hfdmrg(H, layout, V6, psiup0; maxiter = 2, blocksize = 2, cutoff = 1e-8)
         @test isapprox(e_backend, e_layout; atol = 1e-10, rtol = 0)
+
+        psiup0_uhf = orthonormal_cols(rng, N, 1)
+        psidn0 = orthonormal_cols(rng, N, 1)
+        _, _, e_uhf_backend = solve_hfdmrg(H, backend, psiup0_uhf, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8)
+        _, _, e_uhf_split_backend = solve_hfdmrg(H, H, backend, psiup0_uhf, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8)
+        _, _, e_uhf_split_layout = solve_hfdmrg(H, H, layout, V6, psiup0_uhf, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8)
+        @test e_uhf_split_backend == e_uhf_backend
+        @test e_uhf_split_layout == e_uhf_backend
     end
 
     @testset "Sliced end-to-end sanity" begin

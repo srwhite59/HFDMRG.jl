@@ -753,3 +753,16 @@ Unrestricted HF (UHF) sweep using the cached sliced-basis backend.
 function solve_hfdmrg(H, backend::SlicedBasisBackendCached, psiup0, psidn0; kwargs...)
     solve_hfdmrg_core(H, backend, psiup0, psidn0; restricted = false, kwargs...)
 end
+
+"""
+solve_hfdmrg(Hup, Hdn, backend::SlicedBasisBackendCached, psiup0, psidn0; kwargs...) -> (psiup, psidn, energy)
+
+Unrestricted HF (UHF) sweep with spin-dependent one-body Hamiltonians and the
+cached sliced-basis backend. If Hup and Hdn are the same matrix object, this
+routes to the common-H fast path.
+"""
+function solve_hfdmrg(Hup, Hdn, backend::SlicedBasisBackendCached, psiup0, psidn0;
+    kwargs...)
+    Hup === Hdn && return solve_hfdmrg(Hup, backend, psiup0, psidn0; kwargs...)
+    solve_hfdmrg_core_split(Hup, Hdn, backend, psiup0, psidn0; kwargs...)
+end

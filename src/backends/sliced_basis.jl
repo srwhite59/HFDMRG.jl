@@ -367,6 +367,18 @@ function solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0, psidn0; kwargs...)
 end
 
 """
+solve_hfdmrg(Hup, Hdn, backend::SlicedBasisBackend, psiup0, psidn0; kwargs...) -> (psiup, psidn, energy)
+
+Unrestricted HF (UHF) sweep with spin-dependent one-body Hamiltonians and a
+sliced-basis backend. If Hup and Hdn are the same matrix object, this routes to
+the common-H fast path.
+"""
+function solve_hfdmrg(Hup, Hdn, backend::SlicedBasisBackend, psiup0, psidn0; kwargs...)
+    Hup === Hdn && return solve_hfdmrg(Hup, backend, psiup0, psidn0; kwargs...)
+    solve_hfdmrg_core_split(Hup, Hdn, backend, psiup0, psidn0; kwargs...)
+end
+
+"""
 solve_hfdmrg(H, layout::SliceLayout, V, psiup0; kwargs...) -> (psiup, psidn, energy)
 
 Restricted HF (RHF) sweep using a sliced-basis backend constructed from layout
@@ -386,4 +398,16 @@ and sliced two-electron integrals (fixed V6 or ragged Vblocks).
 function solve_hfdmrg(H, layout::SliceLayout, V, psiup0, psidn0; kwargs...)
     backend = SlicedBasisBackend(layout, V)
     solve_hfdmrg(H, backend, psiup0, psidn0; kwargs...)
+end
+
+"""
+solve_hfdmrg(Hup, Hdn, layout::SliceLayout, V, psiup0, psidn0; kwargs...) -> (psiup, psidn, energy)
+
+Unrestricted HF (UHF) sweep with spin-dependent one-body Hamiltonians using a
+sliced-basis backend constructed from layout and sliced two-electron integrals.
+"""
+function solve_hfdmrg(Hup, Hdn, layout::SliceLayout, V, psiup0, psidn0; kwargs...)
+    Hup === Hdn && return solve_hfdmrg(Hup, layout, V, psiup0, psidn0; kwargs...)
+    backend = SlicedBasisBackend(layout, V)
+    solve_hfdmrg_core_split(Hup, Hdn, backend, psiup0, psidn0; kwargs...)
 end
