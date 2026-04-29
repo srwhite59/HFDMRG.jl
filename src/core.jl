@@ -475,6 +475,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     blocksize = 200,
     maxiter = 1000,
     cutoff = 1e-11,
+    scf_cutoff = nothing,
     verbose = false)
 
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(H, 1)
@@ -500,6 +501,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     psialldn = restricted ? psiup0 : psidn0
     energyiter = 10000.0
     lambda = [1.0 for _ = 1:nblocks]
+    scf_cutoff === nothing && (scf_cutoff = cutoff)
 
     for iter = 1:maxiter
         energy = 0.0
@@ -551,7 +553,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 if energy > energylast
                     lambda[b] *= 0.5
                 end
-                if abs(energylast - energy) < cutoff || s == scf_iter
+                if abs(energylast - energy) < scf_cutoff || s == scf_iter
                     break
                 end
                 energylast = energy

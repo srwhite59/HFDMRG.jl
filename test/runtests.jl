@@ -68,6 +68,10 @@ try
         _, _, e_same = solve_hfdmrg(H, H, V, psiup0, psidn0;
             maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
         @test e_same == e_old
+        _, _, e_scf_cutoff = solve_hfdmrg(H, V, psiup0, psidn0;
+            maxiter = 2, blocksize = 2, cutoff = 1e-8, scf_cutoff = 1e-8,
+            verbose = false)
+        @test e_scf_cutoff == e_old
 
         diag_up = [3.0, -2.0, 1.0, 4.0, 0.5, 2.0, 6.0, 5.0]
         diag_dn = [1.0, 4.0, 3.0, 0.25, -1.5, 2.0, 5.0, 6.0]
