@@ -133,8 +133,8 @@ function getblock_split(side, range, psi, Hup, Hdn, Vee, firstindsH, finalindsH;
     raH1 = getraH1(range, firstindsH, finalindsH)
     raV = getraV(range, N)
     phi, m = getphi(psi[range, :])
-    hup = _h1cache(range, phi, m, Hup, raH1; dofull = dofull)
-    hdn = _h1cache(range, phi, m, Hdn, raH1; dofull = dofull)
+    hup = _h1cache(range, phi, m, Hup, raH1; dofull)
+    hdn = _h1cache(range, phi, m, Hdn, raH1; dofull)
     vee_state = vee_init_block(side, range, raV, phi, Vee)
     SplitLRBlock(range, raH1, raV, m, phi, hup, hdn, vee_state)
 end
@@ -481,8 +481,8 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     finalindsH, firstindsH = getfinal(H, N)
     m = restricted ? Nup : Nup + Ndn
     psiall = restricted ? psiup0 : hcat(psiup0, psidn0)
-    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize; verbose = verbose)
-    block = getinitialblocks(nblocks, blocksizes, Cranges, psiall, H, Vee, firstindsH, finalindsH; verbose = verbose)
+    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize; verbose)
+    block = getinitialblocks(nblocks, blocksizes, Cranges, psiall, H, Vee, firstindsH, finalindsH; verbose)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -518,8 +518,12 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
             end
 
             energy = energylast = 1e10
-            rhoup = psiup[:, 1:Nup] * psiup[:, 1:Nup]'
-            !restricted && (rhodn = psidn[:, 1:Ndn] * psidn[:, 1:Ndn]')
+            psiup_occ = @view psiup[:, 1:Nup]
+            rhoup = psiup_occ * psiup_occ'
+            if !restricted
+                psidn_occ = @view psidn[:, 1:Ndn]
+                rhodn = psidn_occ * psidn_occ'
+            end
             scf_iter = 4
             for s = 1:scf_iter
                 if restricted
@@ -632,9 +636,9 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     finalindsH, firstindsH = getfinal(Hup, Hdn, N)
     m = Nup + Ndn
     psiall = hcat(psiup0, psidn0)
-    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize; verbose = verbose)
+    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize; verbose)
     block = getinitialblocks_split(nblocks, blocksizes, Cranges, psiall, Hup, Hdn,
-        Vee, firstindsH, finalindsH; verbose = verbose)
+        Vee, firstindsH, finalindsH; verbose)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -672,8 +676,10 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
 
             energy = energylast = 1e10
-            rhoup = psiup[:, 1:Nup] * psiup[:, 1:Nup]'
-            rhodn = psidn[:, 1:Ndn] * psidn[:, 1:Ndn]'
+            psiup_occ = @view psiup[:, 1:Nup]
+            psidn_occ = @view psidn[:, 1:Ndn]
+            rhoup = psiup_occ * psiup_occ'
+            rhodn = psidn_occ * psidn_occ'
             scf_iter = 4
             for s = 1:scf_iter
                 Fup, Fdn = copy(H1Bup), copy(H1Bdn)

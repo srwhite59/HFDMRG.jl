@@ -511,7 +511,7 @@ try
         psiup0 = orthonormal_cols(rng, N, Nup)
         psidn0 = orthonormal_cols(rng, N, Ndn)
         _, _, e_new = solve_hfdmrg(H, V, psiup0, psidn0;
-            maxiter = maxiter, blocksize = blocksize, cutoff = cutoff, verbose = false)
+            maxiter, blocksize, cutoff, verbose = false)
         _, _, e_legacy = Legacy.dohfdmrg(H, V, psiup0, psidn0, false, 1,
             blocksize, maxiter, cutoff; verbose = false)
         @test isapprox(e_new, e_legacy; atol = 1e-6, rtol = 0)
@@ -519,7 +519,7 @@ try
         Nup_r = 1
         psiup_r = orthonormal_cols(rng, N, Nup_r)
         _, _, e_new_r = solve_hfdmrg(H, V, psiup_r;
-            maxiter = maxiter, blocksize = blocksize, cutoff = cutoff, verbose = false)
+            maxiter, blocksize, cutoff, verbose = false)
         _, _, e_legacy_r = Legacy.dohfdmrg(H, V, psiup_r, psiup_r, true, 1,
             blocksize, maxiter, cutoff; verbose = false)
         @test isapprox(e_new_r, e_legacy_r; atol = 1e-6, rtol = 0)

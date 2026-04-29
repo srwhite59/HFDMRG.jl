@@ -25,11 +25,7 @@ function vee_init_block(side, ra, raV, phi, backend::DensityDensityBackend)
     V = backend.V
     lb = length(ra)
     m = size(phi, 2)
-    T = eltype(phi)
-    pp = Array{T,3}(undef, lb, m, m)
-    for k = 1:lb, i = 1:m, j = 1:m
-        pp[k, i, j] = phi[k, i] * phi[k, j]
-    end
+    pp = [phi[k, i] * phi[k, j] for k = 1:lb, i = 1:m, j = 1:m]
     Vpp = contract(V[raV, ra], pp)
     Vijkl = contract(pp, contract(V[ra, ra], pp), true, false)
     DDBlockState(ra, raV, pp, Vpp, Vijkl)
@@ -40,11 +36,7 @@ function vee_absorb_block(side, vee_old::DDBlockState, cra, Phi_old, Phi_C, phi_
     V = backend.V
     n = size(phi_new, 1)
     m = size(phi_new, 2)
-    T = eltype(phi_new)
-    pp = Array{T,3}(undef, n, m, m)
-    for j = 1:n, k = 1:m, l = 1:m
-        pp[j, k, l] = phi_new[j, k] * phi_new[j, l]
-    end
+    pp = [phi_new[j, k] * phi_new[j, l] for j = 1:n, k = 1:m, l = 1:m]
     Vijkl = trans4(vee_old.Vijkl, Phi_old)
     lc = length(cra)
     if side == :right

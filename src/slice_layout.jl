@@ -10,11 +10,7 @@ struct SliceLayout
     function SliceLayout(dims::Vector{Int})
         isempty(dims) && error("dims must be non-empty")
         any(d -> d <= 0, dims) && error("dims must be positive")
-        offs = Vector{Int}(undef, length(dims) + 1)
-        offs[1] = 0
-        for i = 1:length(dims)
-            offs[i + 1] = offs[i] + dims[i]
-        end
+        offs = [0; cumsum(dims)]
         new(dims, offs)
     end
 end
