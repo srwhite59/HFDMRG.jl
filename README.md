@@ -75,6 +75,24 @@ common-H fast path with one projected one-body cache. Passing the same matrix
 object as both `Hup` and `Hdn` also routes to that path; only genuinely split
 one-body operators allocate split one-body caches.
 
+### Density-density plus a target-space residual
+
+A small signed four-index correction can be added in a fixed orthonormal
+target space without constructing a global four-index interaction:
+
+```julia
+backend = HFDMRG.DensityDensityTargetResidualBackend(V, Q, residual_pair)
+psiup, psidn, energy = solve_hfdmrg(H, backend, psiup0, psidn0;
+    maxiter = 10, blocksize = 16)
+```
+
+`Q` is `N x m`, with orthonormal target orbitals as columns.
+`residual_pair` is a symmetric `P x P` matrix, `P=m(m+1)/2`, storing the
+signed residual `(pq|rs)` in canonical order `p=1:m, q=1:p`. Pair coordinates
+are not `sqrt(2)` normalized. The corresponding RHF and split-one-body UHF
+forms use the same backend argument position as the sliced backends. An
+exactly zero residual routes through the original density-density solver.
+
 ### External sliced Hamiltonians
 
 For block- or slice-structured Hamiltonians from another package, such as an

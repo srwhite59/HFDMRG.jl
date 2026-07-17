@@ -88,6 +88,92 @@ try
             rtol = 0)
     end
 
+    @testset "Density-density target residual" begin
+        rng = MersenneTwister(411)
+        N, m = 10, 3
+        P = m * (m + 1) ÷ 2
+        Q = orthonormal_cols(rng, N, m)
+        A = randn(rng, P, P)
+        Rpair = 0.01 * (A + A') / 2
+        backend = HFDMRG.DensityDensityTargetResidualBackend(zeros(N, N), Q, Rpair)
+        pair(p, q) = max(p, q) * (max(p, q) - 1) ÷ 2 + min(p, q)
+        function explicit_jk(D)
+            J, K = zeros(m, m), zeros(m, m)
+            for p = 1:m, q = 1:m, r = 1:m, s = 1:m
+                J[p, q] += Rpair[pair(p, q), pair(r, s)] * D[r, s]
+                K[p, q] += Rpair[pair(p, r), pair(q, s)] * D[r, s]
+            end
+            J, K
+        end
+
+        Qbad = copy(Q)
+        Qbad[:, 1] .*= 1.01
+        @test_throws ErrorException HFDMRG.DensityDensityTargetResidualBackend(
+            zeros(N, N), Qbad, Rpair)
+        Rbad = copy(Rpair)
+        Rbad[1, 2] += 1e-4
+        @test_throws ErrorException HFDMRG.DensityDensityTargetResidualBackend(
+            zeros(N, N), Q, Rbad)
+        @test_throws ErrorException HFDMRG.DensityDensityTargetResidualBackend(
+            zeros(Int, N, N), Q, Rpair)
+
+        Lphi = orthonormal_cols(rng, 2, 1)
+        Rphi = orthonormal_cols(rng, 2, 1)
+        L = HFDMRG.vee_init_block(:left, 1:2, 3:N, Lphi, backend)
+        R = HFDMRG.vee_init_block(:right, 9:10, 1:8, Rphi, backend)
+        OL = orthonormal_cols(rng, 3, 2)
+        PhiL, PhiLC = OL[1:1, :], OL[2:3, :]
+        Lphi_new = vcat(Lphi * PhiL, PhiLC)
+        L = HFDMRG.vee_absorb_block(:left, L, 3:4, PhiL, PhiLC, Lphi_new,
+            5:N, backend)
+        OR = orthonormal_cols(rng, 3, 2)
+        PhiRC, PhiR = OR[1:2, :], OR[3:3, :]
+        Rphi_new = vcat(PhiRC, Rphi * PhiR)
+        R = HFDMRG.vee_absorb_block(:right, R, 7:8, PhiR, PhiRC, Rphi_new,
+            1:6, backend)
+        win = HFDMRG.vee_window(L, R, 5:6, backend)
+        Qwindow = vcat(Lphi_new' * Q[1:4, :], Q[5:6, :], Rphi_new' * Q[7:10, :])
+        w = size(Qwindow, 1)
+
+        rho = randn(rng, w, w)
+        rho = (rho + rho') / 2
+        F = zeros(w, w)
+        HFDMRG.vee_add_fock_r!(F, rho, win)
+        D = Qwindow' * rho * Qwindow
+        J, K = explicit_jk(D)
+        Fref = Qwindow * (2J - K) * Qwindow'
+        @test isapprox(F, Fref; atol = 2e-12, rtol = 0)
+        @test isapprox(tr(rho * F), 2 * sum(D .* J) - sum(D .* K);
+            atol = 2e-12, rtol = 0)
+
+        rhoup = randn(rng, w, w); rhoup = (rhoup + rhoup') / 2
+        rhodn = randn(rng, w, w); rhodn = (rhodn + rhodn') / 2
+        Fup, Fdn = zeros(w, w), zeros(w, w)
+        HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+        Da, Db = Qwindow' * rhoup * Qwindow, Qwindow' * rhodn * Qwindow
+        Jtot = first(explicit_jk(Da + Db))
+        Ka = last(explicit_jk(Da))
+        Kb = last(explicit_jk(Db))
+        @test isapprox(Fup, Qwindow * (Jtot - Ka) * Qwindow'; atol = 2e-12, rtol = 0)
+        @test isapprox(Fdn, Qwindow * (Jtot - Kb) * Qwindow'; atol = 2e-12, rtol = 0)
+        Eref = 0.5 * sum((Da + Db) .* Jtot) - 0.5 * sum(Da .* Ka) -
+               0.5 * sum(Db .* Kb)
+        @test isapprox(0.5 * sum(rhoup .* Fup) + 0.5 * sum(rhodn .* Fdn), Eref;
+            atol = 2e-12, rtol = 0)
+
+        H = randn(rng, N, N); H = (H + H') / 2
+        V = 0.01 * randn(rng, N, N); V = (V + V') / 2
+        zero_backend = HFDMRG.DensityDensityTargetResidualBackend(V, Q, zeros(P, P))
+        up, dn = orthonormal_cols(rng, N, 1), orthonormal_cols(rng, N, 1)
+        kw = (; maxiter = 1, blocksize = 1, cutoff = 1e-9, verbose = false)
+        @test solve_hfdmrg(H, zero_backend, up; kw...) == solve_hfdmrg(H, V, up; kw...)
+        @test solve_hfdmrg(H, zero_backend, up, dn; kw...) ==
+              solve_hfdmrg(H, V, up, dn; kw...)
+        Hup, Hdn = H + Diagonal(range(0, 0.1; length = N)), H - 0.1I
+        @test solve_hfdmrg(Hup, Hdn, zero_backend, up, dn; kw...) ==
+              solve_hfdmrg(Hup, Hdn, V, up, dn; kw...)
+    end
+
     @testset "Sliced backend stub" begin
         nj = 2
         ns = 3
