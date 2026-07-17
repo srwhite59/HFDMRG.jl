@@ -29,6 +29,36 @@ UHF forms take `Hup, Hdn` before the interaction/backend arguments.
 All solver entry points return `(psiup, psidn, energy)`, where `psiup`/`psidn` are
 the optimized orbitals (orthonormal columns) and `energy` is the final HF energy.
 
+### Per-sweep observer
+
+Every solver entry point accepts an optional callable `observer`. It is called
+once after each complete left-to-right plus right-to-left sweep, including the
+final converged sweep:
+
+```julia
+function observer(info)
+    println("sweep=$(info.sweep) energy=$(info.energy)")
+    write_checkpoint(info.psiup, info.psidn)
+    return user_stop_condition(info) # true stops after this sweep
+end
+
+psiup, psidn, energy = solve_hfdmrg(H, V, psiup0, psidn0;
+    maxiter = 10, blocksize = 4, observer)
+```
+
+The qualified `HFDMRG.SweepInfo` passed to the observer contains `sweep`,
+`energy`, full physical-basis `psiup` and `psidn`, and the built-in
+`converged` flag. The energy and orbitals describe the same post-SCF
+end-of-sweep state. Returning `true` requests a clean stop; `false` or
+`nothing` continues unless the built-in convergence test has succeeded.
+Observer exceptions propagate. The orbital arrays must be treated as read-only
+and copied if mutable retained state is needed.
+
+HFDMRG does not prescribe checkpoint formats or scientific measurements.
+Observers own their I/O, diagnostics, and domain-specific stop rules, and their
+work is included in total solver wall time. With `observer = nothing` (the
+default), no observer is called.
+
 ### Density-density interaction (V::Matrix)
 
 This backend expects an N×N interaction matrix `V`, interpreted as a

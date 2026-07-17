@@ -88,6 +88,81 @@ try
             rtol = 0)
     end
 
+    @testset "Per-sweep observer" begin
+        rng = MersenneTwister(809)
+        N = 12
+        A = randn(rng, N, N)
+        H = (A + A') / 2
+        B = randn(rng, N, N)
+        V = 0.01 * (B + B') / 2
+        up0 = orthonormal_cols(rng, N, 1)
+        dn0 = orthonormal_cols(rng, N, 1)
+        kw = (; maxiter = 2, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = 1e-8, verbose = false)
+        function full_energy(Hup, Hdn, V, info)
+            rhoup = info.psiup * info.psiup'
+            rhodn = info.psidn * info.psidn'
+            occupation = diag(rhoup) + diag(rhodn)
+            sum(Hup .* rhoup) + sum(Hdn .* rhodn) +
+            0.5 * dot(occupation, V * occupation) -
+            0.5 * sum(V .* (rhoup .* rhoup + rhodn .* rhodn))
+        end
+
+        baseline = solve_hfdmrg(H, V, up0, dn0; kw...)
+        seen = Any[]
+        observed = solve_hfdmrg(H, V, up0, dn0; kw...,
+            observer = info -> (push!(seen, info); false))
+        @test observed == baseline
+        @test getproperty.(seen, :sweep) == [1, 2]
+        @test all(info -> !info.converged, seen)
+        @test size(seen[end].psiup) == size(up0)
+        @test size(seen[end].psidn) == size(dn0)
+        @test seen[end].energy == observed[3]
+        @test seen[end].psiup === observed[1]
+        @test seen[end].psidn === observed[2]
+        @test all(info -> isapprox(info.energy, full_energy(H, H, V, info);
+            atol = 1e-12, rtol = 0), seen)
+        @test_throws ErrorException solve_hfdmrg(H, V, up0, dn0; kw...,
+            observer = _ -> :invalid)
+        @test_throws ErrorException solve_hfdmrg(H, V, up0, dn0; kw...,
+            observer = _ -> error("observer failure"))
+
+        stopped_seen = Any[]
+        stopped = solve_hfdmrg(H, V, up0, dn0;
+            maxiter = 5, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = 1e-8, verbose = false,
+            observer = info -> (push!(stopped_seen, info); info.sweep == 2))
+        @test getproperty.(stopped_seen, :sweep) == [1, 2]
+        @test stopped == baseline
+
+        split_seen = Any[]
+        Hup = H + Diagonal(range(0, 0.1; length = N))
+        Hdn = H - Diagonal(range(0, 0.1; length = N))
+        split = solve_hfdmrg(Hup, Hdn, V, up0, dn0;
+            maxiter = 1, blocksize = 2, cutoff = 0.0, scf_cutoff = 1e-8,
+            verbose = false,
+            observer = info -> (push!(split_seen, info); nothing))
+        @test length(split_seen) == 1
+        @test split_seen[1].energy == split[3]
+        @test split_seen[1].psiup === split[1]
+        @test split_seen[1].psidn === split[2]
+        @test isapprox(split_seen[1].energy,
+            full_energy(Hup, Hdn, V, split_seen[1]); atol = 1e-12, rtol = 0)
+
+        Q = orthonormal_cols(rng, N, 2)
+        zero_backend = HFDMRG.DensityDensityTargetResidualBackend(
+            V, Q, zeros(3, 3))
+        restricted_seen = Any[]
+        restricted = solve_hfdmrg(H, zero_backend, up0;
+            maxiter = 3, blocksize = 2, cutoff = Inf, verbose = false,
+            observer = info -> (push!(restricted_seen, info); false))
+        @test length(restricted_seen) == 1
+        @test restricted_seen[1].converged
+        @test restricted_seen[1].psiup === restricted_seen[1].psidn
+        @test restricted_seen[1].psiup === restricted[1]
+        @test restricted[1] === restricted[2]
+    end
+
     @testset "Density-density target residual" begin
         rng = MersenneTwister(411)
         N, m = 10, 3

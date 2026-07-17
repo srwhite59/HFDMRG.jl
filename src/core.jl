@@ -27,6 +27,28 @@ mutable struct SplitLRBlock{TV, TP, THU, THD}
     vee::TV
 end
 
+"""
+State passed to a per-sweep observer.
+
+`psiup` and `psidn` are the full physical-basis orbitals that the solver will
+return if it stops after this sweep. Observers must treat them as read-only and
+copy them if they need mutable retained state.
+"""
+struct SweepInfo{E, U, D}
+    sweep::Int
+    energy::E
+    psiup::U
+    psidn::D
+    converged::Bool
+end
+
+function _notify_observer(observer, info::SweepInfo)
+    observer === nothing && return false
+    stop = observer(info)
+    (stop === nothing || stop isa Bool) || error("observer must return Bool or nothing")
+    stop === true
+end
+
 # Input: ranges for A and B in absolute sites
 # Output: intersection in abs. sites, as part of A range, then B, then isempty?
 function intersectrange(Ara, Bra)
@@ -476,6 +498,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     maxiter = 1000,
     cutoff = 1e-11,
     scf_cutoff = nothing,
+    observer = nothing,
     verbose = false)
 
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(H, 1)
@@ -511,14 +534,6 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
             H1B = getH1(block[b], block[b + 1 + nblockcenter], H)
             Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
             win = vee_window(block[b].vee, block[b + 1 + nblockcenter].vee, Cra, Vee)
-            rbl = block[b + 1 + nblockcenter]
-            psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
-                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
-            if !restricted
-                psialldn = getpsiexpanded(psidn, block[b].ra, block[b].phi,
-                    block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
-            end
-
             energy = energylast = 1e10
             psiup_occ = @view psiup[:, 1:Nup]
             rhoup = psiup_occ * psiup_occ'
@@ -559,6 +574,13 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 energylast = energy
             end
 
+            rbl = block[b + 1 + nblockcenter]
+            psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
+                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
+            if !restricted
+                psialldn = getpsiexpanded(psidn, block[b].ra, block[b].phi,
+                    block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
+            end
             psi = restricted ? psiup : hcat(psiup, psidn)
             if nblockcenter < 1
                 Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
@@ -613,8 +635,12 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
             end
         end
         verbose && @show iter, energy, energyiter
-        abs(energyiter - energy) < cutoff && break
+        converged = abs(energyiter - energy) < cutoff
         energyiter = energy
+        info = SweepInfo(iter, energyiter, psiallup,
+            restricted ? psiallup : psialldn, converged)
+        stop_requested = _notify_observer(observer, info)
+        (converged || stop_requested) && break
     end
 
     restricted && (psialldn = psiallup)
@@ -627,6 +653,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     maxiter = 1000,
     cutoff = 1e-11,
     scf_cutoff = nothing,
+    observer = nothing,
     verbose = false)
 
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(Hup, 1)
@@ -671,12 +698,6 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
             H1Bdn = getH1(block[b], block[b + 1 + nblockcenter], Hdn, Val(:dn))
             Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
             win = vee_window(block[b].vee, block[b + 1 + nblockcenter].vee, Cra, Vee)
-            rbl = block[b + 1 + nblockcenter]
-            psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
-                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
-            psialldn = getpsiexpanded(psidn, block[b].ra, block[b].phi,
-                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
-
             energy = energylast = 1e10
             psiup_occ = @view psiup[:, 1:Nup]
             psidn_occ = @view psidn[:, 1:Ndn]
@@ -706,6 +727,11 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 energylast = energy
             end
 
+            rbl = block[b + 1 + nblockcenter]
+            psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
+                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
+            psialldn = getpsiexpanded(psidn, block[b].ra, block[b].phi,
+                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
             psi = hcat(psiup, psidn)
             if nblockcenter < 1
                 Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
@@ -763,8 +789,11 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
         end
         verbose && @show iter, energy, energyiter
         verbose && flush(stdout)
-        _rel_converged(energyiter, energy, cutoff) && break
+        converged = _rel_converged(energyiter, energy, cutoff)
         energyiter = energy
+        info = SweepInfo(iter, energyiter, psiallup, psialldn, converged)
+        stop_requested = _notify_observer(observer, info)
+        (converged || stop_requested) && break
     end
 
     psiallup, psialldn, energyiter
