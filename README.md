@@ -1,10 +1,9 @@
 # HFDMRG
 
-HFDMRG is a Hartree-Fock solver that uses DMRG-style sweeps. The algorithm
-builds a local L-C-R superblock basis from left/right environment blocks and
-bare center sites, runs a few SCF micro-iterations (build rho, build F, solve,
-occupy, mix), then truncates the block bases via SVD of the occupied orbitals.
-Sweeps proceed left-to-right and right-to-left until the energy converges.
+HFDMRG solves restricted or unrestricted Hartree-Fock problems using
+DMRG-style sweeps over an ordered one-particle basis. The name describes how
+the calculation is organized: HFDMRG still returns a single Slater
+determinant, not a correlated matrix-product state.
 
 The core is interaction-agnostic: it owns the sweep schedule, basis transforms,
 and SCF loop, while backends manage interaction caches and add mean-field
@@ -85,6 +84,49 @@ Entry points:
 The corresponding sliced UHF forms take `psiup0, psidn0`, and split one-body
 UHF forms take `Hup, Hdn` before the interaction/backend arguments.
 
+## How HFDMRG works
+
+An ordinary Hartree-Fock iteration updates all occupied orbitals in one global
+step. HFDMRG instead moves a smaller working problem through the ordered
+physical basis. At each position it divides that basis into
+
+```text
+compressed left environment | explicit center sites | compressed right environment
+```
+
+The center contains bare physical sites. Each environment is represented by a
+small basis obtained from the occupied orbitals on that side. This is the
+DMRG-like part of the algorithm; there is no user-selected many-body bond
+dimension.
+
+One calculation proceeds as follows:
+
+1. **Build the initial environments.** The physical basis is divided into
+   contiguous chunks. `blocksize` controls the requested chunk size, while
+   `nblockcenter` controls how many center chunks remain explicit.
+2. **Assemble one moving window.** The one-body Hamiltonian is transformed into
+   the current left-center-right basis. The active backend supplies the needed
+   block and window interaction caches from its density-density, sliced, or
+   target-residual representation.
+3. **Solve the local mean-field problem.** HFDMRG builds the spin densities
+   and Fock matrices, diagonalizes the Fock matrices, occupies the lowest
+   `Nup` and `Ndn` orbitals, and mixes the updated densities when needed. A
+   window receives at most four of these SCF micro-iterations.
+4. **Move and rebuild an environment.** An SVD of the occupied-orbital
+   coefficients supplies the new environment basis as the center advances.
+   The solver transforms the one-body and backend caches into that basis; it
+   does not carry a tunable DMRG bond dimension.
+5. **Complete both directions.** A left-to-right pass followed by a
+   right-to-left pass is one sweep. After the sweep, HFDMRG expands the
+   orbitals back into the full physical basis, tests the energy change, and
+   calls the optional observer.
+
+This organization is intended for ordered bases whose interactions fit one of
+HFDMRG's compact backend representations. It is still Hartree-Fock: the
+orbital occupations remain fixed during a solve, different initial guesses
+can reach different self-consistent determinants, and energy convergence does
+not prove that the global Hartree-Fock minimum was found.
+
 ## Usage
 
 All solver entry points return `(psiup, psidn, energy)`, where `psiup`/`psidn` are
@@ -108,6 +150,73 @@ All `solve_hfdmrg` entry points accept the same solver keywords:
 `Hup === Hdn`; those calls use the common-H fast path. Passing distinct `Hup`
 and `Hdn` objects selects the split-H convergence rules, even if their entries
 are numerically equal.
+
+### Convergence and troubleshooting
+
+HFDMRG declares convergence from the end-of-sweep energy change described in
+the keyword table. Reaching `maxiter` is not an error: if the threshold has
+not been met, the solver returns the orbitals and energy from the last
+completed sweep. Use an [observer](#per-sweep-observer) when the caller needs
+to distinguish those outcomes programmatically:
+
+```julia
+last_info = Ref{Any}(nothing)
+observer = info -> (last_info[] = info; false)
+
+psiup, psidn, energy = solve_hfdmrg(H, V, psiup0;
+    maxiter = 20, blocksize = 16, observer)
+
+last_info[].converged || @warn "HFDMRG reached maxiter without convergence"
+```
+
+`verbose = true` is useful for an interactive run; it prints the block
+decomposition and the old and new end-of-sweep energies. An observer is the
+better choice for saving a durable energy history or checkpoint.
+
+Tune one control at a time:
+
+- Start with `nblockcenter = 1` and the default relationship between `cutoff`
+  and `scf_cutoff`. Tightening `scf_cutoff` cannot increase the hard limit of
+  four local SCF micro-iterations.
+- Interpret `cutoff` in the units of the supplied Hamiltonian. A looser value
+  is useful for exploratory runs; tighten it and compare the final orbitals
+  and energy for production work.
+- Increasing `blocksize` makes each explicit center chunk larger and usually
+  makes each window more expensive, but can reduce the number of windows in a
+  sweep. Decreasing it has the opposite tradeoff. HFDMRG may reduce a requested
+  size on small systems so that it can form enough blocks.
+- Increase `maxiter` only when the saved sweep history is still approaching a
+  stable value. More sweeps do not repair inconsistent inputs or necessarily
+  escape a poor basin of attraction.
+- For a consequential result, repeat with a different initial guess and at
+  least one reasonable `blocksize`. Hartree-Fock can have multiple stationary
+  solutions, so compare their converged energies and scientific diagnostics.
+
+Common symptoms and checks:
+
+| Symptom | What to check |
+|---|---|
+| Energy oscillates or rises between sweeps | End-of-sweep energies are not guaranteed to be monotone. HFDMRG reduces subsequent density-update weights after a local rise; if oscillation persists, try a better initial determinant and compare a larger `blocksize`. |
+| The run reaches `maxiter` | Inspect the observer history before simply extending the run. A decreasing energy change may justify more sweeps; a flat oscillation usually calls for a different initial guess or window size. |
+| Different initial guesses give different energies | This is possible for RHF and especially UHF. Check that the requested spin occupations are the same, converge each run to the same tolerance, and compare the resulting self-consistent energies and scientific diagnostics. |
+| Returned orbitals are not orthonormal | Check `norm(psiup' * psiup - I)` and the corresponding beta quantity. A large error indicates invalid input, numerical failure, or mutation by an observer; ordinary roundoff should be small. |
+| An independently recomputed energy differs from `energy` | First make sure the final sweep converged. During damped, unconverged iterations the internal density can be a mixture of determinants, so exact equality with the returned determinant is not promised. Also include the same interaction convention and exclude any nuclear or consumer offset. |
+| A sliced run is slow or uses too much memory | Confirm that uniform slices use `V6` and that production runs explicitly construct `SlicedBasisBackendCached`. See [Choosing an interaction backend](#choosing-an-interaction-backend). Observer work is also part of solver wall time. |
+
+Before tuning, verify the input contract: one-body matrices and the
+density-density `V` should be finite and symmetric; every orbital matrix must
+have `N` rows and orthonormal columns; UHF column counts set the fixed alpha and
+beta occupations. For sliced inputs, `sum(layout.dims)` must equal `N` and the
+interaction block sizes must match the layout; the current sliced constructors
+require `Float64` interaction arrays. For a target residual, `V`, `Q`, and
+`residual_pair` must share one `AbstractFloat` element type, the columns of `Q`
+must be orthonormal, and `residual_pair` must be symmetric.
+
+Energy convergence is a stopping test, not a complete proof of
+self-consistency or uniqueness. High-consequence calculations should also
+check orbital orthogonality, electron counts, stability with respect to the
+initial guess and window size, and any problem-specific Fock or residual
+diagnostic available to the caller.
 
 ### Numerical conventions
 
