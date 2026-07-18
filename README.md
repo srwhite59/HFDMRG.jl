@@ -10,6 +10,67 @@ The core is interaction-agnostic: it owns the sweep schedule, basis transforms,
 and SCF loop, while backends manage interaction caches and add mean-field
 contributions to the Fock matrix.
 
+## Installation
+
+HFDMRG is currently tested with Julia 1.12. From a source checkout, instantiate
+the project and verify the installation with:
+
+```sh
+cd /path/to/hfdmrg
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=. -e 'using HFDMRG; println("HFDMRG loaded")'
+```
+
+To use the checkout from another Julia project, replace the paths below and
+develop HFDMRG into that environment:
+
+```sh
+julia --project=/path/to/my-project -e \
+  'using Pkg; Pkg.develop(path="/path/to/hfdmrg")'
+```
+
+## Quick start
+
+This deterministic restricted-HF example builds a small one-dimensional model,
+runs up to four complete HFDMRG sweeps, and checks the returned orbitals. It is
+also available as [`examples/quickstart.jl`](examples/quickstart.jl).
+
+```julia
+using HFDMRG
+using LinearAlgebra
+using Random
+
+rng = MersenneTwister(7)
+N = 12
+Nocc = 2
+
+onsite = collect(range(-1.0, 1.0; length = N))
+hopping = diagm(1 => fill(-0.1, N - 1), -1 => fill(-0.1, N - 1))
+H = Matrix(Diagonal(onsite) + hopping)
+V = [0.4 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
+psi0 = Matrix(qr(randn(rng, N, Nocc)).Q)[:, 1:Nocc]
+
+psiup, psidn, energy = solve_hfdmrg(H, V, psi0;
+    maxiter = 4, blocksize = 2, cutoff = 1e-9,
+    scf_cutoff = 1e-9, verbose = false)
+
+@assert psiup == psidn
+@assert norm(psiup' * psiup - I) < 1e-10
+println("energy = ", round(energy; digits = 12))
+```
+
+Run the checked-in example from the repository root with:
+
+```sh
+julia --project=. examples/quickstart.jl
+```
+
+Representative output on Julia 1.12 is:
+
+```text
+energy = -2.41361165233
+```
+
 Entry points:
 - `solve_hfdmrg(H, V, psiup0; ...)` for density-density RHF.
 - `solve_hfdmrg(H, V, psiup0, psidn0; ...)` for density-density UHF.
