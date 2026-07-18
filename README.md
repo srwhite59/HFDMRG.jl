@@ -90,6 +90,25 @@ UHF forms take `Hup, Hdn` before the interaction/backend arguments.
 All solver entry points return `(psiup, psidn, energy)`, where `psiup`/`psidn` are
 the optimized orbitals (orthonormal columns) and `energy` is the final HF energy.
 
+### Solver keywords
+
+All `solve_hfdmrg` entry points accept the same solver keywords:
+
+| Keyword | Default | Meaning |
+|---|---:|---|
+| `blocksize` | `200` | Requested number of physical sites in each interior block chunk. HFDMRG may reduce it for small systems to obtain more than four blocks. This is not a DMRG bond dimension. |
+| `nblockcenter` | `1` | Number of consecutive center chunks kept explicit between the left and right environment blocks. This is an advanced window-layout control; normal calculations should leave it at `1`. |
+| `maxiter` | `1000` | Maximum number of complete left-to-right plus right-to-left sweeps. |
+| `cutoff` | `1e-11` | Sweep-energy convergence tolerance. Common-H routes use `abs(Eold - Enew) < cutoff`; genuinely split-H routes use `abs(Eold - Enew) < cutoff * max(1, abs(Enew))`. |
+| `scf_cutoff` | `nothing` | Local SCF energy tolerance, using the same absolute common-H or scale-aware split-H comparison as `cutoff`. `nothing` means `cutoff` on common-H routes and `cutoff / 10` on genuinely split-H routes. Each window performs at most four SCF micro-iterations. |
+| `observer` | `nothing` | Callable notified after every complete sweep. Return `true` to stop, or `false`/`nothing` to continue. See below. |
+| `verbose` | `false` | Print block decomposition and sweep-energy progress. |
+
+“Common-H” includes RHF, UHF with one shared `H`, and split-form calls where
+`Hup === Hdn`; those calls use the common-H fast path. Passing distinct `Hup`
+and `Hdn` objects selects the split-H convergence rules, even if their entries
+are numerically equal.
+
 ### Per-sweep observer
 
 Every solver entry point accepts an optional callable `observer`. It is called
