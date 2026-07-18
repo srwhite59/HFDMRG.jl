@@ -109,6 +109,60 @@ All `solve_hfdmrg` entry points accept the same solver keywords:
 and `Hdn` objects selects the split-H convergence rules, even if their entries
 are numerically equal.
 
+### Numerical conventions
+
+HFDMRG uses real occupied-orbital matrices with orthonormal columns and expects
+real symmetric one-body matrices; the density-density matrix backend likewise
+expects a real symmetric `V`. It performs no unit conversion: the returned
+energy has the units of the supplied one- and two-body operators. In RHF,
+`psiup0` has one column per occupied spatial orbital and represents the density
+of one spin, so `Nocc` columns mean `2Nocc` electrons. UHF supplies the alpha
+and beta occupied orbitals separately.
+
+Write `D_alpha` and `D_beta` for the one-spin density matrices used by the
+local SCF. Without damping, `D_sigma = C_sigma * C_sigma'`; with damping it can
+be a mixture of consecutive determinant densities. The Fock matrices include
+their one-body terms. Every interaction backend must follow the core energy
+convention
+
+```text
+E_UHF = 1/2 Tr[D_alpha (F_alpha + H_alpha)]
+      + 1/2 Tr[D_beta  (F_beta  + H_beta)]
+
+E_RHF = Tr[D (F + H)]
+```
+
+Thus `energy` is the electronic energy for the Hamiltonian passed to HFDMRG.
+It does not include nuclear repulsion or a consumer-defined scalar offset.
+
+For the density-density matrix backend, the implied four-index interaction is
+`(ij|kl) = delta(i,j) delta(k,l) V[i,k]`. Define
+`q = diag(D_alpha + D_beta)` and let `.*` denote elementwise multiplication.
+The unrestricted Fock matrices and energy are
+
+```text
+F_sigma = H_sigma + Diagonal(V * q) - V .* D_sigma
+
+E_UHF = Tr[D_alpha H_alpha] + Tr[D_beta H_beta]
+      + 1/2 q' V q
+      - 1/2 sum_ij V[i,j] (D_alpha[i,j]^2 + D_beta[i,j]^2).
+```
+
+For RHF, put `D_alpha = D_beta = D` and `d = diag(D)`:
+
+```text
+F_RHF = H + 2 Diagonal(V * d) - V .* D
+
+E_RHF = 2 Tr[D H] + 2 d' V d - sum_ij V[i,j] D[i,j]^2.
+```
+
+The local SCF may damp densities when an update raises the energy. Away from
+convergence, an energy independently recomputed from the returned determinant
+therefore need not agree bit-for-bit with the reported local-SCF energy. Sliced
+and target-residual backends use the same core trace convention; the latter's
+signed pair-storage formulas are recorded in the
+[target-residual design](notes/target_space_interaction_residual_design_2026-07-17.md#fock-and-energy-formulas).
+
 ### Per-sweep observer
 
 Every solver entry point accepts an optional callable `observer`. It is called
@@ -128,11 +182,11 @@ psiup, psidn, energy = solve_hfdmrg(H, V, psiup0, psidn0;
 
 The qualified `HFDMRG.SweepInfo` passed to the observer contains `sweep`,
 `energy`, full physical-basis `psiup` and `psidn`, and the built-in
-`converged` flag. The energy and orbitals describe the same post-SCF
-end-of-sweep state. Returning `true` requests a clean stop; `false` or
-`nothing` continues unless the built-in convergence test has succeeded.
-Observer exceptions propagate. The orbital arrays must be treated as read-only
-and copied if mutable retained state is needed.
+`converged` flag. The orbitals are expanded after the local SCF update that
+produces the reported end-of-sweep energy. Returning `true` requests a clean
+stop; `false` or `nothing` continues unless the built-in convergence test has
+succeeded. Observer exceptions propagate. The orbital arrays must be treated
+as read-only and copied if mutable retained state is needed.
 
 HFDMRG does not prescribe checkpoint formats or scientific measurements.
 Observers own their I/O, diagnostics, and domain-specific stop rules, and their
