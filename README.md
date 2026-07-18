@@ -368,18 +368,26 @@ psiup, psidn, energy = HFDMRG.solve_hfdmrg(H, backend, psiup0; maxiter = 5, bloc
 
 For ragged interactions, pass `Vblocks` instead of `V6`.
 
-## Interaction representations
+## Choosing an interaction backend
 
-Supported representations:
-- Density-density: `V::Matrix` (N×N).
-- Fixed sliced: `V6::Array{Float64,6}` with shape `(nj, nj, nj, nj, ns, ns)`.
-- Ragged sliced: `Vblocks::Vector{Vector{Array{Float64,4}}}` with per-slice sizes.
+Let `N` be the full basis size, `ns` the number of slices, `nj` a uniform
+slice size, and `dims[s]` a ragged slice size. For a target residual, let `m`
+be the target dimension, `P = m(m+1)/2`, and `w` the moving-window dimension.
+The storage column describes the supplied global interaction representation;
+all routes also build temporary and retained block/window caches.
 
-Backend constructors:
-- `HFDMRG.SlicedBasisBackend(layout, V6)` or
-  `HFDMRG.SlicedBasisBackend(layout, Vblocks)`
-- `HFDMRG.SlicedBasisBackendCached(layout, V6)` or
-  `HFDMRG.SlicedBasisBackendCached(layout, Vblocks)`
+| Route | Supplied-interaction storage | Window behavior | Recommended use |
+|---|---:|---|---|
+| Density-density `solve_hfdmrg(H, V, ...)` | `O(N^2)` | Projects the matrix interaction into dense retained-block tensors; never stores a global `N^4` tensor. | Default when the interaction is exactly density-density. This is the simplest and most mature route. |
+| Density plus target residual `HFDMRG.DensityDensityTargetResidualBackend(V, Q, residual_pair)` | `O(N^2 + N*m + P^2)` | Adds target projection/lift work `O(w^2*m + w*m^2)` and dense-pair work `O(m^4)` to the base backend. | A fixed, small orthonormal target space needs a signed four-index correction. Do not use it as an arbitrary global interaction container. |
+| Fixed sliced projection `HFDMRG.SlicedBasisBackend(layout, V6)` | `O(ns^2*nj^4)` | Reconstructs full-`N` density/Fock intermediates for each Fock build; correctness-first and relatively slow. | Uniform slice sizes, validation, small calculations, or comparison against the cached route. |
+| Ragged sliced projection `HFDMRG.SlicedBasisBackend(layout, Vblocks)` | `O((sum_s dims[s]^2)^2)` | Uses the same full-basis projection strategy as fixed sliced data. | Slice sizes genuinely vary and a correctness/reference path is more important than speed. |
+| Cached sliced `HFDMRG.SlicedBasisBackendCached(layout, V)` | Same sliced input storage, plus retained block contractions and window scratch. | Reuses per-block sliced contractions and generally avoids full-`N` projection, trading additional cache memory for speed. | Production sliced calculations. Pass `V6` when slices are uniform; use `Vblocks` only for ragged layouts. |
+
+The convenience forms `solve_hfdmrg(H, layout, V, ...)` construct
+the projection backend. Construct `HFDMRG.SlicedBasisBackendCached` explicitly
+when the cached production path is intended. An exactly zero target residual
+routes directly through the density-density backend.
 
 ## Repository layout
 - `src/core.jl`: generic HF-DMRG sweep engine.
