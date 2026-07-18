@@ -498,12 +498,38 @@ the projection backend. Construct `HFDMRG.SlicedBasisBackendCached` explicitly
 when the cached production path is intended. An exactly zero target residual
 routes directly through the density-density backend.
 
+## Advanced examples
+
+The checked-in advanced examples use small deterministic models and validate
+their own outputs:
+
+- [`examples/observer_checkpoint.jl`](examples/observer_checkpoint.jl) records
+  sweep history, writes each checkpoint through a temporary file, requests a
+  clean stop, validates the saved orbitals and energy on readback, and uses the
+  saved orbitals for a one-sweep restart. It uses Julia `Serialization` only as
+  a local illustration; consumer projects should choose their own durable
+  checkpoint format.
+- [`examples/target_residual.jl`](examples/target_residual.jl) constructs a
+  signed pair residual in a two-orbital target space and runs UHF through
+  `DensityDensityTargetResidualBackend`.
+- [`examples/cached_sliced.jl`](examples/cached_sliced.jl) builds a symmetric
+  fixed-slice interaction and explicitly selects `SlicedBasisBackendCached`.
+
+Run them from the repository root:
+
+```sh
+julia --project=. examples/observer_checkpoint.jl
+julia --project=. examples/target_residual.jl
+julia --project=. examples/cached_sliced.jl
+```
+
 ## Repository layout
 - `src/core.jl`: generic HF-DMRG sweep engine.
 - `src/backend_api.jl`: backend API contract for interactions.
 - `src/backends/density_density.jl`: density-density backend for `V::Matrix`.
 - `src/backends/sliced_basis.jl`: sliced-basis backend (projection-based).
 - `src/slice_layout.jl`: slice layout helper for fixed-size slices.
+- `examples/`: executable introductory and advanced workflows.
 - `reference/HF_dmrg_legacy.jl`: legacy solver used for regression tests.
 
 ## How to run tests
