@@ -524,18 +524,27 @@ julia --project=. examples/cached_sliced.jl
 ```
 
 ## Repository layout
+- `src/HFDMRG.jl`: module definition and include wiring.
 - `src/core.jl`: generic HF-DMRG sweep engine.
 - `src/backend_api.jl`: backend API contract for interactions.
 - `src/backends/density_density.jl`: density-density backend for `V::Matrix`.
+- `src/backends/density_density_target_residual.jl`: bounded target-residual
+  correction on top of density-density interactions.
 - `src/backends/sliced_basis.jl`: sliced-basis backend (projection-based).
-- `src/slice_layout.jl`: slice layout helper for fixed-size slices.
+- `src/backends/sliced_basis_cached.jl`: cached production sliced backend.
+- `src/slice_layout.jl`: contiguous fixed or ragged slice layout helper.
+- `docs/backend_architecture.md`: backend lifecycle, numerical contract,
+  scaling policy, and extension checklist.
 - `examples/`: executable introductory and advanced workflows.
+- `test/`: compact numerical and end-to-end regression tests.
 - `reference/HF_dmrg_legacy.jl`: legacy solver used for regression tests.
 
 ## How to run tests
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.test()'
 ```
-~/codexhome/cjulia -e 'using Pkg; Pkg.test()'
-```
+
 For quick performance sanity, see `scripts/bench_sliced.jl`.
 
 ## Developer commands
@@ -543,12 +552,13 @@ For quick performance sanity, see `scripts/bench_sliced.jl`.
 - `make bench`: run `scripts/bench_sliced.jl`.
 - `make verify`: run `scripts/verify_cached_vs_projection.jl`.
 
-## How to add a backend
-Checklist:
-1. Define a backend type and any block/window state you need.
-2. Implement `vee_init_block`, `vee_absorb_block`, `vee_window`,
-   `vee_add_fock_r!`, and `vee_add_fock!`.
-3. Add a regression test that compares against a known solution.
+## Developing a backend
 
-The density-density backend is implemented today; a sliced-basis backend is
-implemented via a projection-based window path (correctness-first, slow).
+Read the [backend architecture and extension guide](docs/backend_architecture.md)
+before changing an interaction route. It defines the block/window lifecycle,
+RHF and UHF energy contract, state ownership, expected scaling analysis,
+solver routing, and validation ladder.
+
+New interactions should use that five-operation seam without copying the sweep
+engine or constructing a global four-index tensor. General frameworks require
+a demonstrated second consumer and a separate design review.
