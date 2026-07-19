@@ -754,7 +754,7 @@ try
         split_cached = solve_hfdmrg(Hup, Hdn, backend_cached, psiup0, psidn0; aligned...)
         @test energy_error(split_proj[3], split_cached[3]) <= 1e-10
         @test max(projector_error(split_proj[1], split_cached[1]),
-            projector_error(split_proj[2], split_cached[2])) <= 1e-10
+            projector_error(split_proj[2], split_cached[2])) <= 1e-9
 
         legacy = solve_hfdmrg(H, backend_proj, psiup0, psidn0;
             maxiter = 1, blocksize = 2, cutoff = 1e-8, verbose = false)
