@@ -4,7 +4,7 @@ Date: 2026-07-19
 Owner: `hfdmrg-manager`
 Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
-Status: **Milestone 1 implemented and validated; proceeding to Milestone 2**
+Status: **Milestone 2 implemented and validated; awaiting paper-manager review**
 
 Solver architecture, implementation, and line-budget ownership remain with
 `hfdmrg-manager`. `hfdmrg-paper-manager` reviews whether the partition,
@@ -130,7 +130,7 @@ A = phi_old' * phi_new[old physical rows, :]
 C_s = phi_new[rows belonging to newly absorbed slice s, :].
 ```
 
-The implementation will use a fixed, scale-aware internal check that
+The implementation uses a fixed, scale-aware internal check that
 `phi_old*A` reconstructs the final old physical rows. Failure routes to the
 direct builder. This is an internal safety check, not a public tolerance.
 
@@ -190,7 +190,7 @@ and `cra`, with no gap or overlap, in old-then-center order for left growth and
 center-then-old order for right growth. Both input ranges must be unions of
 complete layout slices. Any failed condition routes to direct rebuilding.
 
-The direct builder will itself stop scanning known-zero global source slices:
+The direct builder stops scanning known-zero global source slices:
 it will obtain active slice indices from the physical range, form `W/Wswap`
 from those sources, and derive `Vijkl` from `W/P`. It remains the independent
 production fallback; committed numerical tests will compare downstream Fock
@@ -374,7 +374,7 @@ A2 = sum(active block slices s) d_s^2
 C2 = sum(newly absorbed slices s) d_s^2.
 ```
 
-The current direct builder's leading contractions are approximately
+The pre-Milestone-2 direct builder's leading contractions were approximately
 
 ```text
 (k^4 + 2k^2) G^2
@@ -440,7 +440,7 @@ build. `Allocated bytes` is `@timed.bytes`, and `State bytes` is
 `Base.summarysize(state)`. The one-active-slice check used seed `5201`, one
 warmup call, `GC.gc()`, and one measured call.
 
-Current direct `_build_cached_state` timing for a full-support block:
+Pre-Milestone-2 direct `_build_cached_state` timing for a full-support block:
 
 | Slices | Wall time | Allocated bytes | State bytes |
 |---:|---:|---:|---:|
@@ -450,7 +450,7 @@ Current direct `_build_cached_state` timing for a full-support block:
 | 52 | `3.042623 s` | `1,356,416` | `1,120,960` |
 
 A 52-slice build with only one physically active slice still took
-`3.047242 s`, confirming that the present builder scans the global slice
+`3.047242 s`, confirming that the old builder scanned the global slice
 square rather than the active support.
 
 For an aligned UHF window with one nine-orbital center slice,
@@ -478,37 +478,104 @@ measurement used seed `5218`, one warmup construction, `GC.gc()`, and one
 
 These are engineering baselines, not scientific Be acceptance measurements.
 
-The unchanged package baseline was also rerun with
-`julia --project=. -e 'using Pkg; Pkg.test()'`; all 73 tests passed.
+## Milestone 2 Result
 
-## Numerical Derivation Check
+The Milestone 2 implementation is ready for the required review. Outside this
+maintained memo, the change against `8450983` touches only
+`src/backends/sliced_basis_cached.jl` and `test/runtests.jl`, with `213`
+additions and `80` deletions. It does not change the core, backend API, README,
+window Fock algorithm, or interaction storage.
 
-Before any source edit, the hybrid equations were evaluated in memory against
-the current direct raw rebuild with unsymmetrized random interactions and
-changing retained ranks:
+The direct builder now forms pair maps only for source slices touched by the
+physical block, accumulates ordered `W` and `Wswap` with matrix products, and
+derives `Vijkl` from grouped `W*R(P)` followed by the explicit `(1,3,2,4)`
+permutation. Aligned absorption derives `A` from final `phi_new`, transforms
+the old aggregate caches, adds only newly absorbed complete slices, and uses
+the same finalizer. Stored `phi` is owned; the supplied sliced interaction is
+still referenced rather than copied.
 
-| Case | max `W` error | max `Wswap` error | max `Vijkl` error |
-|---|---:|---:|---:|
-| Fixed left | `1.78e-15` | `1.11e-15` | `1.11e-15` |
-| Fixed right | `1.33e-15` | `1.33e-15` | `8.88e-16` |
-| Ragged left | `8.88e-16` | `8.88e-16` | `3.33e-16` |
-| Ragged right | `6.66e-16` | `8.88e-16` | `8.88e-16` |
+Eligibility requires whole-slice old and center ranges, exact side adjacency,
+and the exact new outside range. The old-row reconstruction condition is the
+fixed private test
 
-No integral symmetry was used. These are design checks only; committed tests
-will exercise numerical Fock behavior rather than private field names or
-buffer shapes.
+```text
+norm(old_rows - old_phi*A)
+    <= 32*eps(Float64)*max(1,norm(old_rows))*max(size(old_rows)...).
+```
 
-The fixed check used `MersenneTwister(719)`, `dims=[2,2,2,2]`,
-`k_old=2`, and `k_new=3`. It drew `V6` first, then QR-orthonormal old and final
-bases for left ranges `old=1:2`, `center=3:4` and right ranges `old=7:8`,
-`center=5:6`. The ragged check used `MersenneTwister(720)`,
-`dims=[3,2,4,3]`, and drew every `Vblocks[n][m]` in nested `n,m` order before
-the bases. Its left case was `old=1:3`, `center=4:5`, ranks `2 -> 3`; its right
-case was `old=10:12`, `center=6:9`, ranks `2 -> 4`. In each case the recurrence
-above was evaluated with explicit pair-map matrix products and compared with
-`_build_cached_state(newrange,newphi,backend)`. This records the random draw
-order needed to repeat the design check; Milestone 2 will replace it with
-downstream numerical regressions.
+Partial slices and failed reconstruction route through the active-source
+direct builder. With `HFDMRG_BENCH_TIMING` enabled, the existing private
+snapshot reports clearly named `cache_init_calls`, `cache_incremental_calls`,
+and `cache_fallback_calls`; no public diagnostic or tolerance was added.
+
+### Numerical Evidence
+
+Compact downstream tests use unsymmetrized fixed and ragged interactions,
+arbitrary symmetric non-idempotent RHF/UHF densities, two consecutive left
+and right absorptions, ranks `2 -> 3 -> 2`, and final-basis rotations while
+passing stale pre-rotation maps. Maximum scale-aware Fock disagreements were:
+
+| Fixture | Incremental vs direct | Incremental vs projection |
+|---|---:|---:|
+| Fixed | `7.91e-16` | `7.91e-16` |
+| Ragged | `6.35e-16` | `6.58e-16` |
+| 52-by-9 downstream RHF/UHF | `1.51e-16` | `5.67e-15` |
+
+Split-window projection parity, left and right partial-slice absorption with
+nonzero old-center products, and an aligned but off-span final basis all pass
+the `1e-11` scale-aware gate. The compact route checks observe `(init,
+incremental,fallback)=(8,8,0)` for accepted fixed/ragged chains and `(6,0,3)`
+for the partial-left, partial-right, and off-span fallback fixture.
+The public aligned one-sweep solver route independently reports `(2,9,0)`.
+
+At the final 52-slice right state, direct-rebuild relative errors were
+`8.01e-16` for `W`, `8.14e-16` for `Wswap`, and `5.13e-16` for `Vijkl`.
+No raw-integral symmetry was used.
+
+Both `julia --project=. test/runtests.jl` and
+`julia --project=. -e 'using Pkg; Pkg.test()'` pass all 89 tests.
+
+### Performance Evidence
+
+The engineering fixture used host `rh310l.ps.uci.edu`, Julia `1.12.6`, one
+Julia thread, eight BLAS threads, the working tree based on `8450983`, fixed
+slices of dimension nine, and retained rank four. For each size, one fixed-seed
+`V6` and one precomputed basis/map plan were reused for three same-process
+trials and were allocated outside the timed region. Times below are medians;
+allocations are identical across the three trials and exclude persistent `V6`.
+
+| Slices | Complete initial chain | Allocation | Ratio |
+|---:|---:|---:|---:|
+| 4 | `0.000171 s` | `0.396 MiB` | - |
+| 8 | `0.000739 s` | `1.793 MiB` | `4.31` |
+| 16 | `0.003262 s` | `7.600 MiB` | `4.42` |
+| 32 | `0.014238 s` | `31.264 MiB` | `4.36` |
+| 52 | `0.042467 s` | `83.419 MiB` | `2.98` |
+
+Thus the required `8 -> 16` and `16 -> 32` ratios are below `5`. On the
+52-by-9 fixture:
+
+| Stage | Median time | Three-trial range | Allocation | Retained output |
+|---|---:|---:|---:|---:|
+| Two initial states + 49 right absorptions | `0.042467 s` | `0.041034-0.042730 s` | `83.419 MiB` | `54.143 MiB` |
+| 49 left + 49 right absorptions | `0.082025 s` | `0.081111-0.082044 s` | `161.708 MiB` | `106.176 MiB` |
+
+Initial counts were `(2,49,0)` and sweep counts were `(0,98,0)`. The maximum
+combined initial-plus-sweep allocation was `245.127 MiB`, below the `512 MiB`
+gate; the time gates of `16 s` and `32 s` are also passed with wide margin.
+Retained sizes are `Base.summarysize` of the benchmark outputs, while
+allocation includes all new states, retained `W/Wswap/P/phi/Vijkl`, pair maps,
+and temporary absorption work.
+
+The completed log and PID record are:
+
+```text
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/m2_validate.log
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/m2_validate.pid
+```
+
+The temporary repository benchmark script was removed after the run. These
+are synthetic engineering measurements, not frozen-Be scientific acceptance.
 
 ## Validation Ladder
 
@@ -543,7 +610,7 @@ downstream numerical regressions.
 
 A practical scaling stop gate is a warmed doubling ratio no worse than `5` for
 the `8 -> 16` and `16 -> 32` complete-chain pairs, distinguishing intended
-quadratic behavior from the present roughly cubic chain. `S=52` is the
+quadratic behavior from the pre-Milestone-2 roughly cubic chain. `S=52` is the
 representative endpoint rather than a doubling-ratio point.
 
 The absolute provisional engineering gates for the 52-by-9, rank-four fixture
@@ -677,8 +744,8 @@ Paper-manager review conditionally accepted this design for Milestones 1 and 2
 and supplied the five clarifications now incorporated above. Solver
 architecture and implementation ownership remain with `hfdmrg-manager`.
 
-The exact next action after the narrow Milestone 1 commit is incremental cached
-absorption as a separate Milestone 2 commit. Stop after Milestone 2 for
-paper-manager review before beginning the window-local Fock rewrite.
+The exact next action is paper-manager review of Milestone 2 numerical parity,
+scaling, allocation, route counts, and source growth. Do not begin the
+window-local Milestone 3 Fock rewrite until that review is complete.
 
 -- hfdmrg-manager@macmini

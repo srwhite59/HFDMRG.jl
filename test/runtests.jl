@@ -511,51 +511,125 @@ try
         @test energy <= energy0 + 1e-6 * max(1.0, abs(energy0))
     end
 
-    @testset "Cached sliced ragged window parity" begin
+    @testset "Cached sliced incremental absorption" begin
         rng = MersenneTwister(92)
-        dims = [1, 2, 3]
-        layout = HFDMRG.SliceLayout(dims)
-        ns = length(dims)
-        N = layout.offs[end]
-        Vblocks = [[randn(rng, dims[n], dims[n], dims[m], dims[m]) for m in 1:ns]
-                   for n in 1:ns]
-        backend_proj = HFDMRG.SlicedBasisBackend(layout, Vblocks)
-        backend_cached = HFDMRG.SlicedBasisBackendCached(layout, Vblocks)
+        relerr(A, B) = norm(A - B, Inf) / max(1.0, norm(B, Inf))
 
-        Lra = 1:2
-        Cra = 3:4
-        Rra = 5:6
-        Lphi = orthonormal_cols(rng, length(Lra), 1)
-        Rphi = orthonormal_cols(rng, length(Rra), 1)
-        Lvee_proj = HFDMRG.vee_init_block(:left, Lra, (Lra[end] + 1):N, Lphi, backend_proj)
-        Rvee_proj = HFDMRG.vee_init_block(:right, Rra, 1:(Rra[1] - 1), Rphi, backend_proj)
-        win_proj = HFDMRG.vee_window(Lvee_proj, Rvee_proj, Cra, backend_proj)
+        function grow(state, side, cra, knew, backend)
+            mold, dc = size(state.phi, 2), length(cra)
+            O = orthonormal_cols(rng, mold + dc, knew)
+            rotation = orthonormal_cols(rng, knew, knew)
+            if side === :left
+                Phi_old, Phi_C = O[1:mold, :], O[mold + 1:end, :]
+                phi = vcat(state.phi * Phi_old, Phi_C) * rotation
+                raV = (last(cra) + 1):backend.layout.offs[end]
+            else
+                Phi_C, Phi_old = O[1:dc, :], O[dc + 1:end, :]
+                phi = vcat(Phi_C, state.phi * Phi_old) * rotation
+                raV = 1:(first(cra) - 1)
+            end
+            HFDMRG.vee_absorb_block(side, state, cra, Phi_old, Phi_C, phi, raV,
+                backend)
+        end
 
-        Lvee_cached = HFDMRG.vee_init_block(:left, Lra, (Lra[end] + 1):N, Lphi, backend_cached)
-        Rvee_cached = HFDMRG.vee_init_block(:right, Rra, 1:(Rra[1] - 1), Rphi, backend_cached)
-        win_cached = HFDMRG.vee_window(Lvee_cached, Rvee_cached, Cra, backend_cached)
+        function fock_error(wins, w)
+            rho = randn(rng, w, w); rho = (rho + rho') / 2
+            rhoup = randn(rng, w, w); rhoup = (rhoup + rhoup') / 2
+            rhodn = randn(rng, w, w); rhodn = (rhodn + rhodn') / 2
+            Fr = [zeros(w, w) for _ = 1:3]
+            Fu = [zeros(w, w) for _ = 1:3]
+            Fd = [zeros(w, w) for _ = 1:3]
+            for i = 1:3
+                HFDMRG.vee_add_fock_r!(Fr[i], rho, wins[i])
+                HFDMRG.vee_add_fock!(Fu[i], Fd[i], rhoup, rhodn, wins[i])
+            end
+            maximum((relerr(Fr[1], Fr[2]), relerr(Fr[1], Fr[3]),
+                relerr(Fu[1], Fu[2]), relerr(Fu[1], Fu[3]),
+                relerr(Fd[1], Fd[2]), relerr(Fd[1], Fd[3])))
+        end
 
-        superdim = size(Lphi, 2) + length(Cra) + size(Rphi, 2)
-        rho = randn(rng, superdim, superdim)
-        rho = (rho + rho') / 2
-        F_proj = zeros(superdim, superdim)
-        F_cached = zeros(superdim, superdim)
-        HFDMRG.vee_add_fock_r!(F_proj, rho, win_proj)
-        HFDMRG.vee_add_fock_r!(F_cached, rho, win_cached)
-        @test maximum(abs.(F_proj .- F_cached)) < 1e-10
+        withenv("HFDMRG_BENCH_TIMING" => "1") do
+            HFDMRG._bench_timing_reset!()
+            for dims in ([2, 2, 2, 2, 2, 2, 2], [2, 1, 3, 2, 3, 1, 2])
+                layout = HFDMRG.SliceLayout(dims)
+                ns, N = length(dims), layout.offs[end]
+                V = if all(==(dims[1]), dims)
+                    d = dims[1]
+                    randn(rng, d, d, d, d, ns, ns)
+                else
+                    [[randn(rng, dims[n], dims[n], dims[m], dims[m]) for m = 1:ns]
+                     for n = 1:ns]
+                end
+                cached = HFDMRG.SlicedBasisBackendCached(layout, V)
+                projection = HFDMRG.SlicedBasisBackend(layout, V)
+                L = HFDMRG.vee_init_block(:left, HFDMRG.orb_range(layout, 1),
+                    (dims[1] + 1):N, orthonormal_cols(rng, dims[1], 2), cached)
+                R = HFDMRG.vee_init_block(:right, HFDMRG.orb_range(layout, 7),
+                    1:(N - dims[7]), orthonormal_cols(rng, dims[7], 2), cached)
+                L = grow(L, :left, HFDMRG.orb_range(layout, 2), 3, cached)
+                L = grow(L, :left, HFDMRG.orb_range(layout, 3), 2, cached)
+                R = grow(R, :right, HFDMRG.orb_range(layout, 6), 3, cached)
+                R = grow(R, :right, HFDMRG.orb_range(layout, 5), 2, cached)
+                Ldirect = HFDMRG.vee_init_block(:left, L.ra, (last(L.ra) + 1):N,
+                    L.phi, cached)
+                Rdirect = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1),
+                    R.phi, cached)
+                Lproj = HFDMRG.vee_init_block(:left, L.ra, (last(L.ra) + 1):N,
+                    L.phi, projection)
+                Rproj = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1),
+                    R.phi, projection)
+                Cra = HFDMRG.orb_range(layout, 4)
+                wins = (HFDMRG.vee_window(L, R, Cra, cached),
+                    HFDMRG.vee_window(Ldirect, Rdirect, Cra, cached),
+                    HFDMRG.vee_window(Lproj, Rproj, Cra, projection))
+                @test fock_error(wins, 4 + length(Cra)) <= 1e-11
+            end
+            counts = HFDMRG._bench_timing_snapshot()
+            @test (counts[:cache_init_calls], counts[:cache_incremental_calls],
+                counts[:cache_fallback_calls]) == (8.0, 8.0, 0.0)
 
-        rhoup = randn(rng, superdim, superdim)
-        rhoup = (rhoup + rhoup') / 2
-        rhodn = randn(rng, superdim, superdim)
-        rhodn = (rhodn + rhodn') / 2
-        Fup_proj = zeros(superdim, superdim)
-        Fdn_proj = zeros(superdim, superdim)
-        Fup_cached = zeros(superdim, superdim)
-        Fdn_cached = zeros(superdim, superdim)
-        HFDMRG.vee_add_fock!(Fup_proj, Fdn_proj, rhoup, rhodn, win_proj)
-        HFDMRG.vee_add_fock!(Fup_cached, Fdn_cached, rhoup, rhodn, win_cached)
-        @test maximum(abs.(Fup_proj .- Fup_cached)) < 1e-10
-        @test maximum(abs.(Fdn_proj .- Fdn_cached)) < 1e-10
+            HFDMRG._bench_timing_reset!()
+            layout = HFDMRG.SliceLayout(fill(3, 5))
+            N = layout.offs[end]
+            V = randn(rng, 3, 3, 3, 3, 5, 5)
+            cached = HFDMRG.SlicedBasisBackendCached(layout, V)
+            projection = HFDMRG.SlicedBasisBackend(layout, V)
+            L0 = HFDMRG.vee_init_block(:left, 1:1, 2:N, ones(1, 1), cached)
+            R0 = HFDMRG.vee_init_block(:right, N:N, 1:(N - 1), ones(1, 1), cached)
+            L0proj = HFDMRG.vee_init_block(:left, 1:1, 2:N, ones(1, 1), projection)
+            R0proj = HFDMRG.vee_init_block(:right, N:N, 1:(N - 1), ones(1, 1), projection)
+            split = HFDMRG.vee_window(L0, R0, 2:(N - 1), cached)
+            splitproj = HFDMRG.vee_window(L0proj, R0proj, 2:(N - 1), projection)
+            @test fock_error((split, split, splitproj), N) <= 1e-11
+            Lphi, Rphi = orthonormal_cols(rng, 3, 2), orthonormal_cols(rng, 3, 2)
+            L = HFDMRG.vee_absorb_block(:left, L0, 2:3, zeros(1, 2), zeros(2, 2),
+                Lphi, 4:N, cached)
+            R = HFDMRG.vee_absorb_block(:right, R0, 13:14, zeros(1, 2), zeros(2, 2),
+                Rphi, 1:12, cached)
+            Ldirect = HFDMRG.vee_init_block(:left, 1:3, 4:N, Lphi, cached)
+            Rdirect = HFDMRG.vee_init_block(:right, 13:15, 1:12, Rphi, cached)
+            Lproj = HFDMRG.vee_init_block(:left, 1:3, 4:N, Lphi, projection)
+            Rproj = HFDMRG.vee_init_block(:right, 13:15, 1:12, Rphi, projection)
+            partial_wins = (HFDMRG.vee_window(L, R, 4:12, cached),
+                HFDMRG.vee_window(Ldirect, Rdirect, 4:12, cached),
+                HFDMRG.vee_window(Lproj, Rproj, 4:12, projection))
+            @test fock_error(partial_wins, 13) <= 1e-11
+
+            oldphi = orthonormal_cols(rng, 3, 1)
+            old = HFDMRG.vee_init_block(:left, 1:3, 4:N, oldphi, cached)
+            offphi = orthonormal_cols(rng, 6, 2)
+            off = HFDMRG.vee_absorb_block(:left, old, 4:6, zeros(1, 2), zeros(3, 2),
+                offphi, 7:N, cached)
+            offdirect = HFDMRG.vee_init_block(:left, 1:6, 7:N, offphi, cached)
+            offproj = HFDMRG.vee_init_block(:left, 1:6, 7:N, offphi, projection)
+            off_wins = (HFDMRG.vee_window(off, R, 7:12, cached),
+                HFDMRG.vee_window(offdirect, Rdirect, 7:12, cached),
+                HFDMRG.vee_window(offproj, Rproj, 7:12, projection))
+            @test fock_error(off_wins, 10) <= 1e-11
+            counts = HFDMRG._bench_timing_snapshot()
+            @test (counts[:cache_init_calls], counts[:cache_incremental_calls],
+                counts[:cache_fallback_calls]) == (6.0, 0.0, 3.0)
+        end
     end
 
     @testset "Cached ragged backend vs projection" begin
@@ -663,6 +737,13 @@ try
         result_proj = solve_hfdmrg(H, backend_proj, psiup0, psidn0; aligned...)
         result_cached = solve_hfdmrg(H, backend_cached, psiup0, psidn0; aligned...)
         @test isapprox(result_proj[3], result_cached[3]; atol = 1e-9, rtol = 0)
+        route_counts = withenv("HFDMRG_BENCH_TIMING" => "1") do
+            HFDMRG._bench_timing_reset!()
+            solve_hfdmrg(H, backend_cached, psiup0, psidn0; aligned...)
+            HFDMRG._bench_timing_snapshot()
+        end
+        @test (route_counts[:cache_init_calls], route_counts[:cache_incremental_calls],
+            route_counts[:cache_fallback_calls]) == (2.0, 9.0, 0.0)
         @test result_proj == solve_hfdmrg(H, backend_proj, psiup0, psidn0;
             aligned..., blocksize = 999)
 

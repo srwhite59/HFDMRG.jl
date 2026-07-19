@@ -56,6 +56,9 @@ const _bench_timing = Dict{Symbol, Float64}(
     :direct_CL_CR => 0.0,
     :direct_LR => 0.0,
     :exchange => 0.0,
+    :cache_init_calls => 0.0,
+    :cache_incremental_calls => 0.0,
+    :cache_fallback_calls => 0.0,
 )
 
 # Keep the historical timing keys for compatibility with scripts/bench_sliced.jl.
@@ -126,55 +129,96 @@ function _pair_map_mat(P::Matrix{Float64})
     _pair_map_mat!(U, P)
 end
 
-function _build_cached_state(ra::UnitRange{Int}, phi::Matrix{Float64},
+function _active_slices(layout::SliceLayout, ra::UnitRange{Int})
+    first(_slice_local(layout, first(ra))):first(_slice_local(layout, last(ra)))
+end
+
+function _cached_vijkl(W, P, active, m)
+    grouped = zeros(Float64, m * m, m * m)
+    for s in active
+        ds = size(P[s], 1)
+        mul!(grouped, reshape(W[s], m * m, ds * ds), _pair_map_mat(P[s]), 1.0, 1.0)
+    end
+    permutedims(reshape(grouped, m, m, m, m), (1, 3, 2, 4))
+end
+
+function _build_cached_state(ra::UnitRange{Int}, phi_in::AbstractMatrix,
     backend::SlicedBasisBackendCached)
+    phi = Float64.(phi_in)
     layout = backend.layout
     dims = layout.dims
     ns = backend.ns
     m = size(phi, 2)
     P = _build_slice_basis(layout, ra, phi)
-
-    Vijkl = zeros(Float64, m, m, m, m)
-    for n = 1:ns, m2 = 1:ns
-        Pn = P[n]
-        Pm = P[m2]
-        Vnm = _slice_vee(backend.V, n, m2)
-        dn = size(Pn, 1)
-        dm = size(Pm, 1)
-        for i = 1:m, j = 1:m, k = 1:m, l = 1:m
-            acc = 0.0
-            for a = 1:dn, b = 1:dn, c = 1:dm, d = 1:dm
-                acc += Pn[a, i] * Pn[b, k] * Vnm[a, b, c, d] * Pm[c, j] * Pm[d, l]
-            end
-            Vijkl[i, j, k, l] += acc
-        end
-    end
-
+    active = _active_slices(layout, ra)
     W = [zeros(Float64, m, m, dims[s], dims[s]) for s = 1:ns]
     Wswap = [zeros(Float64, m, m, dims[s], dims[s]) for s = 1:ns]
-    for s = 1:ns
-        Ws = W[s]
-        Wt = Wswap[s]
-        ds = dims[s]
-        for i = 1:m, j = 1:m, a = 1:ds, b = 1:ds
-            acc = 0.0
-            acc_swap = 0.0
-            for n = 1:ns
-                Pn = P[n]
-                dn = size(Pn, 1)
-                Vns = _slice_vee(backend.V, n, s)
-                Vsn = _slice_vee(backend.V, s, n)
-                for c = 1:dn, d = 1:dn
-                    acc += Pn[c, i] * Pn[d, j] * Vns[c, d, a, b]
-                    acc_swap += Pn[c, i] * Pn[d, j] * Vsn[a, b, c, d]
-                end
-            end
-            Ws[i, j, a, b] = acc
-            Wt[i, j, a, b] = acc_swap
+    for n in active
+        dn = dims[n]
+        Rn = _pair_map_mat(P[n])
+        for s = 1:ns
+            ds = dims[s]
+            mul!(reshape(W[s], m * m, ds * ds), Rn',
+                reshape(_slice_vee(backend.V, n, s), dn * dn, ds * ds), 1.0, 1.0)
+            mul!(reshape(Wswap[s], m * m, ds * ds), Rn',
+                transpose(reshape(_slice_vee(backend.V, s, n), ds * ds, dn * dn)),
+                1.0, 1.0)
         end
     end
-
+    Vijkl = _cached_vijkl(W, P, active, m)
     SlicedCachedBlockState(ra, phi, Vijkl, W, Wswap, P)
+end
+
+_whole_slice_range(layout, ra) = first(ra) - 1 in layout.offs && last(ra) in layout.offs
+
+function _aligned_absorption(side, oldra, cra, raV, layout)
+    _whole_slice_range(layout, oldra) && _whole_slice_range(layout, cra) || return false
+    N = layout.offs[end]
+    side === :left && return last(oldra) + 1 == first(cra) && raV == last(cra) + 1:N
+    last(cra) + 1 == first(oldra) && raV == 1:first(cra) - 1
+end
+
+function _old_basis_map(side, old::SlicedCachedBlockState, cra, phi_new)
+    rows = side === :left ? (1:length(old.ra)) : (length(cra) + 1:size(phi_new, 1))
+    old_rows = @view phi_new[rows, :]
+    A = old.phi' * old_rows
+    err = norm(old_rows - old.phi * A)
+    scale = max(1.0, norm(old_rows)) * max(size(old_rows)...)
+    err <= 32 * eps(Float64) * scale ? A : nothing
+end
+
+function _incremental_cached_state(side, old::SlicedCachedBlockState, cra, phi_in, A,
+    backend::SlicedBasisBackendCached)
+    phi = Float64.(phi_in)
+    layout, dims, ns = backend.layout, backend.layout.dims, backend.ns
+    newra = side === :left ? (first(old.ra):last(cra)) : (first(cra):last(old.ra))
+    mnew, mold = size(phi, 2), size(old.phi, 2)
+    P = _build_slice_basis(layout, newra, phi)
+    W = [zeros(Float64, mnew, mnew, dims[s], dims[s]) for s = 1:ns]
+    Wswap = [zeros(Float64, mnew, mnew, dims[s], dims[s]) for s = 1:ns]
+    RA = _pair_map_mat(A)
+    for s = 1:ns
+        ds = dims[s]
+        mul!(reshape(W[s], mnew * mnew, ds * ds), RA',
+            reshape(old.W[s], mold * mold, ds * ds))
+        mul!(reshape(Wswap[s], mnew * mnew, ds * ds), RA',
+            reshape(old.Wswap[s], mold * mold, ds * ds))
+    end
+    for n in _active_slices(layout, cra)
+        dn = dims[n]
+        Rn = _pair_map_mat(P[n])
+        for s = 1:ns
+            ds = dims[s]
+            mul!(reshape(W[s], mnew * mnew, ds * ds), Rn',
+                reshape(_slice_vee(backend.V, n, s), dn * dn, ds * ds), 1.0, 1.0)
+            mul!(reshape(Wswap[s], mnew * mnew, ds * ds), Rn',
+                transpose(reshape(_slice_vee(backend.V, s, n), ds * ds, dn * dn)),
+                1.0, 1.0)
+        end
+    end
+    active = _active_slices(layout, newra)
+    Vijkl = _cached_vijkl(W, P, active, mnew)
+    SlicedCachedBlockState(newra, phi, Vijkl, W, Wswap, P)
 end
 
 function vee_init_block(side, ra, raV, phi, backend::SlicedBasisBackendCached)
@@ -182,7 +226,8 @@ function vee_init_block(side, ra, raV, phi, backend::SlicedBasisBackendCached)
     _check_range(ra, "ra")
     _check_range(raV, "raV")
     size(phi, 1) == length(ra) || error("phi has wrong row count for ra")
-    _build_cached_state(ra, Matrix{Float64}(phi), backend)
+    _bench_timing_enabled() && (_bench_timing[:cache_init_calls] += 1)
+    _build_cached_state(ra, phi, backend)
 end
 
 function vee_absorb_block(side, vee_old::SlicedCachedBlockState, cra, Phi_old, Phi_C,
@@ -193,7 +238,14 @@ function vee_absorb_block(side, vee_old::SlicedCachedBlockState, cra, Phi_old, P
     oldra = vee_old.ra
     newra = side == :left ? (oldra[1]:cra[end]) : (cra[1]:oldra[end])
     size(phi_new, 1) == length(newra) || error("phi_new has wrong row count for new ra")
-    _build_cached_state(newra, Matrix{Float64}(phi_new), backend)
+    aligned = _aligned_absorption(side, oldra, cra, raV_new, backend.layout)
+    A = aligned ? _old_basis_map(side, vee_old, cra, phi_new) : nothing
+    if A === nothing
+        _bench_timing_enabled() && (_bench_timing[:cache_fallback_calls] += 1)
+        return _build_cached_state(newra, phi_new, backend)
+    end
+    _bench_timing_enabled() && (_bench_timing[:cache_incremental_calls] += 1)
+    _incremental_cached_state(side, vee_old, cra, phi_new, A, backend)
 end
 
 function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
