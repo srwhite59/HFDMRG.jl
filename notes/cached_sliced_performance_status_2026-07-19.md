@@ -4,7 +4,7 @@ Date: 2026-07-19
 Owner: `hfdmrg-manager`
 Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
-Status: **Milestone 0 complete; paused for paper-manager scientific acceptance review**
+Status: **Milestone 0 conditionally accepted; authorized for Milestones 1 and 2**
 
 Solver architecture, implementation, and line-budget ownership remain with
 `hfdmrg-manager`. `hfdmrg-paper-manager` reviews whether the partition,
@@ -138,7 +138,13 @@ Define a pair map
 
 ```text
 R(X)[(a,b),(i,k)] = X[a,i] X[b,k].
+M(Vst)[(a,b),(c,d)] = Vst[a,b,c,d].
 ```
+
+Both definitions use Julia's column-major pair ordering: the first member of
+each pair varies fastest. Thus `M(Vst)` is the direct matrix view used by
+`_pair_map_mat!`. With retained pairs as rows, the ordered swapped update uses
+exactly `M(Vus)'`, not `M(Vsu)` or an inferred integral symmetry.
 
 With `W_u` viewed as a matrix whose rows are retained pairs `(i,k)` and whose
 columns are physical pairs `(a,b)`, the exact update is
@@ -146,11 +152,11 @@ columns are physical pairs `(a,b)`, the exact update is
 ```text
 Wnew_u
   = R(A)' * Wold_u
-  + sum(s in newly absorbed slices) R(C_s)' * pairmatrix(Vsu)
+  + sum(s in newly absorbed slices) R(C_s)' * M(Vsu)
 
 Wswapnew_u
   = R(A)' * Wswapold_u
-  + sum(s in newly absorbed slices) R(C_s)' * pairmatrix(Vus)'.
+  + sum(s in newly absorbed slices) R(C_s)' * M(Vus)'.
 ```
 
 Build `Pnew` directly from final `phi_new`. Then form
@@ -308,6 +314,16 @@ global occupied rank; the occupied restriction may have a smaller exact rank.
 Both common-H and split-H cores will consume the same validated ranges.
 Projection and cached backends can therefore be compared with identical
 windows. No new exported name or backend lifecycle method is needed.
+
+The accepted keyword semantics are exact: `block_partition !== nothing`
+overrides the numeric `blocksize`, and the structured route requires
+`nblockcenter >= 1` while the legacy route remains unchanged. A supplied
+partition must describe nonempty contiguous ranges covering exactly `1:N`; a
+`SliceLayout` must end at `N`. For either sliced backend, the backend dimensions
+and offsets must exactly equal the supplied layout. A mismatch throws rather
+than entering a global fallback. The accepted spelling is
+`block_partition=layout`; Milestone 1 adds neither another partition type nor
+another backend lifecycle operation.
 
 For radial Be, `block_partition=layout` gives 52 nine-orbital blocks and, with
 `nblockcenter=1`, 98 moving windows. The ordinary integer-`blocksize` path will
@@ -484,6 +500,12 @@ downstream numerical regressions.
 - a deliberately nontrivial final-basis correction proving that final
   `phi_new`, rather than stale `Phi_old`, governs the update;
 - exact partial-slice direct-fallback parity;
+- left and right partial-slice absorptions with nonzero old-center cross
+  products, proving the direct fallback retains the omitted recurrence terms;
+- a deliberately off-span final old-row block that fails the scale-aware
+  reconstruction check and invokes direct rebuilding;
+- an observable count proving that the accepted aligned route invokes no
+  fallback;
 - arbitrary symmetric, non-idempotent RHF and UHF Fock parity against direct
   rebuilding and projection, with scale-aware disagreement at most `1e-11`;
 - `S=4,8,16,32,52` chain timing and allocation scaling, with final-state direct
@@ -495,10 +517,31 @@ the `8 -> 16` and `16 -> 32` complete-chain pairs, distinguishing intended
 quadratic behavior from the present roughly cubic chain. `S=52` is the
 representative endpoint rather than a doubling-ratio point.
 
+The absolute provisional engineering gates for the 52-by-9, rank-four fixture
+are:
+
+```text
+complete initial cache chain                <= 16 s
+forward-plus-reverse absorption cache work  <= 32 s
+cumulative cache-chain allocation           <= 512 MiB
+```
+
+The allocation measurement excludes the persistent input `V6` and includes
+all newly retained block states, transformed/additive cache arrays, rebuilt
+`P/phi/Vijkl`, pair maps, and temporary absorption work created inside the
+measured chain. A missed absolute gate requires a measured explanation and
+renewed performance review, not a solver-policy change.
+
 ### Milestone 3: Window-Local Fock
 
 - explicit signed four-index RHF/UHF oracle remains authoritative;
+- separately isolate all nine ordered `LL`, `LC`, `LR`, `CL`, `CC`, `CR`,
+  `RL`, `RC`, and `RR` sectors using distinct unsymmetrized `Vst/Vts` and
+  symmetric non-idempotent RHF/UHF densities; in particular, exercise
+  `LC/CL`, `LR/RL`, and `CR/RC` independently so opposite orientation errors
+  cannot cancel;
 - fixed/ragged aligned arbitrary-density parity and split fallback parity;
+- delegate the entire split-window RHF/UHF interaction to projection;
 - frozen workflow window error at most `1e-12` where summation order permits;
 - warmed aligned Fock at least `20x` faster than projection;
 - `time_Fock(S=52) / time_Fock(S=8) <= 1.5` at fixed ranks and center;
@@ -601,17 +644,14 @@ The manager design records three bounded decisions:
 3. delegate partial-slice cached windows to projection and enforce the
    addition/net-growth budget above.
 
-Paper-manager review is requested to confirm that the complete-slice partition,
-the projection/explicit oracle ladder, and the performance and workflow gates
-are sufficient for scientific acceptance, or to report a concrete scientific
-objection. Solver architecture and implementation ownership do not transfer.
+Paper-manager review conditionally accepted this design for Milestones 1 and 2
+and supplied the five clarifications now incorporated above. Solver
+architecture and implementation ownership remain with `hfdmrg-manager`.
 
-After scientific acceptance review, the exact next action is Milestone 1 only:
-implement and test the explicit slice-aligned partition on its own narrow
-commit, update this status report, and proceed to Milestone 2 without altering
-solver policy.
-
-Until that review, no production source, tests, scripts, README, architecture
-guide, manifests, or external workspace will be edited.
+The exact next action is to implement and test the explicit slice-aligned
+partition as a narrow Milestone 1 commit, then proceed directly to incremental
+absorption as a separate Milestone 2 commit if the first milestone gates pass.
+Stop after Milestone 2 for paper-manager review before beginning the
+window-local Fock rewrite.
 
 -- hfdmrg-manager@macmini
