@@ -635,7 +635,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                     Cra = Cranges[b + 2][1]:Cranges[b + 1 + d][end]
                     lc = length(Cra)
                     psibb1 = transrangeleft(psiup, 1, O')
-                    posright = (d == 1 ? m + 1 : m + blocksizes[b + 2] + 1)
+                    posright = m + sum(@view blocksizes[b + 2:b + d]) + 1
                     psiR = transrangeleft(psibb1, posright, block[b + 1 + d].phi)
                     psiup = transrangeleft(psiR, m + lc + 1, block[b + 2 + d].phi')
                     if !restricted
@@ -793,7 +793,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                     Cra = Cranges[b + 2][1]:Cranges[b + 1 + d][end]
                     lc = length(Cra)
                     psibb1 = transrangeleft(psiup, 1, O')
-                    posright = (d == 1 ? m + 1 : m + blocksizes[b + 2] + 1)
+                    posright = m + sum(@view blocksizes[b + 2:b + d]) + 1
                     psiR = transrangeleft(psibb1, posright, block[b + 1 + d].phi)
                     psiup = transrangeleft(psiR, m + lc + 1, block[b + 2 + d].phi')
                     psibb1 = transrangeleft(psidn, 1, O')

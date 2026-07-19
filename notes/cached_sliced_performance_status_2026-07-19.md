@@ -4,7 +4,7 @@ Date: 2026-07-19
 Owner: `hfdmrg-manager`
 Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
-Status: **Milestone 2 implemented and validated; awaiting paper-manager review**
+Status: **Milestone 2 corrective pass validated on macmini; awaiting cross-host verification**
 
 Solver architecture, implementation, and line-budget ownership remain with
 `hfdmrg-manager`. `hfdmrg-paper-manager` reviews whether the partition,
@@ -185,6 +185,10 @@ Incremental eligibility will therefore be determined only from exact
 It will never be inferred from coefficient magnitudes. Boundary initialization
 and any partial-slice absorption use the exact direct builder.
 
+The old block must also be anchored to its declared side: a left block starts
+at orbital `1`, and a right block ends at orbital `N`. A complete-slice internal
+range that omits a prefix or suffix is not eligible for the recurrence.
+
 Here complete coverage means `newra` is exactly the disjoint union of `oldra`
 and `cra`, with no gap or overlap, in old-then-center order for left growth and
 center-then-old order for right growth. Both input ranges must be unions of
@@ -312,7 +316,9 @@ The core validates contiguous `1:N` coverage, complete layout boundaries,
 nonempty blocks, more than four blocks, and
 `nblocks >= nblockcenter + 4`. It will not require an end slice to contain the
 global occupied rank; the occupied restriction may have a smaller exact rank.
-Both common-H and split-H cores consume the same validated ranges.
+Any backend may use the partition; when a backend itself owns a `SliceLayout`,
+that layout must match exactly. Both common-H and split-H cores consume the
+same validated ranges.
 Projection and cached backends can therefore be compared with identical
 windows. No new exported name or backend lifecycle method is needed.
 
@@ -320,9 +326,9 @@ The accepted keyword semantics are exact: `block_partition !== nothing`
 overrides the numeric `blocksize`, and the structured route requires
 `nblockcenter >= 1` while the legacy route remains unchanged. A supplied
 partition must describe nonempty contiguous ranges covering exactly `1:N`; a
-`SliceLayout` must end at `N`. For either sliced backend, the backend dimensions
-and offsets must exactly equal the supplied layout. A mismatch throws rather
-than entering a global fallback. The accepted spelling is
+`SliceLayout` must end at `N`. For either sliced backend, its dimensions and
+offsets must exactly equal the supplied layout. A mismatch throws rather than
+entering a global fallback. The accepted spelling is
 `block_partition=layout`; Milestone 1 adds neither another partition type nor
 another backend lifecycle operation.
 
@@ -522,18 +528,20 @@ passing stale pre-rotation maps. Maximum scale-aware Fock disagreements were:
 | 52-by-9 downstream RHF/UHF | `1.51e-16` | `5.67e-15` |
 
 Split-window projection parity, left and right partial-slice absorption with
-nonzero old-center products, and an aligned but off-span final basis all pass
-the `1e-11` scale-aware gate. The compact route checks observe `(init,
-incremental,fallback)=(8,8,0)` for accepted fixed/ragged chains and `(6,0,3)`
-for the partial-left, partial-right, and off-span fallback fixture.
+nonzero old-center products, and aligned left/right off-span final bases all
+pass the `1e-11` scale-aware gate. The compact route checks observe `(init,
+incremental,fallback)=(8,8,0)` for accepted fixed/ragged chains and `(9,0,6)`
+for partial-slice, off-span, and unanchored-block fallbacks.
 The public aligned one-sweep solver route independently reports `(2,9,0)`.
 
 At the final 52-slice right state, direct-rebuild relative errors were
 `8.01e-16` for `W`, `8.14e-16` for `Wswap`, and `5.13e-16` for `Vijkl`.
 No raw-integral symmetry was used.
 
-Both `julia --project=. test/runtests.jl` and
-`julia --project=. -e 'using Pkg; Pkg.test()'` pass all 89 tests.
+The original macmini validation of `31a9c76` passed all 89 tests, but the
+subsequent faraday run exposed the platform-sensitive aligned trajectory
+described in the corrective-pass record below. That original result is not a
+cross-host acceptance claim.
 
 ### Performance Evidence
 
@@ -577,6 +585,45 @@ The completed log and PID record are:
 The temporary repository benchmark script was removed after the run. These
 are synthetic engineering measurements, not frozen-Be scientific acceptance.
 
+### Paper-Review Corrective Pass
+
+The faraday failure was diagnosed before replacing its fixture. Projection and
+cached Fock matrices still agreed to `2.5e-16` in the first window, and the
+smallest local occupied/virtual gap over the trajectory was `0.774 Ha`.
+However, the first post-window block SVD retained a second singular value of
+`1.947e-9`, only about twenty times the fixed `1e-10` rank cutoff. Nonlinear
+amplification first became material in window two, at `1.01e-8 Ha` in energy
+and `2.26e-8` in an occupied projector. The failure was therefore a poorly
+conditioned trajectory oracle, not a cache or Fock-contraction disagreement.
+
+The replacement uses an analytic sine basis, unit-spaced one-body spectrum,
+six two-orbital slices, and a deterministic symmetric `0.005/(1+abs(p-q))`
+density interaction represented in sliced form. Four local iterations are
+forced. On macmini, projection/cached differences are:
+
+| Route | Energy | Occupied-projector norm | Minimum local gap | Minimum retained sweep singular value |
+|---|---:|---:|---:|---:|
+| Common-H RHF | `9.93e-13 Ha` | `4.76e-11` | `1.048 Ha` | `0.0769` |
+| Split-H UHF | `7.89e-17 Ha` | `1.44e-15` | `1.015 Ha` | `0.311` |
+
+The committed cross-platform gates are `1e-10` scale-aware energy and `1e-9`
+projector norm. Existing direct-cache and arbitrary-density Fock oracles retain
+their machine-precision gates.
+
+The general three-center correction is checked on a nonuniform
+`[2,3,1,5,1,3,2]` partition with analytically self-consistent, delocalized
+orbitals and a prescribed `2 Ha` Fock gap. Corrected common- and split-H
+projector errors are at most `4.12e-15`, and independently recomputed energies
+agree within `6.2e-15 Ha`. Restoring the old offset gives projector errors of
+`6.92e-12` and `1.37e-9`, so the numerical regression rejects it.
+
+The same pass adds the right off-span reconstruction oracle, proves that
+complete-slice blocks missing their left or right physical anchor take the
+direct route, and proves through a public density-density solve that a supplied
+`SliceLayout` may reproduce the legacy ranges and result without a sliced
+backend. The macmini test script passes all 95 tests. Cross-host acceptance is
+still pending. The isolated `Pkg.test()` run also passes the same 95 tests.
+
 ## Validation Ladder
 
 ### Milestone 1: Explicit Aligned Partition
@@ -585,7 +632,10 @@ are synthetic engineering measurements, not frozen-Be scientific acceptance.
 - 52 blocks and 98 windows for the representative 52-by-9 layout;
 - zero split-slice windows on the opt-in route;
 - unchanged outputs from the legacy integer `blocksize` partition;
+- exact legacy-result parity when a density-density solve receives an
+  equivalent `SliceLayout`;
 - identical ranges for projection/cached and common/split-H cores; and
+- a nonuniform `nblockcenter=3` stationary-state regression in both core paths;
 - compact rejection checks for invalid or insufficient partitions.
 
 ### Milestone 2: Incremental Absorption
@@ -598,8 +648,10 @@ are synthetic engineering measurements, not frozen-Be scientific acceptance.
 - exact partial-slice direct-fallback parity;
 - left and right partial-slice absorptions with nonzero old-center cross
   products, proving the direct fallback retains the omitted recurrence terms;
-- a deliberately off-span final old-row block that fails the scale-aware
-  reconstruction check and invokes direct rebuilding;
+- deliberately off-span left and right final old-row blocks that fail the
+  scale-aware reconstruction check and invoke direct rebuilding;
+- complete-slice internal blocks that fail the required left/right anchoring
+  and invoke direct rebuilding;
 - an observable count proving that the accepted aligned route invokes no
   fallback;
 - arbitrary symmetric, non-idempotent RHF and UHF Fock parity against direct
@@ -673,13 +725,15 @@ The provisional readiness gates are a warmed forced-four Be sweep below
 The status memo is maintained by replacement. The following caps cover added
 source, tests, scripts, and user/architecture documentation:
 
-| Milestone | Proposed files | Maximum additions | Deletion target |
+| Milestone | Proposed files | Addition accounting | Deletion target |
 |---|---|---:|---:|
-| M1 | `src/core.jl`, `test/runtests.jl`, `README.md` | `70` | `0` |
-| M2 | `src/backends/sliced_basis_cached.jl`, `test/runtests.jl` | `220` | `45` |
-| M3 | `src/backends/sliced_basis_cached.jl`, `test/runtests.jl`, `scripts/bench_sliced.jl`, `README.md`, `docs/backend_architecture.md` | `300` | `360` |
-| M4 | `src/core.jl`, `test/runtests.jl`, `docs/backend_architecture.md` | `90` | `15` |
-| **Total M1-M4** | | **`680`** | **`420`** |
+| M1 | `src/core.jl`, `test/runtests.jl`, `README.md` | `67` actual (`70` cap) | `0` |
+| M2 | `src/backends/sliced_basis_cached.jl`, `test/runtests.jl` | `213` actual (`220` cap) | `45` |
+| M2 correction | `src/core.jl`, `src/backends/sliced_basis_cached.jl`, `test/runtests.jl`, `README.md` | `97` actual | `0` |
+| M3 | `src/backends/sliced_basis_cached.jl`, `test/runtests.jl`, `scripts/bench_sliced.jl`, `README.md`, `docs/backend_architecture.md` | `300` individual cap | `360` |
+| M4 | `src/core.jl`, `test/runtests.jl`, `docs/backend_architecture.md` | `90` individual cap | `15` |
+| **M3 + M4 remaining** | | **`303` combined cap** | **`375`** |
+| **Program total** | | **`680`** | **`420`** |
 
 Target net growth is at most `260` lines. Stop for renewed design review if a
 milestone exceeds its cap, needs `backend_api.jl`, introduces another public
@@ -689,7 +743,12 @@ type/framework, or fails to shrink the cached source materially by Milestone
 Addition caps and the total net-growth cap are firm. Deletion figures are
 targets, not correctness gates; they must not force over-compression. Counts
 come from each milestone commit's `git diff --numstat`. Replacement-only churn
-in this status memo is excluded.
+in this status memo and the required paper-review governance memo are excluded.
+The corrective implementation uses `97` additions and `45` deletions. The ten
+unused M1/M2 additions reduce its debit to `87`, leaving a combined `303` for
+M3 and M4 without widening their individual ceilings or the program total.
+Deleting the superseded random sliced end-to-end test leaves cumulative net
+growth at `250` lines, within the firm `260`-line target.
 
 Milestone 2 specifically replaces the scalar global raw-cache loops. Milestone
 3 deletes:
@@ -740,12 +799,14 @@ The manager design records three bounded decisions:
 3. delegate partial-slice cached windows to projection and enforce the
    addition/net-growth budget above.
 
-Paper-manager review conditionally accepted this design for Milestones 1 and 2
-and supplied the five clarifications now incorporated above. Solver
+Paper-manager review accepted the M1/M2 cache algebra and performance evidence
+but held Milestone 3 for the bounded corrective pass recorded above. All five
+required clarifications are now implemented and validated on macmini. Solver
 architecture and implementation ownership remain with `hfdmrg-manager`.
 
-The exact next action is paper-manager review of Milestone 2 numerical parity,
-scaling, allocation, route counts, and source growth. Do not begin the
-window-local Milestone 3 Fock rewrite until that review is complete.
+The exact next action is a faraday run of the corrected 95-test suite and
+paper-manager verification of the replacement trajectory and three-center
+regression. Do not begin the window-local Milestone 3 Fock rewrite until that
+cross-host check releases it.
 
 -- hfdmrg-manager@macmini

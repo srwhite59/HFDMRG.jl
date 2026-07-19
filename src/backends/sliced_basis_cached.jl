@@ -174,6 +174,8 @@ _whole_slice_range(layout, ra) = first(ra) - 1 in layout.offs && last(ra) in lay
 function _aligned_absorption(side, oldra, cra, raV, layout)
     _whole_slice_range(layout, oldra) && _whole_slice_range(layout, cra) || return false
     N = layout.offs[end]
+    side === :left && first(oldra) != 1 && return false
+    side === :right && last(oldra) != N && return false
     side === :left && return last(oldra) + 1 == first(cra) && raV == last(cra) + 1:N
     last(cra) + 1 == first(oldra) && raV == 1:first(cra) - 1
 end

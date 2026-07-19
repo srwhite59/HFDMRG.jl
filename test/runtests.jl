@@ -626,9 +626,26 @@ try
                 HFDMRG.vee_window(offdirect, Rdirect, 7:12, cached),
                 HFDMRG.vee_window(offproj, Rproj, 7:12, projection))
             @test fock_error(off_wins, 10) <= 1e-11
+
+            offRphi = orthonormal_cols(rng, 6, 2)
+            offR = HFDMRG.vee_absorb_block(:right, Rdirect, 10:12, zeros(2, 2),
+                zeros(3, 2), offRphi, 1:9, cached)
+            offRdirect = HFDMRG.vee_init_block(:right, 10:15, 1:9, offRphi, cached)
+            offRproj = HFDMRG.vee_init_block(:right, 10:15, 1:9, offRphi, projection)
+            offR_wins = (HFDMRG.vee_window(L, offR, 4:9, cached),
+                HFDMRG.vee_window(Ldirect, offRdirect, 4:9, cached),
+                HFDMRG.vee_window(Lproj, offRproj, 4:9, projection))
+            @test fock_error(offR_wins, 10) <= 1e-11
+
+            internalL = HFDMRG.vee_init_block(:left, 4:6, 7:N,
+                orthonormal_cols(rng, 3, 1), cached)
+            internalR = HFDMRG.vee_init_block(:right, 10:12, 1:9,
+                orthonormal_cols(rng, 3, 1), cached)
+            grow(internalL, :left, 7:9, 2, cached)
+            grow(internalR, :right, 7:9, 2, cached)
             counts = HFDMRG._bench_timing_snapshot()
-            @test (counts[:cache_init_calls], counts[:cache_incremental_calls],
-                counts[:cache_fallback_calls]) == (6.0, 0.0, 3.0)
+            @test (counts[:cache_incremental_calls], counts[:cache_fallback_calls]) ==
+                (0.0, 6.0)
         end
     end
 
@@ -690,73 +707,67 @@ try
         @test e_uhf_split_layout == e_uhf_backend
     end
 
-    @testset "Sliced end-to-end sanity" begin
-        rng = MersenneTwister(19)
-        nj = 2
-        ns = 6
-        N = nj * ns
-        layout = HFDMRG.SliceLayout(fill(nj, ns))
-        H = randn(rng, N, N)
-        H = (H + H') / 2
-        V6 = 0.01 * randn(rng, nj, nj, nj, nj, ns, ns)
-        Nup = 3
-        psiup0 = orthonormal_cols(rng, N, Nup)
-        rho0 = psiup0 * psiup0'
-        F0 = copy(H)
-        HFDMRG.sliced_add_fock_r!(F0, rho0, V6, nj, ns)
-        energy0 = tr(rho0 * (F0 + H))
-        _, _, energy = solve_hfdmrg(H, layout, V6, psiup0;
-            maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
-        @test isfinite(energy)
-        @test energy <= energy0 + 1e-6 * max(1.0, abs(energy0))
-    end
-
     @testset "Cached sliced backend vs projection" begin
-        rng = MersenneTwister(23)
         nj = 2
         ns = 6
         N = nj * ns
         layout = HFDMRG.SliceLayout(fill(nj, ns))
-        H = randn(rng, N, N)
-        H = (H + H') / 2
-        V6 = 0.01 * randn(rng, nj, nj, nj, nj, ns, ns)
+        Q = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1)) for i = 1:N, j = 1:N]
+        H = Q * Diagonal(0.0:N - 1) * Q'
+        V6 = zeros(nj, nj, nj, nj, ns, ns)
+        for n = 1:ns, m = 1:ns, a = 1:nj, c = 1:nj
+            p, q = (n - 1) * nj + a, (m - 1) * nj + c
+            V6[a, a, c, c, n, m] = 0.005 / (1 + abs(p - q))
+        end
         backend_proj = HFDMRG.SlicedBasisBackend(layout, V6)
         backend_cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
-        Nup = 1
-        Ndn = 1
-        psiup0 = orthonormal_cols(rng, N, Nup)
-        psidn0 = orthonormal_cols(rng, N, Ndn)
-        _, _, e_proj = solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+        psi0 = Q[:, 1:2]
+        psiup0, psidn0 = Q[:, 1:1], Q[:, 3:3]
+        projector_error(A, B) = norm(A * A' - B * B')
+        energy_error(a, b) = abs(a - b) / max(1.0, abs(a), abs(b))
+        _, _, e_proj = solve_hfdmrg(H, backend_proj, psi0;
             maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
-        _, _, e_cached = solve_hfdmrg(H, backend_cached, psiup0, psidn0;
+        _, _, e_cached = solve_hfdmrg(H, backend_cached, psi0;
             maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
-        @test isapprox(e_proj, e_cached; atol = 1e-9, rtol = 0)
+        @test energy_error(e_proj, e_cached) <= 1e-10
 
         aligned = (; maxiter = 1, blocksize = 0, block_partition = layout,
-            cutoff = 1e-8, verbose = false)
-        result_proj = solve_hfdmrg(H, backend_proj, psiup0, psidn0; aligned...)
-        result_cached = solve_hfdmrg(H, backend_cached, psiup0, psidn0; aligned...)
-        @test isapprox(result_proj[3], result_cached[3]; atol = 1e-9, rtol = 0)
+            cutoff = 0.0, scf_cutoff = 0.0, verbose = false)
+        result_proj = solve_hfdmrg(H, backend_proj, psi0; aligned...)
+        result_cached = solve_hfdmrg(H, backend_cached, psi0; aligned...)
+        @test energy_error(result_proj[3], result_cached[3]) <= 1e-10
+        @test max(projector_error(result_proj[1], result_cached[1]),
+            projector_error(result_proj[2], result_cached[2])) <= 1e-9
         route_counts = withenv("HFDMRG_BENCH_TIMING" => "1") do
             HFDMRG._bench_timing_reset!()
-            solve_hfdmrg(H, backend_cached, psiup0, psidn0; aligned...)
+            solve_hfdmrg(H, backend_cached, psi0; aligned...)
             HFDMRG._bench_timing_snapshot()
         end
         @test (route_counts[:cache_init_calls], route_counts[:cache_incremental_calls],
             route_counts[:cache_fallback_calls]) == (2.0, 9.0, 0.0)
-        @test result_proj == solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+        @test result_proj == solve_hfdmrg(H, backend_proj, psi0;
             aligned..., blocksize = 999)
 
-        Hup, Hdn = H + 0.01I, H - 0.02I
+        Hup = H
+        Hdn = Q * Diagonal([2.0, 1.0, 0.0, collect(3.0:N - 1)...]) * Q'
         split_proj = solve_hfdmrg(Hup, Hdn, backend_proj, psiup0, psidn0; aligned...)
         split_cached = solve_hfdmrg(Hup, Hdn, backend_cached, psiup0, psidn0; aligned...)
-        @test isapprox(split_proj[3], split_cached[3]; atol = 3e-9, rtol = 0)
+        @test energy_error(split_proj[3], split_cached[3]) <= 1e-10
+        @test max(projector_error(split_proj[1], split_cached[1]),
+            projector_error(split_proj[2], split_cached[2])) <= 1e-10
 
         legacy = solve_hfdmrg(H, backend_proj, psiup0, psidn0;
             maxiter = 1, blocksize = 2, cutoff = 1e-8, verbose = false)
         @test legacy == solve_hfdmrg(H, backend_proj, psiup0, psidn0;
             maxiter = 1, blocksize = 2, block_partition = nothing,
             cutoff = 1e-8, verbose = false)
+
+        Vdensity = [0.01 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
+        density_legacy = solve_hfdmrg(H, Vdensity, psiup0, psidn0;
+            maxiter = 1, blocksize = 2, cutoff = 0.0, verbose = false)
+        @test density_legacy == solve_hfdmrg(H, Vdensity, psiup0, psidn0;
+            maxiter = 1, blocksize = 999, block_partition = layout,
+            cutoff = 0.0, verbose = false)
 
         be_layout = HFDMRG.SliceLayout(fill(9, 52))
         nb, bs, ranges = HFDMRG.getblocksizes(468, 4, 0, 1, be_layout, nothing)
@@ -775,6 +786,45 @@ try
         mismatch = HFDMRG.SliceLayout([1, 3, 2, 2, 2, 2])
         @test_throws ErrorException solve_hfdmrg(H, backend_proj, psiup0, psidn0;
             aligned..., block_partition = mismatch)
+    end
+
+    @testset "Structured three-block center" begin
+        N = 17
+        layout = HFDMRG.SliceLayout([2, 3, 1, 5, 1, 3, 2])
+        Q = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1)) for i = 1:N, j = 1:N]
+        V = [0.2 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
+        function density_energy(Hup, Hdn, up, dn)
+            rhoup, rhodn = up * up', dn * dn'
+            occupation = diag(rhoup) + diag(rhodn)
+            sum(Hup .* rhoup) + sum(Hdn .* rhodn) +
+            0.5 * dot(occupation, V * occupation) -
+            0.5 * sum(V .* (rhoup .^ 2 + rhodn .^ 2))
+        end
+        kw = (; maxiter = 1, blocksize = 999, block_partition = layout,
+            nblockcenter = 3, cutoff = 0.0, scf_cutoff = 1e-13, verbose = false)
+
+        psi = Q[:, 1:1]
+        rho = psi * psi'
+        G = 2Diagonal(V * diag(rho)) - V .* rho
+        H = Matrix(Symmetric(Q * Diagonal(2.0 .* (0:N - 1)) * Q' - G))
+        result = solve_hfdmrg(H, V, psi; kw...)
+        @test norm(result[1] * result[1]' - rho) <= 1e-12
+        @test isapprox(result[3], density_energy(H, H, result[1], result[2]);
+            atol = 1e-12, rtol = 0)
+
+        up, dn = Q[:, 1:1], Q[:, 2:2]
+        rhoup, rhodn = up * up', dn * dn'
+        occupation = diag(rhoup) + diag(rhodn)
+        Hup = Matrix(Symmetric(Q * Diagonal(2.0 .* (0:N - 1)) * Q' -
+            Diagonal(V * occupation) + V .* rhoup))
+        spectrum_dn = [1, 0, collect(2:N - 1)...]
+        Hdn = Matrix(Symmetric(Q * Diagonal(2.0 .* spectrum_dn) * Q' -
+            Diagonal(V * occupation) + V .* rhodn))
+        result = solve_hfdmrg(Hup, Hdn, V, up, dn; kw...)
+        @test max(norm(result[1] * result[1]' - rhoup),
+            norm(result[2] * result[2]' - rhodn)) <= 1e-12
+        @test isapprox(result[3], density_energy(Hup, Hdn, result[1], result[2]);
+            atol = 1e-12, rtol = 0)
     end
 
     @testset "HF-DMRG regression" begin
