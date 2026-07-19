@@ -147,8 +147,9 @@ Add RHF mean-field contribution using sliced integrals.
 
 Flattened orbital index mapping:
 p = (n,a) with n = 1:ns and a = 1:nj maps to p = (n-1)*nj + a.
-V6[a,b,c,d,n,m] corresponds to (p,q|r,s) with p=(n,a), q=(m,c),
-r=(n,b), s=(m,d).
+V6[a,b,c,d,n,m] corresponds to V[p,q,r,s] with p=(n,a), q=(m,c),
+r=(n,b), s=(m,d), in the Hamiltonian convention
+0.5 * sum(V[p,q,r,s] * cdag[p] * cdag[q] * c[s] * c[r]).
 """
 function sliced_add_fock_r!(F, rho, V6::Array{Float64,6}, nj::Int, ns::Int)
     N = nj * ns
@@ -157,22 +158,14 @@ function sliced_add_fock_r!(F, rho, V6::Array{Float64,6}, nj::Int, ns::Int)
     size(rho) == size(F) || error("rho has wrong size")
     size(V6) == (nj, nj, nj, nj, ns, ns) || error("V6 has wrong size")
 
-    for np = 1:ns, nq = 1:ns, a = 1:nj, c = 1:nj
-        p = (np - 1) * nj + a
-        q = (nq - 1) * nj + c
-        for b = 1:nj, d = 1:nj
-            r = (np - 1) * nj + b
-            s = (nq - 1) * nj + d
-            F[p, q] += 2.0 * rho[r, s] * V6[a, b, c, d, np, nq]
-        end
-        if np == nq
-            # Exchange term uses r,s within a common slice ms.
-            for ms = 1:ns, b = 1:nj, d = 1:nj
-                r = (ms - 1) * nj + b
-                s = (ms - 1) * nj + d
-                F[p, q] -= rho[r, s] * V6[a, c, b, d, np, ms]
-            end
-        end
+    for n = 1:ns, m = 1:ns, a = 1:nj, b = 1:nj, c = 1:nj, d = 1:nj
+        p = (n - 1) * nj + a
+        r = (n - 1) * nj + b
+        q = (m - 1) * nj + c
+        s = (m - 1) * nj + d
+        v = V6[a, b, c, d, n, m]
+        F[p, r] += 2.0 * rho[q, s] * v
+        F[p, s] -= rho[r, q] * v
     end
     F
 end
@@ -195,32 +188,20 @@ function sliced_add_fock_r!(F, rho, vee::SlicedVeeRagged)
     size(rho) == size(F) || error("rho has wrong size")
 
     Vblocks = vee.V
-    for np = 1:ns, nq = 1:ns
-        dimp = dims[np]
-        dimq = dims[nq]
-        offp = offs[np]
-        offq = offs[nq]
-        Vpq = Vblocks[np][nq]
-        for a = 1:dimp, c = 1:dimq
-            p = offp + a
-            q = offq + c
-            for b = 1:dimp, d = 1:dimq
-                r = offp + b
-                s = offq + d
-                F[p, q] += 2.0 * rho[r, s] * Vpq[a, b, c, d]
-            end
-            if np == nq
-                for ms = 1:ns
-                    dimm = dims[ms]
-                    offm = offs[ms]
-                    Vpm = Vblocks[np][ms]
-                    for b = 1:dimm, d = 1:dimm
-                        r = offm + b
-                        s = offm + d
-                        F[p, q] -= rho[r, s] * Vpm[a, c, b, d]
-                    end
-                end
-            end
+    for n = 1:ns, m = 1:ns
+        dimn = dims[n]
+        dimm = dims[m]
+        offn = offs[n]
+        offm = offs[m]
+        Vnm = Vblocks[n][m]
+        for a = 1:dimn, b = 1:dimn, c = 1:dimm, d = 1:dimm
+            p = offn + a
+            r = offn + b
+            q = offm + c
+            s = offm + d
+            v = Vnm[a, b, c, d]
+            F[p, r] += 2.0 * rho[q, s] * v
+            F[p, s] -= rho[r, q] * v
         end
     end
     F
@@ -234,11 +215,9 @@ end
 """
 Add UHF mean-field contributions using sliced integrals.
 
-Fup[p,q] += sum_{r,s} (rhoup + rhodn)[r,s] * (p q| r s) - rhoup[r,s] * (p r| q s)
-Fdn[p,q] += sum_{r,s} (rhoup + rhodn)[r,s] * (p q| r s) - rhodn[r,s] * (p r| q s)
-
-With the slice-preserving mapping, exchange terms only contribute when p and q
-belong to the same slice.
+For V[p,q,r,s] in the documented Hamiltonian convention:
+Fspin[p,r] += sum_{q,s} (rhoup + rhodn)[q,s] * V[p,q,r,s]
+Fspin[p,s] -= sum_{q,r} rhospin[r,q] * V[p,q,r,s].
 """
 function sliced_add_fock_uhf!(Fup, Fdn, rhoup, rhodn, V6::Array{Float64,6}, nj::Int, ns::Int)
     N = nj * ns
@@ -250,25 +229,16 @@ function sliced_add_fock_uhf!(Fup, Fdn, rhoup, rhodn, V6::Array{Float64,6}, nj::
     size(V6) == (nj, nj, nj, nj, ns, ns) || error("V6 has wrong size")
 
     rtot = rhoup + rhodn
-    for np = 1:ns, nq = 1:ns, a = 1:nj, c = 1:nj
-        p = (np - 1) * nj + a
-        q = (nq - 1) * nj + c
-        for b = 1:nj, d = 1:nj
-            r = (np - 1) * nj + b
-            s = (nq - 1) * nj + d
-            v = V6[a, b, c, d, np, nq]
-            Fup[p, q] += rtot[r, s] * v
-            Fdn[p, q] += rtot[r, s] * v
-        end
-        if np == nq
-            for ms = 1:ns, b = 1:nj, d = 1:nj
-                r = (ms - 1) * nj + b
-                s = (ms - 1) * nj + d
-                v = V6[a, c, b, d, np, ms]
-                Fup[p, q] -= rhoup[r, s] * v
-                Fdn[p, q] -= rhodn[r, s] * v
-            end
-        end
+    for n = 1:ns, m = 1:ns, a = 1:nj, b = 1:nj, c = 1:nj, d = 1:nj
+        p = (n - 1) * nj + a
+        r = (n - 1) * nj + b
+        q = (m - 1) * nj + c
+        s = (m - 1) * nj + d
+        v = V6[a, b, c, d, n, m]
+        Fup[p, r] += rtot[q, s] * v
+        Fdn[p, r] += rtot[q, s] * v
+        Fup[p, s] -= rhoup[r, q] * v
+        Fdn[p, s] -= rhodn[r, q] * v
     end
     Fup, Fdn
 end
@@ -294,36 +264,22 @@ function sliced_add_fock_uhf!(Fup, Fdn, rhoup, rhodn, vee::SlicedVeeRagged)
 
     rtot = rhoup + rhodn
     Vblocks = vee.V
-    for np = 1:ns, nq = 1:ns
-        dimp = dims[np]
-        dimq = dims[nq]
-        offp = offs[np]
-        offq = offs[nq]
-        Vpq = Vblocks[np][nq]
-        for a = 1:dimp, c = 1:dimq
-            p = offp + a
-            q = offq + c
-            for b = 1:dimp, d = 1:dimq
-                r = offp + b
-                s = offq + d
-                v = Vpq[a, b, c, d]
-                Fup[p, q] += rtot[r, s] * v
-                Fdn[p, q] += rtot[r, s] * v
-            end
-            if np == nq
-                for ms = 1:ns
-                    dimm = dims[ms]
-                    offm = offs[ms]
-                    Vpm = Vblocks[np][ms]
-                    for b = 1:dimm, d = 1:dimm
-                        r = offm + b
-                        s = offm + d
-                        v = Vpm[a, c, b, d]
-                        Fup[p, q] -= rhoup[r, s] * v
-                        Fdn[p, q] -= rhodn[r, s] * v
-                    end
-                end
-            end
+    for n = 1:ns, m = 1:ns
+        dimn = dims[n]
+        dimm = dims[m]
+        offn = offs[n]
+        offm = offs[m]
+        Vnm = Vblocks[n][m]
+        for a = 1:dimn, b = 1:dimn, c = 1:dimm, d = 1:dimm
+            p = offn + a
+            r = offn + b
+            q = offm + c
+            s = offm + d
+            v = Vnm[a, b, c, d]
+            Fup[p, r] += rtot[q, s] * v
+            Fdn[p, r] += rtot[q, s] * v
+            Fup[p, s] -= rhoup[r, q] * v
+            Fdn[p, s] -= rhodn[r, q] * v
         end
     end
     Fup, Fdn

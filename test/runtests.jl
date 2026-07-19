@@ -274,8 +274,8 @@ try
 
         F2 = zeros(N, N)
         for p = 1:N, q = 1:N, r = 1:N, s = 1:N
-            F2[p, q] += rho[r, s] * (2.0 * v6_lookup(V6, p, q, r, s, nj) -
-                                     v6_lookup(V6, p, r, q, s, nj))
+            F2[p, q] += rho[r, s] * (2.0 * v6_lookup(V6, p, r, q, s, nj) -
+                                     v6_lookup(V6, p, r, s, q, nj))
         end
         @test maximum(abs.(F1 .- F2)) < 1e-10
     end
@@ -296,8 +296,8 @@ try
         Fup2 = zeros(N, N)
         Fdn2 = zeros(N, N)
         for p = 1:N, q = 1:N, r = 1:N, s = 1:N
-            vdir = v6_lookup(V6, p, q, r, s, nj)
-            vex = v6_lookup(V6, p, r, q, s, nj)
+            vdir = v6_lookup(V6, p, r, q, s, nj)
+            vex = v6_lookup(V6, p, r, s, q, nj)
             Fup2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhoup[r, s] * vex
             Fdn2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhodn[r, s] * vex
         end
@@ -321,8 +321,8 @@ try
         HFDMRG.sliced_add_fock_r!(F1, rho, vee)
         F2 = zeros(N, N)
         for p = 1:N, q = 1:N, r = 1:N, s = 1:N
-            F2[p, q] += rho[r, s] * (2.0 * vblocks_lookup(layout, Vblocks, p, q, r, s) -
-                                     vblocks_lookup(layout, Vblocks, p, r, q, s))
+            F2[p, q] += rho[r, s] * (2.0 * vblocks_lookup(layout, Vblocks, p, r, q, s) -
+                                     vblocks_lookup(layout, Vblocks, p, r, s, q))
         end
         @test maximum(abs.(F1 .- F2)) < 1e-10
     end
@@ -347,8 +347,8 @@ try
         Fup2 = zeros(N, N)
         Fdn2 = zeros(N, N)
         for p = 1:N, q = 1:N, r = 1:N, s = 1:N
-            vdir = vblocks_lookup(layout, Vblocks, p, q, r, s)
-            vex = vblocks_lookup(layout, Vblocks, p, r, q, s)
+            vdir = vblocks_lookup(layout, Vblocks, p, r, q, s)
+            vex = vblocks_lookup(layout, Vblocks, p, r, s, q)
             Fup2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhoup[r, s] * vex
             Fdn2[p, q] += (rhoup[r, s] + rhodn[r, s]) * vdir - rhodn[r, s] * vex
         end
