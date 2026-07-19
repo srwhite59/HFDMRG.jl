@@ -4,7 +4,7 @@ Date: 2026-07-19
 Owner: `hfdmrg-manager`
 Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
-Status: **Milestone 0 conditionally accepted; authorized for Milestones 1 and 2**
+Status: **Milestone 1 implemented and validated; proceeding to Milestone 2**
 
 Solver architecture, implementation, and line-budget ownership remain with
 `hfdmrg-manager`. `hfdmrg-paper-manager` reviews whether the partition,
@@ -142,9 +142,10 @@ M(Vst)[(a,b),(c,d)] = Vst[a,b,c,d].
 ```
 
 Both definitions use Julia's column-major pair ordering: the first member of
-each pair varies fastest. Thus `M(Vst)` is the direct matrix view used by
-`_pair_map_mat!`. With retained pairs as rows, the ordered swapped update uses
-exactly `M(Vus)'`, not `M(Vsu)` or an inferred integral symmetry.
+each pair varies fastest. `M` uses the same column-major pair ordering as
+`_pair_map_mat!`, which builds `R(P)`. With retained pairs as rows, the ordered
+swapped update uses exactly `M(Vus)'`, not `M(Vsu)` or an inferred integral
+symmetry.
 
 With `W_u` viewed as a matrix whose rows are retained pairs `(i,k)` and whose
 columns are physical pairs `(a,b)`, the exact update is
@@ -298,20 +299,20 @@ per-Fock result.
 ## Slice-Aligned Partition Seam
 
 Automatically snapping every sliced call that supplies an integer
-`blocksize` would change existing numeric behavior. Milestone 1 will instead
-add an explicit opt-in core keyword accepting a `SliceLayout` as the physical
-block partition, provisionally:
+`blocksize` would change existing numeric behavior. Milestone 1 instead adds
+an explicit opt-in core keyword accepting a `SliceLayout` as the physical
+block partition:
 
 ```text
 block_partition = nothing    # exact legacy getblocksizes path
 block_partition = layout     # one complete physical slice per block
 ```
 
-The core will validate contiguous `1:N` coverage, complete layout boundaries,
+The core validates contiguous `1:N` coverage, complete layout boundaries,
 nonempty blocks, more than four blocks, and
 `nblocks >= nblockcenter + 4`. It will not require an end slice to contain the
 global occupied rank; the occupied restriction may have a smaller exact rank.
-Both common-H and split-H cores will consume the same validated ranges.
+Both common-H and split-H cores consume the same validated ranges.
 Projection and cached backends can therefore be compared with identical
 windows. No new exported name or backend lifecycle method is needed.
 
@@ -327,13 +328,41 @@ another backend lifecycle operation.
 
 For radial Be, `block_partition=layout` gives 52 nine-orbital blocks and, with
 `nblockcenter=1`, 98 moving windows. The ordinary integer-`blocksize` path will
-continue to call the unchanged `getblocksizes` method and must produce
+continue to call the unchanged `getblocksizes` method and produces
 identical ranges and solver results.
 
-The exact keyword spelling and this anticipated, bounded public solver
-addition are part of the Milestone 0 review gate. If review rejects a public
-keyword, implementation must stop and choose another explicit opt-in seam; it
-must not silently change integer behavior.
+Only `nothing` and `SliceLayout` are approved values. Supporting another
+partition type or widening these semantics requires renewed review; integer
+behavior must not change silently.
+
+### Milestone 1 Result
+
+The Milestone 1 implementation changes only
+`src/core.jl`, `test/runtests.jl`, and `README.md` outside this maintained
+status memo, with `67` additions and `2` deletions against `612acd3`. The
+original three-argument `getblocksizes` implementation is unchanged, and
+`block_partition=nothing` calls it directly.
+
+The structured selector accepts only a live, internally consistent
+`SliceLayout`; requires positive dimensions, exact `1:N` coverage, at least
+five blocks, `nblockcenter >= 1`, and enough blocks for the sweep schedule;
+and requires exact dimensions and offsets when the backend already has a
+`SliceLayout` property. It then uses exactly one `orb_range` per slice.
+
+Committed-test evidence exercises:
+
+- all 52 ranges `1:9` through `460:468` and the resulting 98-window schedule;
+- exact legacy equality for omitted versus explicit `block_partition=nothing`;
+- exact equality when structured calls use `blocksize=0` and `blocksize=999`;
+- projection/cached one-sweep energy differences of `1.78e-15` on common-H
+  and `1.59e-9` on split-H routes; and
+- rejection of zero-center, mutated, wrong-length, schedule-insufficient, and
+  backend-mismatched layouts.
+
+Because each accepted block and center is an exact complete-slice range, the
+52-slice route has no split-slice window by construction. The package test
+script passes all 84 tests. Milestone 1 adds no backend method, state field,
+fallback, or Be-specific range list.
 
 ## Cost Model And Local Baseline
 
@@ -527,10 +556,10 @@ cumulative cache-chain allocation           <= 512 MiB
 ```
 
 The allocation measurement excludes the persistent input `V6` and includes
-all newly retained block states, transformed/additive cache arrays, rebuilt
-`P/phi/Vijkl`, pair maps, and temporary absorption work created inside the
-measured chain. A missed absolute gate requires a measured explanation and
-renewed performance review, not a solver-policy change.
+all newly retained block states, retained `W` and `Wswap`, transformed/additive
+cache arrays, rebuilt `P/phi/Vijkl`, pair maps, and temporary absorption work
+created inside the measured chain. A missed absolute gate requires a measured
+explanation and renewed performance review, not a solver-policy change.
 
 ### Milestone 3: Window-Local Fock
 
@@ -625,9 +654,9 @@ No new source file or include wiring is proposed.
 6. **Window construction.** Once Fock becomes local, `VLR/VRL` assembly may be
    the next measured bottleneck. It is not recursively optimized in the first
    design.
-7. **Public partition scope.** The explicit `block_partition` keyword is
-   anticipated by Milestone 1 but still requires checkpoint approval. The
-   integer path must not be silently changed.
+7. **Public partition scope.** Only `block_partition=nothing` and
+   `block_partition=layout::SliceLayout` are approved. Any wider accepted type
+   or semantics requires renewed review; the integer path must remain exact.
 
 Numerical disagreement, an unanticipated API expansion, persistent unfavorable
 scaling, or a solver/scientific-policy choice stops implementation as specified
@@ -648,10 +677,8 @@ Paper-manager review conditionally accepted this design for Milestones 1 and 2
 and supplied the five clarifications now incorporated above. Solver
 architecture and implementation ownership remain with `hfdmrg-manager`.
 
-The exact next action is to implement and test the explicit slice-aligned
-partition as a narrow Milestone 1 commit, then proceed directly to incremental
-absorption as a separate Milestone 2 commit if the first milestone gates pass.
-Stop after Milestone 2 for paper-manager review before beginning the
-window-local Fock rewrite.
+The exact next action after the narrow Milestone 1 commit is incremental cached
+absorption as a separate Milestone 2 commit. Stop after Milestone 2 for
+paper-manager review before beginning the window-local Fock rewrite.
 
 -- hfdmrg-manager@macmini

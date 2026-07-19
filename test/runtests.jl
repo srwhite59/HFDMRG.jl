@@ -657,6 +657,43 @@ try
         _, _, e_cached = solve_hfdmrg(H, backend_cached, psiup0, psidn0;
             maxiter = 2, blocksize = 2, cutoff = 1e-8, verbose = false)
         @test isapprox(e_proj, e_cached; atol = 1e-9, rtol = 0)
+
+        aligned = (; maxiter = 1, blocksize = 0, block_partition = layout,
+            cutoff = 1e-8, verbose = false)
+        result_proj = solve_hfdmrg(H, backend_proj, psiup0, psidn0; aligned...)
+        result_cached = solve_hfdmrg(H, backend_cached, psiup0, psidn0; aligned...)
+        @test isapprox(result_proj[3], result_cached[3]; atol = 1e-9, rtol = 0)
+        @test result_proj == solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            aligned..., blocksize = 999)
+
+        Hup, Hdn = H + 0.01I, H - 0.02I
+        split_proj = solve_hfdmrg(Hup, Hdn, backend_proj, psiup0, psidn0; aligned...)
+        split_cached = solve_hfdmrg(Hup, Hdn, backend_cached, psiup0, psidn0; aligned...)
+        @test isapprox(split_proj[3], split_cached[3]; atol = 3e-9, rtol = 0)
+
+        legacy = solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            maxiter = 1, blocksize = 2, cutoff = 1e-8, verbose = false)
+        @test legacy == solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            maxiter = 1, blocksize = 2, block_partition = nothing,
+            cutoff = 1e-8, verbose = false)
+
+        be_layout = HFDMRG.SliceLayout(fill(9, 52))
+        nb, bs, ranges = HFDMRG.getblocksizes(468, 4, 0, 1, be_layout, nothing)
+        @test nb == 52 && bs == fill(9, 52) && ranges == [9b - 8:9b for b = 1:52]
+        @test 2nb - 2 - 4 == 98
+
+        @test_throws ErrorException solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            aligned..., nblockcenter = 0)
+        bad_layout = HFDMRG.SliceLayout(fill(2, 6)); bad_layout.offs[2] += 1
+        @test_throws ErrorException solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            aligned..., block_partition = bad_layout)
+        @test_throws ErrorException solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            aligned..., block_partition = HFDMRG.SliceLayout(fill(2, 5)))
+        @test_throws ErrorException solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            aligned..., nblockcenter = 3)
+        mismatch = HFDMRG.SliceLayout([1, 3, 2, 2, 2, 2])
+        @test_throws ErrorException solve_hfdmrg(H, backend_proj, psiup0, psidn0;
+            aligned..., block_partition = mismatch)
     end
 
     @testset "HF-DMRG regression" begin

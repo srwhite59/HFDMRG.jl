@@ -139,6 +139,7 @@ All `solve_hfdmrg` entry points accept the same solver keywords:
 | Keyword | Default | Meaning |
 |---|---:|---|
 | `blocksize` | `200` | Requested number of physical sites in each interior block chunk. HFDMRG may reduce it for small systems to obtain more than four blocks. This is not a DMRG bond dimension. |
+| `block_partition` | `nothing` | Optional `SliceLayout` defining one complete physical slice per block. It overrides `blocksize`, requires `nblockcenter >= 1` and enough slices for the sweep, and must exactly match a sliced backend's layout. |
 | `nblockcenter` | `1` | Number of consecutive center chunks kept explicit between the left and right environment blocks. This is an advanced window-layout control; normal calculations should leave it at `1`. |
 | `maxiter` | `1000` | Maximum number of complete left-to-right plus right-to-left sweeps. |
 | `cutoff` | `1e-11` | Sweep-energy convergence tolerance. Common-H routes use `abs(Eold - Enew) < cutoff`; genuinely split-H routes use `abs(Eold - Enew) < cutoff * max(1, abs(Enew))`. |

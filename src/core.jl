@@ -309,6 +309,29 @@ function getblocksizes(N, m, blocksize; verbose = false)
     nblocks, blocksizes, Cranges
 end
 
+function getblocksizes(N, m, blocksize, nblockcenter, block_partition, Vee;
+    verbose = false)
+    block_partition === nothing && return getblocksizes(N, m, blocksize; verbose)
+    block_partition isa SliceLayout || error("block_partition must be a SliceLayout")
+    nblockcenter >= 1 || error("block_partition requires nblockcenter >= 1")
+    dims, offs = block_partition.dims, block_partition.offs
+    valid = !isempty(dims) && all(>(0), dims) && offs == [0; cumsum(dims)] &&
+            offs[end] == N
+    valid || error("block_partition must cover exactly 1:N with nonempty contiguous ranges")
+    nblocks = length(dims)
+    nblocks >= 5 || error("block_partition must contain at least five blocks")
+    nblocks >= nblockcenter + 4 || error("block_partition has too few blocks for nblockcenter")
+    if hasproperty(Vee, :layout) && getproperty(Vee, :layout) isa SliceLayout
+        layout = getproperty(Vee, :layout)
+        (layout.dims == dims && layout.offs == offs) ||
+            error("block_partition must exactly match the backend SliceLayout")
+    end
+    blocksizes = copy(dims)
+    Cranges = [orb_range(block_partition, b) for b = 1:nblocks]
+    verbose && @show nblocks, blocksizes
+    nblocks, blocksizes, Cranges
+end
+
 function getfinal(H, N)
     function fl(x, r)
         res = findlast(x, r)
@@ -495,6 +518,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     restricted = false,
     nblockcenter = 1,
     blocksize = 200,
+    block_partition = nothing,
     maxiter = 1000,
     cutoff = 1e-11,
     scf_cutoff = nothing,
@@ -505,7 +529,8 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     finalindsH, firstindsH = getfinal(H, N)
     m = restricted ? Nup : Nup + Ndn
     psiall = restricted ? psiup0 : hcat(psiup0, psidn0)
-    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize; verbose)
+    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
+        block_partition, Vee; verbose)
     block = getinitialblocks(nblocks, blocksizes, Cranges, psiall, H, Vee, firstindsH, finalindsH; verbose)
 
     Lra = block[1].ra
@@ -650,6 +675,7 @@ end
 function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     nblockcenter = 1,
     blocksize = 200,
+    block_partition = nothing,
     maxiter = 1000,
     cutoff = 1e-11,
     scf_cutoff = nothing,
@@ -665,7 +691,8 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     finalindsH, firstindsH = getfinal(Hup, Hdn, N)
     m = Nup + Ndn
     psiall = hcat(psiup0, psidn0)
-    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize; verbose)
+    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
+        block_partition, Vee; verbose)
     block = getinitialblocks_split(nblocks, blocksizes, Cranges, psiall, Hup, Hdn,
         Vee, firstindsH, finalindsH; verbose)
 
