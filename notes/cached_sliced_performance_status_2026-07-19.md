@@ -7,7 +7,10 @@ Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
 M3 implementation commit: `ce20a73`
 M4 implementation commit: `1c2a837`
 M5 runner commit: `6054a2d`
-Status: **Milestone 5 executed but not accepted on macmini; held for paper-manager review after frozen convergence and branch gates failed**
+M5 evidence commit: `ead4a4b`
+M5 paper-review commit: `fd68f84`
+M5b runner commit: `b06388e`
+Status: **Cached implementation accepted; original frozen M5 compound gate remains failed; M5b characterization complete on macmini and awaiting paper-manager review**
 
 Solver architecture, implementation, and line-budget ownership remain with
 `hfdmrg-manager`. `hfdmrg-paper-manager` reviews whether the partition,
@@ -815,8 +818,113 @@ The `S2` and `Zspin` deviations are `3.19e-5` and `1.47e-4`, also above their
 The recent energy tail contracts smoothly by about `0.793` per sweep, which
 suggests approximately ten additional sweeps to the energy cutoff. That is a
 diagnosis only: the frozen 50-sweep cap was not widened and no extra sweep was
-run. M5 is therefore **executed but not accepted** pending paper-manager
-review.
+run. The frozen M5 result therefore remains **executed but not accepted**;
+paper-manager review `fd68f84` accepted the cached implementation while
+authorizing the separate M5b characterization below.
+
+## Milestone 5b Convergence Characterization
+
+M5b ran at commit `b06388e3bfed1102750e6ba271cd9759abfddea5`
+from the original frozen distant seed and the same packet, whose SHA256 remains
+`fba29651c02cde3cdde90850d90ba30a1abd120ebfa8ac8b64cf2e5a92fea629`.
+The host was `rh310l.ps.uci.edu` (Apple M4 Pro), with Julia `1.12.6`, one
+Julia thread, eight-thread ILP64 OpenBLAS, the repository project, and the
+normal home depot. The runner recorded both outer-policy inputs and retained
+`scf_cutoff=1e-12`.
+
+The ordinary-policy run used an 80-sweep cap and stopped normally at sweep 60:
+
+```text
+/Users/srw/.julia/juliaup/julia-1.12.6+0.aarch64.apple.darwin14/Julia-1.12.app/Contents/Resources/julia/bin/julia --project=. /Users/srw/Library/CloudStorage/Dropbox/codexhome/work/hfdmrg/scripts/bench_radial_be.jl --packet=/Users/srw/dmrgtmp/hfdmrg_radial_be_20260718/radial_be_lmax2_v1.ser --outdir=/Users/srw/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/ordinary80 --modes=converge --max-sweeps=80 --energy-cutoff=1e-11
+```
+
+At sweep 60, `converged=true` and the energy change is
+`9.608314144315955e-12 Ha`. The independent energy mismatch is `3.55e-15 Ha`,
+the residual is `1.1839560276130516e-5`, the minimum oracle singular value is
+`0.9999999999659096`, and the maximum projector distance is
+`1.1677615808075523e-5`. Thus ordinary energy convergence precedes the strict
+projector and fingerprint crossings; this does not revise the failed frozen
+50-sweep M5 result.
+
+The diagnostic run disabled only the outer energy stopping cutoff and
+completed exactly 140 sweeps with every recorded `converged` flag false:
+
+```text
+/Users/srw/.julia/juliaup/julia-1.12.6+0.aarch64.apple.darwin14/Julia-1.12.app/Contents/Resources/julia/bin/julia --project=. /Users/srw/Library/CloudStorage/Dropbox/codexhome/work/hfdmrg/scripts/bench_radial_be.jl --packet=/Users/srw/dmrgtmp/hfdmrg_radial_be_20260718/radial_be_lmax2_v1.ser --outdir=/Users/srw/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/trace140 --modes=converge --max-sweeps=140 --energy-cutoff=0
+```
+
+For both runs, all 17 reduced diagnostic/count columns in the first 50 rows
+match the original frozen M5 TSV byte-for-byte. The ordinary and diagnostic
+reduced rows also match each other through sweep 60. Their raw first-50 rows
+differ only in measured per-sweep wall time, which is deliberately absent from
+the reduced schema. The complete diagnostic reduction is
+[the M5b 140-sweep TSV](cached_sliced_performance_m5b_sweeps_2026-07-20.tsv).
+
+The unchanged thresholds cross as follows:
+
+| Quantity | Unchanged threshold | First satisfying sweep | Behavior through sweep 140 |
+|---|---:|---:|---|
+| Energy distance to oracle | `<=1e-8 Ha` | 36 | remains satisfied |
+| Minimum oracle singular value | `>=0.9999999999` | 56 | remains satisfied |
+| Outer energy change | `<1e-11 Ha` | 60 | remains satisfied |
+| Maximum projector distance | `<=1e-5` | 62 | remains satisfied |
+| S2 deviation | `<=1e-6` | 76 | remains satisfied |
+| Z-spin deviation | `<=1e-6` | 83 | satisfied only on sweeps 83--88; fails again from 89 |
+
+Consequently, every listed gate is simultaneously satisfied only on sweeps
+83--88. M5b does not establish durable compound convergence.
+
+The requested stationarity samples are:
+
+| Sweep | Full-Fock occupied-virtual residual |
+|---:|---:|
+| 60 | `1.1839560276130516e-5` |
+| 80 | `1.3887387873244252e-6` |
+| 100 | `6.46278557480718e-7` |
+| 120 | `6.329282407758813e-7` |
+| 140 | `6.327558312251281e-7` |
+
+The minimum residual is `6.326041405618836e-7` at sweep 134, about `47.9`
+times the saved oracle residual. Reported energy decreases monotonically
+through sweep 80. Thereafter it oscillates at the numerical floor: the largest
+upward reported step is `2.56e-13 Ha`, and the largest upward independently
+recomputed step is `9.41e-14 Ha`. The reported step is below the
+`128eps(Float64)` scale allowance of `4.14e-13 Ha`. The energy-change gate
+remains satisfied; this is a roundoff-scale plateau, not a material energy
+reversal. The prior geometric estimate of reaching the oracle residual near
+sweep 123 was therefore not realized under the frozen policy.
+
+Every row in both runs records 98 windows, 98 incremental absorptions, 98
+local cached windows, zero cache fallbacks, and zero projection windows. Across
+the 140-sweep trace, the largest independent returned-energy mismatch is
+`2.20e-13 Ha`, and the largest orthonormality or idempotency error is
+`4.55e-15`. After sweep 50, the oracle-energy, projector, S2, and Z-spin
+distances never regress beyond their sweep-50 values, and the minimum singular
+value never regresses below its sweep-50 value. At sweep 140 the energy is
+within `1.62e-13 Ha` of the oracle, the minimum singular value is
+`0.999999999999881`, the maximum projector distance is `6.88e-7`, and the S2
+deviation is `6.56e-7`; the occupied branch therefore remains continuous.
+The Z-spin deviation is `2.81e-6`, so the exact saved-oracle fingerprint does
+not remain fully recovered, and the residual has reached a higher stationarity
+floor.
+
+The exact raw records are:
+
+```text
+ordinary log: ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/ordinary80.log
+ordinary PID: 42923 at ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/ordinary80/bench_radial_be.pid
+ordinary TSV: ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/ordinary80/convergence.tsv
+trace log:    ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/trace140.log
+trace PID:    42970 at ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/trace140/bench_radial_be.pid
+trace TSV:    ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/trace140/convergence.tsv
+analysis log: ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m5b_be/analysis.log
+```
+
+Both run logs end in successful completion, both recorded PIDs have exited,
+and both final serialized checkpoints pass readback at sweeps 60 and 140.
+M5b made only the committed validation-runner amendment (`+16/-17`); it made
+no production or test change and reran no projection, timing, package, or
+fixed/ragged validation.
 
 ## Validation Ladder
 
@@ -927,8 +1035,10 @@ source, tests, scripts, and user/architecture documentation:
 | M3 | Cached source/tests, both sliced scripts, cached example, user/architecture docs | `300` actual (`300` cap) | `829` actual (`360` target) |
 | M4 | `src/core.jl`, `test/runtests.jl`, `docs/backend_architecture.md` | `86` actual (`90` amended cap) | `20` actual (`15` target) |
 | M5 validation runner | `scripts/bench_radial_be.jl` | `275` actual (`220` preferred) | `0` actual |
+| M5b runner amendment | `scripts/bench_radial_be.jl` | `16` actual (net `-1`; `<=20` net-addition cap) | `17` actual |
 | **M3 + M4** | | **`386` actual after M4 amendment** | **`849` actual** |
 | **Program total through M5 runner** | | **`1038` actual** | **`976` actual** |
+| **Program total through M5b runner** | | **`1054` actual** | **`993` actual** |
 
 Target net growth is at most `260` lines. Stop for renewed design review if a
 milestone exceeds its cap, needs `backend_api.jl`, introduces another public
@@ -955,6 +1065,10 @@ its preferred `220`-line cap by `55`. The cap was preferred rather than a hard
 stop; the runner adds no source, public API, test, framework, or machine path.
 Including it, the counted program has `1038` additions and `976` deletions,
 for net growth of `62` lines, still below the `260`-line program target.
+The M5b amendment adds `16` and deletes `17`, shrinking the runner to `274`
+lines and bringing the counted program to `1054` additions and `993`
+deletions, or net growth of `61` lines. It therefore stays within the amended
+`20`-net-addition M5b cap.
 
 Milestone 2 specifically replaces the scalar global raw-cache loops. Milestone
 3 deleted:
@@ -1010,12 +1124,15 @@ Paper-manager and faraday accepted M3 through `22f7c07`; paper-manager accepted
 M4 and authorized the frozen M5 campaign in `6e9febc`. M5 was executed at
 `6054a2d`: parity, timing, allocation, RSS, route, and independent-energy gates
 pass, but frozen convergence, occupied-subspace, and branch-fingerprint gates
-do not pass within 50 sweeps. Solver architecture and implementation ownership
-remain with `hfdmrg-manager`.
+do not pass within 50 sweeps. Paper-manager accepted the cached implementation
+and authorized bounded M5b characterization in `fd68f84`; the runner amendment
+is `b06388e`. Solver architecture and implementation ownership remain with
+`hfdmrg-manager`.
 
-The exact next action is paper-manager review of the M5 evidence and failed
-frozen gates. Do not run the estimated additional sweeps, change production or
-tests, alter solver/scientific policy, or soften a gate without renewed
+The exact next action is paper-manager review of the M5b convergence-tail
+evidence, especially the residual plateau and transient Z-spin crossing. Do
+not change production or tests, rerun performance/projection validation,
+implement acceleration, or rewrite a scientific gate without renewed
 authority.
 
 -- hfdmrg-manager@macmini
