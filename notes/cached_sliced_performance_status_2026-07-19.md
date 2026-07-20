@@ -5,6 +5,7 @@ Owner: `hfdmrg-manager`
 Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
 M3 implementation commit: `ce20a73`
+M4 implementation commit: `1c2a837`
 Status: **Milestone 4 validated on macmini; awaiting paper-manager review before M5**
 
 Solver architecture, implementation, and line-budget ownership remain with
@@ -754,22 +755,24 @@ rank-four retained blocks, one center slice, and four forced local updates.
 Only delegated backend Fock time and allocation are compared; this is not a
 complete-sweep speedup claim. One warmup preceded three measured trials.
 
-| Metric | Pre-M4 | M4 worktree | Change |
+| Metric | Pre-M4 | M4 `1c2a837` | Change |
 |---|---:|---:|---:|
 | Calls per trial | `208` | `130` | `-37.5%` |
 | Calls per window | `8` | `5` | `-37.5%` |
-| Median delegated Fock time | `0.736171 s` | `0.463363 s` | `-37.058%` |
+| Median delegated Fock time | `0.736171 s` | `0.460419 s` | `-37.458%` |
 | Delegated allocation | `80.212 MiB` | `50.133 MiB` | `-37.5%` |
 
-The post-M4 three-trial timing range is `0.462895-0.464995 s`. The saved
+The post-M4 three-trial timing range is `0.458700-0.462582 s`. The saved
 baseline and comparison records are under:
 
 ```text
 ~/dmrgtmp/hfdmrg_cached_sliced_20260719/pre_m4_baseline_b3362f3.jls
 ~/dmrgtmp/hfdmrg_cached_sliced_20260719/pre_m4_observer_history_b3362f3.jls
 ~/dmrgtmp/hfdmrg_cached_sliced_20260719/pre_m4_projection_timing_b3362f3.log
-~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_compare_b3362f3_worktree.log
-~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_projection_timing_b3362f3_worktree.log
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_compare_1c2a837.log
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_compare_1c2a837.pid
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_projection_timing_1c2a837.log
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_projection_timing_1c2a837.pid
 ```
 
 These remain engineering measurements. M5 end-to-end Be timing, peak memory,
