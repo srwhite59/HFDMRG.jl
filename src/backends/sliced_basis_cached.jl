@@ -1,8 +1,8 @@
 """
-Cached sliced-basis backend (correctness-first).
+Cached sliced-basis backend.
 
-Uses per-slice basis coefficients to build superblock Fock contributions without
-embedding into the full orbital basis.
+Uses retained per-slice and environment tensors for aligned local Fock builds;
+windows that split a slice delegate to the projection backend.
 """
 struct SlicedBasisBackendCached{T}
     layout::SliceLayout
@@ -22,14 +22,12 @@ struct SlicedCachedBlockState
 end
 
 struct SlicedBasisCachedWindow{T}
-    S::Vector{Matrix{Float64}}
     V::T
     layout::SliceLayout
-    ns::Int
     ml::Int
     lc::Int
     mr::Int
-    split_slices::Vector{Int}
+    center_slices::UnitRange{Int}
     VLL::Array{Float64,4}
     VRR::Array{Float64,4}
     WL::Vector{Array{Float64,4}}
@@ -38,30 +36,15 @@ struct SlicedBasisCachedWindow{T}
     WRswap::Vector{Array{Float64,4}}
     VLR::Array{Float64,4}
     VRL::Array{Float64,4}
-    center_slice::Vector{Int}
-    center_local::Vector{Int}
-    center_cols::Vector{Vector{Int}}
-    Srho::Vector{Matrix{Float64}}
-    Srho_up::Vector{Matrix{Float64}}
-    Srho_dn::Vector{Matrix{Float64}}
-    rho_slice::Vector{Matrix{Float64}}
-    rho_slice_up::Vector{Matrix{Float64}}
-    rho_slice_dn::Vector{Matrix{Float64}}
-    K::Vector{Matrix{Float64}}
-    tmp_n::Vector{Matrix{Float64}}
 end
 
 const _bench_timing = Dict{Symbol, Float64}(
-    :direct_LL_RR => 0.0,
-    :direct_CL_CR => 0.0,
-    :direct_LR => 0.0,
-    :exchange => 0.0,
     :cache_init_calls => 0.0,
     :cache_incremental_calls => 0.0,
     :cache_fallback_calls => 0.0,
+    :window_local_calls => 0.0,
+    :window_projection_calls => 0.0,
 )
-
-# Keep the historical timing keys for compatibility with scripts/bench_sliced.jl.
 
 _bench_timing_enabled() = !isempty(get(ENV, "HFDMRG_BENCH_TIMING", ""))
 
@@ -260,48 +243,25 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
     N = backend.layout.offs[end]
     Rra[end] <= N || error("ranges exceed full basis size")
 
+    aligned = first(Lra) == 1 && last(Lra) + 1 == first(Cra) &&
+        last(Cra) + 1 == first(Rra) && last(Rra) == N &&
+        _whole_slice_range(backend.layout, Lra) &&
+        _whole_slice_range(backend.layout, Cra) &&
+        _whole_slice_range(backend.layout, Rra)
+    if !aligned
+        _bench_timing_enabled() && (_bench_timing[:window_projection_calls] += 1)
+        projection = SlicedBasisBackend(backend.layout, backend.V)
+        return vee_window(SlicedBlockState(Lra, Lvee.phi),
+            SlicedBlockState(Rra, Rvee.phi), Cra, projection)
+    end
+    _bench_timing_enabled() && (_bench_timing[:window_local_calls] += 1)
+
     ml = size(Lvee.phi, 2)
     mr = size(Rvee.phi, 2)
     lc = length(Cra)
-    superdim = ml + lc + mr
-    ns = backend.ns
     dims = backend.layout.dims
-    S = [zeros(Float64, dims[s], superdim) for s = 1:ns]
-    for s = 1:ns
-        S[s][:, 1:ml] = Lvee.P[s]
-        S[s][:, ml + lc + 1:end] = Rvee.P[s]
-    end
-    for (idx, p) in enumerate(Cra)
-        n, a = _slice_local(backend.layout, p)
-        S[n][a, ml + idx] = 1.0
-    end
-    center_slice = zeros(Int, lc)
-    center_local = zeros(Int, lc)
-    center_cols = [fill(0, dims[s]) for s in 1:ns]
-    for (idx, p) in enumerate(Cra)
-        n, a = _slice_local(backend.layout, p)
-        center_slice[idx] = n
-        center_local[idx] = a
-        center_cols[n][a] = ml + idx
-    end
-
-    split_slices = Int[]
-    for s = 1:ns
-        has_center = any(c -> c != 0, center_cols[s])
-        has_block = any(!iszero, Lvee.P[s]) || any(!iszero, Rvee.P[s])
-        if has_center && has_block
-            push!(split_slices, s)
-        end
-    end
-
-    Srho = [zeros(Float64, dims[s], superdim) for s = 1:ns]
-    Srho_up = [zeros(Float64, dims[s], superdim) for s = 1:ns]
-    Srho_dn = [zeros(Float64, dims[s], superdim) for s = 1:ns]
-    rho_slice = [zeros(Float64, dims[s], dims[s]) for s = 1:ns]
-    rho_slice_up = [zeros(Float64, dims[s], dims[s]) for s = 1:ns]
-    rho_slice_dn = [zeros(Float64, dims[s], dims[s]) for s = 1:ns]
-    K = [zeros(Float64, dims[s], dims[s]) for s = 1:ns]
-    tmp_n = [zeros(Float64, dims[s], superdim) for s = 1:ns]
+    center_slices = (first(_slice_local(backend.layout, first(Cra))):
+        first(_slice_local(backend.layout, last(Cra))))
 
     VLR = zeros(Float64, ml, ml, mr, mr)
     VRL = zeros(Float64, mr, mr, ml, ml)
@@ -310,548 +270,124 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
     maxd = maximum(dims)
     Utmp_R = zeros(Float64, maxd * maxd, mr * mr)
     Utmp_L = zeros(Float64, maxd * maxd, ml * ml)
-    for s = 1:ns
+    for s in _active_slices(backend.layout, Rra)
         ds = dims[s]
-        if any(!iszero, Rvee.P[s])
-            Uview = view(Utmp_R, 1:(ds * ds), :)
-            _pair_map_mat!(Uview, Rvee.P[s])
-            WL_mat = reshape(Lvee.W[s], ml * ml, ds * ds)
-            mul!(VLR_mat, WL_mat, Uview, 1.0, 1.0)
-        end
-        if any(!iszero, Lvee.P[s])
-            Uview = view(Utmp_L, 1:(ds * ds), :)
-            _pair_map_mat!(Uview, Lvee.P[s])
-            WR_mat = reshape(Rvee.W[s], mr * mr, ds * ds)
-            mul!(VRL_mat, WR_mat, Uview, 1.0, 1.0)
-        end
+        Uview = view(Utmp_R, 1:(ds * ds), :)
+        _pair_map_mat!(Uview, Rvee.P[s])
+        mul!(VLR_mat, reshape(Lvee.W[s], ml * ml, ds * ds), Uview, 1.0, 1.0)
+    end
+    for s in _active_slices(backend.layout, Lra)
+        ds = dims[s]
+        Uview = view(Utmp_L, 1:(ds * ds), :)
+        _pair_map_mat!(Uview, Lvee.P[s])
+        mul!(VRL_mat, reshape(Rvee.W[s], mr * mr, ds * ds), Uview, 1.0, 1.0)
     end
 
-    SlicedBasisCachedWindow(S, backend.V, backend.layout, ns, ml, lc, mr, split_slices,
-        Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, Lvee.Wswap, Rvee.Wswap, VLR, VRL,
-        center_slice, center_local, center_cols, Srho, Srho_up, Srho_dn, rho_slice,
-        rho_slice_up, rho_slice_dn, K, tmp_n)
+    SlicedBasisCachedWindow(backend.V, backend.layout, ml, lc, mr, center_slices,
+        Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, Lvee.Wswap, Rvee.Wswap, VLR, VRL)
+end
+
+# Pair-grouped tensors store T[x,z;y,w]. Vijkl retains the conventional
+# T[x,y,z,w] order, while Wswap reverses the two grouped region pairs.
+@inline _sector_value(V, x, z, y, w, ::Val{:pair_grouped}) = V[x, z, y, w]
+@inline _sector_value(V, x, z, y, w, ::Val{:four_index}) = V[x, y, z, w]
+@inline _sector_value(V, x, z, y, w, ::Val{:pair_swapped}) = V[y, w, x, z]
+
+function _add_cached_sector!(Fup, Fdn, rhoup, rhodn, V, xoff, yoff, nx, ny,
+    ordering, ::Val{restricted}) where {restricted}
+    @inbounds for w = 1:ny, y = 1:ny, z = 1:nx, x = 1:nx
+        px, pz = xoff + x, xoff + z
+        py, pw = yoff + y, yoff + w
+        v = _sector_value(V, x, z, y, w, ordering)
+        if restricted
+            Fup[px, pz] += 2.0 * rhoup[py, pw] * v
+            Fup[px, pw] -= rhoup[pz, py] * v
+        else
+            direct = (rhoup[py, pw] + rhodn[py, pw]) * v
+            Fup[px, pz] += direct
+            Fdn[px, pz] += direct
+            Fup[px, pw] -= rhoup[pz, py] * v
+            Fdn[px, pw] -= rhodn[pz, py] * v
+        end
+    end
+    nothing
+end
+
+function _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
+    ml, lc, mr = win.ml, win.lc, win.mr
+    roff = ml + lc
+    dims = win.layout.dims
+    grouped = Val(:pair_grouped)
+    swapped = Val(:pair_swapped)
+    four_index = Val(:four_index)
+
+    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.VLL, 0, 0, ml, ml,
+        four_index, restricted)
+    coff = ml
+    for s in win.center_slices
+        ds = dims[s]
+        _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.WL[s], 0, coff, ml, ds,
+            grouped, restricted)
+        coff += ds
+    end
+    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.VLR, 0, roff, ml, mr,
+        grouped, restricted)
+
+    coff = ml
+    for s in win.center_slices
+        ds = dims[s]
+        _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.WLswap[s], coff, 0, ds, ml,
+            swapped, restricted)
+        coff += ds
+    end
+    xoff = ml
+    for sx in win.center_slices
+        yoff = ml
+        for sy in win.center_slices
+            _add_cached_sector!(Fup, Fdn, rhoup, rhodn, _slice_vee(win.V, sx, sy),
+                xoff, yoff, dims[sx], dims[sy], grouped, restricted)
+            yoff += dims[sy]
+        end
+        xoff += dims[sx]
+    end
+    coff = ml
+    for s in win.center_slices
+        ds = dims[s]
+        _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.WRswap[s], coff, roff, ds, mr,
+            swapped, restricted)
+        coff += ds
+    end
+
+    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.VRL, roff, 0, mr, ml,
+        grouped, restricted)
+    coff = ml
+    for s in win.center_slices
+        ds = dims[s]
+        _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.WR[s], roff, coff, mr, ds,
+            grouped, restricted)
+        coff += ds
+    end
+    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.VRR, roff, roff, mr, mr,
+        four_index, restricted)
+    nothing
 end
 
 function vee_add_fock_r!(F, rho, win::SlicedBasisCachedWindow)
-    S = win.S
-    V = win.V
-    dims = win.layout.dims
-    ns = win.ns
-    ml, lc, mr = win.ml, win.lc, win.mr
     n = size(F, 1)
     size(F) == (n, n) || error("F has wrong size")
     size(rho) == size(F) || error("rho has wrong size")
-    ml + lc + mr == n || error("window dimensions do not match F")
-
-    center_cols = win.center_cols
-    Srho = win.Srho
-    @views for n1 = 1:ns
-        mul!(Srho[n1], S[n1], rho, 1.0, 0.0)
-    end
-    split_slices = win.split_slices
-    timing = _bench_timing_enabled()
-    if isempty(split_slices)
-        # Exchange (K) contributions via cached tensors.
-        VLL = win.VLL
-        if timing
-            t0 = time_ns()
-        end
-        for i = 1:ml, l = 1:ml
-            acc = 0.0
-            for j = 1:ml, k = 1:ml
-                acc += rho[k, j] * VLL[i, j, k, l]
-            end
-            F[i, l] -= acc
-        end
-
-        VRR = win.VRR
-        for i = 1:mr, l = 1:mr
-            acc = 0.0
-            for j = 1:mr, k = 1:mr
-                acc += rho[ml + lc + k, ml + lc + j] * VRR[i, j, k, l]
-            end
-            F[ml + lc + i, ml + lc + l] -= acc
-        end
-        if timing
-            _bench_timing[:direct_LL_RR] += (time_ns() - t0) * 1e-9
-        end
-
-        if timing
-            t0 = time_ns()
-        end
-        for np = 1:ns
-            cols_p = center_cols[np]
-            any(c -> c != 0, cols_p) || continue
-            for nq = 1:ns
-                cols_q = center_cols[nq]
-                any(c -> c != 0, cols_q) || continue
-                rho_nm = Matrix{Float64}(undef, length(cols_p), length(cols_q))
-                mul!(rho_nm, Srho[np], S[nq]', 1.0, 0.0)
-                Vpq = _slice_vee(V, np, nq)
-                for a = 1:length(cols_p)
-                    col_a = cols_p[a]
-                    col_a == 0 && continue
-                    for d = 1:length(cols_q)
-                        col_d = cols_q[d]
-                        col_d == 0 && continue
-                        acc = 0.0
-                        for b = 1:length(cols_p), c = 1:length(cols_q)
-                            acc += rho_nm[b, c] * Vpq[a, b, c, d]
-                        end
-                        F[col_a, col_d] -= acc
-                    end
-                end
-            end
-        end
-
-        WL = win.WL
-        WLswap = win.WLswap
-        for s = 1:ns
-            cols = center_cols[s]
-            for b = 1:length(cols)
-                col_b = cols[b]
-                col_b == 0 && continue
-                for i = 1:ml
-                    acc = 0.0
-                    for a = 1:length(cols)
-                        col_a = cols[a]
-                        col_a == 0 && continue
-                        for j = 1:ml
-                            acc += rho[j, col_a] * WL[s][i, j, a, b]
-                        end
-                    end
-                    F[i, col_b] -= acc
-                end
-            end
-            for a = 1:length(cols)
-                col_a = cols[a]
-                col_a == 0 && continue
-                for j = 1:ml
-                    acc = 0.0
-                    for b = 1:length(cols)
-                        col_b = cols[b]
-                        col_b == 0 && continue
-                        for i = 1:ml
-                            acc += rho[col_b, i] * WLswap[s][i, j, a, b]
-                        end
-                    end
-                    F[col_a, j] -= acc
-                end
-            end
-        end
-
-        WR = win.WR
-        WRswap = win.WRswap
-        for s = 1:ns
-            cols = center_cols[s]
-            for b = 1:length(cols)
-                col_b = cols[b]
-                col_b == 0 && continue
-                for i = 1:mr
-                    acc = 0.0
-                    for a = 1:length(cols)
-                        col_a = cols[a]
-                        col_a == 0 && continue
-                        for j = 1:mr
-                            acc += rho[ml + lc + j, col_a] * WR[s][i, j, a, b]
-                        end
-                    end
-                    F[ml + lc + i, col_b] -= acc
-                end
-            end
-            for a = 1:length(cols)
-                col_a = cols[a]
-                col_a == 0 && continue
-                for j = 1:mr
-                    acc = 0.0
-                    for b = 1:length(cols)
-                        col_b = cols[b]
-                        col_b == 0 && continue
-                        for i = 1:mr
-                            acc += rho[col_b, ml + lc + i] * WRswap[s][i, j, a, b]
-                        end
-                    end
-                    F[col_a, ml + lc + j] -= acc
-                end
-            end
-        end
-        if timing
-            _bench_timing[:direct_CL_CR] += (time_ns() - t0) * 1e-9
-        end
-
-        VLR = win.VLR
-        VRL = win.VRL
-
-        if timing
-            t0 = time_ns()
-        end
-        for i = 1:ml, l = 1:mr
-            acc = 0.0
-            for j = 1:ml, k = 1:mr
-                acc += rho[j, ml + lc + k] * VLR[i, j, k, l]
-            end
-            F[i, ml + lc + l] -= acc
-        end
-        for k = 1:mr, j = 1:ml
-            acc = 0.0
-            for l = 1:mr, i = 1:ml
-                acc += rho[ml + lc + l, i] * VRL[k, l, i, j]
-            end
-            F[ml + lc + k, j] -= acc
-        end
-        if timing
-            _bench_timing[:direct_LR] += (time_ns() - t0) * 1e-9
-        end
-    else
-        # Correctness-first path: when any slice is split, exchange falls back to
-        # full slice-projection to maintain parity with the projection backend.
-        # This is intentionally non-local.
-        if timing
-            t0 = time_ns()
-        end
-        superdim = size(F, 1)
-        for n1 = 1:ns
-            dn = dims[n1]
-            for m = 1:ns
-                dm = dims[m]
-                rho_nm = Matrix{Float64}(undef, dn, dm)
-                mul!(rho_nm, Srho[n1], S[m]', 1.0, 0.0)
-                Vnm = _slice_vee(V, n1, m)
-                Knm = Matrix{Float64}(undef, dn, dm)
-                for a = 1:dn, d = 1:dm
-                    acc = 0.0
-                    for b = 1:dn, c = 1:dm
-                        acc += rho_nm[b, c] * Vnm[a, b, c, d]
-                    end
-                    Knm[a, d] = acc
-                end
-                tmp = Matrix{Float64}(undef, dn, superdim)
-                mul!(tmp, Knm, S[m], 1.0, 0.0)
-                mul!(F, S[n1]', tmp, -1.0, 1.0)
-            end
-        end
-        if timing
-            _bench_timing[:direct_CL_CR] += (time_ns() - t0) * 1e-9
-        end
-    end
-
-    # J[p,r] is block diagonal in the output slice pair (p,r).
-    if timing
-        t0 = time_ns()
-    end
-    rho_slice = win.rho_slice
-    J = win.K
-    tmp_n = win.tmp_n
-    @views for n1 = 1:ns
-        mul!(rho_slice[n1], Srho[n1], S[n1]', 1.0, 0.0)
-    end
-    @views for n1 = 1:ns
-        J1 = J[n1]
-        Jvec = reshape(J1, :)
-        fill!(Jvec, 0.0)
-        dn1 = dims[n1]
-        dn1sq = dn1 * dn1
-        for n2 = 1:ns
-            dn2 = dims[n2]
-            Vnm = _slice_vee(V, n1, n2)
-            Vpair = reshape(Vnm, dn1sq, dn2 * dn2)
-            rvec = reshape(rho_slice[n2], dn2 * dn2)
-            mul!(Jvec, Vpair, rvec, 1.0, 1.0)
-        end
-        tmp = tmp_n[n1]
-        mul!(tmp, J1, S[n1], 1.0, 0.0)
-        mul!(F, S[n1]', tmp, 2.0, 1.0)
-    end
-    if timing
-        _bench_timing[:exchange] += (time_ns() - t0) * 1e-9
-    end
-
+    win.ml + win.lc + win.mr == n || error("window dimensions do not match F")
+    _add_cached_fock!(F, F, rho, rho, win, Val(true))
 end
 
 function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::SlicedBasisCachedWindow)
-    S = win.S
-    V = win.V
-    dims = win.layout.dims
-    ns = win.ns
-    ml, lc, mr = win.ml, win.lc, win.mr
     n = size(Fup, 1)
     size(Fup) == (n, n) || error("Fup has wrong size")
     size(Fdn) == (n, n) || error("Fdn has wrong size")
     size(rhoup) == size(Fup) || error("rhoup has wrong size")
     size(rhodn) == size(Fup) || error("rhodn has wrong size")
-    ml + lc + mr == n || error("window dimensions do not match F")
-
-    center_cols = win.center_cols
-    Srho = win.Srho
-    Srho_up = win.Srho_up
-    Srho_dn = win.Srho_dn
-    VLR = win.VLR
-    VRL = win.VRL
-
-    @views for n1 = 1:ns
-        S1 = S[n1]
-        mul!(Srho_up[n1], S1, rhoup, 1.0, 0.0)
-        mul!(Srho_dn[n1], S1, rhodn, 1.0, 0.0)
-        Srho[n1] .= Srho_up[n1]
-        Srho[n1] .+= Srho_dn[n1]
-    end
-    split_slices = win.split_slices
-    timing = _bench_timing_enabled()
-    if isempty(split_slices)
-        # Exchange (K) contributions via cached tensors.
-        VLL = win.VLL
-        if timing
-            t0 = time_ns()
-        end
-        for i = 1:ml, l = 1:ml
-            acc_up = 0.0
-            acc_dn = 0.0
-            for j = 1:ml, k = 1:ml
-                v = VLL[i, j, k, l]
-                acc_up += rhoup[k, j] * v
-                acc_dn += rhodn[k, j] * v
-            end
-            Fup[i, l] -= acc_up
-            Fdn[i, l] -= acc_dn
-        end
-
-        VRR = win.VRR
-        for i = 1:mr, l = 1:mr
-            acc_up = 0.0
-            acc_dn = 0.0
-            for j = 1:mr, k = 1:mr
-                v = VRR[i, j, k, l]
-                acc_up += rhoup[ml + lc + k, ml + lc + j] * v
-                acc_dn += rhodn[ml + lc + k, ml + lc + j] * v
-            end
-            Fup[ml + lc + i, ml + lc + l] -= acc_up
-            Fdn[ml + lc + i, ml + lc + l] -= acc_dn
-        end
-        if timing
-            _bench_timing[:direct_LL_RR] += (time_ns() - t0) * 1e-9
-        end
-
-        if timing
-            t0 = time_ns()
-        end
-        for np = 1:ns
-            cols_p = center_cols[np]
-            any(c -> c != 0, cols_p) || continue
-            for nq = 1:ns
-                cols_q = center_cols[nq]
-                any(c -> c != 0, cols_q) || continue
-                rho_nm_up = Matrix{Float64}(undef, length(cols_p), length(cols_q))
-                rho_nm_dn = Matrix{Float64}(undef, length(cols_p), length(cols_q))
-                mul!(rho_nm_up, Srho_up[np], S[nq]', 1.0, 0.0)
-                mul!(rho_nm_dn, Srho_dn[np], S[nq]', 1.0, 0.0)
-                Vpq = _slice_vee(V, np, nq)
-                for a = 1:length(cols_p)
-                    col_a = cols_p[a]
-                    col_a == 0 && continue
-                    for d = 1:length(cols_q)
-                        col_d = cols_q[d]
-                        col_d == 0 && continue
-                        acc_up = 0.0
-                        acc_dn = 0.0
-                        for b = 1:length(cols_p), c = 1:length(cols_q)
-                            v = Vpq[a, b, c, d]
-                            acc_up += rho_nm_up[b, c] * v
-                            acc_dn += rho_nm_dn[b, c] * v
-                        end
-                        Fup[col_a, col_d] -= acc_up
-                        Fdn[col_a, col_d] -= acc_dn
-                    end
-                end
-            end
-        end
-
-        WL = win.WL
-        WLswap = win.WLswap
-        for s = 1:ns
-            cols = center_cols[s]
-            for b = 1:length(cols)
-                col_b = cols[b]
-                col_b == 0 && continue
-                for i = 1:ml
-                    acc_up = 0.0
-                    acc_dn = 0.0
-                    for a = 1:length(cols)
-                        col_a = cols[a]
-                        col_a == 0 && continue
-                        for j = 1:ml
-                            v = WL[s][i, j, a, b]
-                            acc_up += rhoup[j, col_a] * v
-                            acc_dn += rhodn[j, col_a] * v
-                        end
-                    end
-                    Fup[i, col_b] -= acc_up
-                    Fdn[i, col_b] -= acc_dn
-                end
-            end
-            for a = 1:length(cols)
-                col_a = cols[a]
-                col_a == 0 && continue
-                for j = 1:ml
-                    acc_up = 0.0
-                    acc_dn = 0.0
-                    for b = 1:length(cols)
-                        col_b = cols[b]
-                        col_b == 0 && continue
-                        for i = 1:ml
-                            v = WLswap[s][i, j, a, b]
-                            acc_up += rhoup[col_b, i] * v
-                            acc_dn += rhodn[col_b, i] * v
-                        end
-                    end
-                    Fup[col_a, j] -= acc_up
-                    Fdn[col_a, j] -= acc_dn
-                end
-            end
-        end
-
-        WR = win.WR
-        WRswap = win.WRswap
-        for s = 1:ns
-            cols = center_cols[s]
-            for b = 1:length(cols)
-                col_b = cols[b]
-                col_b == 0 && continue
-                for i = 1:mr
-                    acc_up = 0.0
-                    acc_dn = 0.0
-                    for a = 1:length(cols)
-                        col_a = cols[a]
-                        col_a == 0 && continue
-                        for j = 1:mr
-                            v = WR[s][i, j, a, b]
-                            acc_up += rhoup[ml + lc + j, col_a] * v
-                            acc_dn += rhodn[ml + lc + j, col_a] * v
-                        end
-                    end
-                    Fup[ml + lc + i, col_b] -= acc_up
-                    Fdn[ml + lc + i, col_b] -= acc_dn
-                end
-            end
-            for a = 1:length(cols)
-                col_a = cols[a]
-                col_a == 0 && continue
-                for j = 1:mr
-                    acc_up = 0.0
-                    acc_dn = 0.0
-                    for b = 1:length(cols)
-                        col_b = cols[b]
-                        col_b == 0 && continue
-                        for i = 1:mr
-                            v = WRswap[s][i, j, a, b]
-                            acc_up += rhoup[col_b, ml + lc + i] * v
-                            acc_dn += rhodn[col_b, ml + lc + i] * v
-                        end
-                    end
-                    Fup[col_a, ml + lc + j] -= acc_up
-                    Fdn[col_a, ml + lc + j] -= acc_dn
-                end
-            end
-        end
-        if timing
-            _bench_timing[:direct_CL_CR] += (time_ns() - t0) * 1e-9
-        end
-
-        if timing
-            t0 = time_ns()
-        end
-        for i = 1:ml, l = 1:mr
-            acc_up = 0.0
-            acc_dn = 0.0
-            for j = 1:ml, k = 1:mr
-                v = VLR[i, j, k, l]
-                acc_up += rhoup[j, ml + lc + k] * v
-                acc_dn += rhodn[j, ml + lc + k] * v
-            end
-            Fup[i, ml + lc + l] -= acc_up
-            Fdn[i, ml + lc + l] -= acc_dn
-        end
-        for k = 1:mr, j = 1:ml
-            acc_up = 0.0
-            acc_dn = 0.0
-            for l = 1:mr, i = 1:ml
-                v = VRL[k, l, i, j]
-                acc_up += rhoup[ml + lc + l, i] * v
-                acc_dn += rhodn[ml + lc + l, i] * v
-            end
-            Fup[ml + lc + k, j] -= acc_up
-            Fdn[ml + lc + k, j] -= acc_dn
-        end
-        if timing
-            _bench_timing[:direct_LR] += (time_ns() - t0) * 1e-9
-        end
-    else
-        # Correctness-first path: when any slice is split, exchange falls back to
-        # full slice-projection to maintain parity with the projection backend.
-        # This is intentionally non-local.
-        if timing
-            t0 = time_ns()
-        end
-        superdim = size(Fup, 1)
-        for n1 = 1:ns
-            dn = dims[n1]
-            for m = 1:ns
-                dm = dims[m]
-                Vnm = _slice_vee(V, n1, m)
-                tmp = Matrix{Float64}(undef, dn, superdim)
-                for (Fspin, Srho_spin) in ((Fup, Srho_up), (Fdn, Srho_dn))
-                    rho_nm = Matrix{Float64}(undef, dn, dm)
-                    mul!(rho_nm, Srho_spin[n1], S[m]', 1.0, 0.0)
-                    Knm = Matrix{Float64}(undef, dn, dm)
-                    for a = 1:dn, d = 1:dm
-                        acc = 0.0
-                        for b = 1:dn, c = 1:dm
-                            acc += rho_nm[b, c] * Vnm[a, b, c, d]
-                        end
-                        Knm[a, d] = acc
-                    end
-                    mul!(tmp, Knm, S[m], 1.0, 0.0)
-                    mul!(Fspin, S[n1]', tmp, -1.0, 1.0)
-                end
-            end
-        end
-        if timing
-            _bench_timing[:direct_CL_CR] += (time_ns() - t0) * 1e-9
-        end
-    end
-
-    if timing
-        t0 = time_ns()
-    end
-    rho_slice = win.rho_slice
-    @views for n1 = 1:ns
-        Sn = S[n1]
-        mul!(rho_slice[n1], Srho[n1], Sn', 1.0, 0.0)
-    end
-    # J[p,r] is block diagonal in the output slice pair (p,r).
-    J = win.K
-    tmp_n = win.tmp_n
-    @views for n1 = 1:ns
-        J1 = J[n1]
-        Jvec = reshape(J1, :)
-        fill!(Jvec, 0.0)
-        dn1 = dims[n1]
-        dn1sq = dn1 * dn1
-        for n2 = 1:ns
-            dn2 = dims[n2]
-            Vnm = _slice_vee(V, n1, n2)
-            Vpair = reshape(Vnm, dn1sq, dn2 * dn2)
-            rvec = reshape(rho_slice[n2], dn2 * dn2)
-            mul!(Jvec, Vpair, rvec, 1.0, 1.0)
-        end
-        tmp = tmp_n[n1]
-        mul!(tmp, J1, S[n1], 1.0, 0.0)
-        mul!(Fup, S[n1]', tmp, 1.0, 1.0)
-        mul!(Fdn, S[n1]', tmp, 1.0, 1.0)
-    end
-    if timing
-        _bench_timing[:exchange] += (time_ns() - t0) * 1e-9
-    end
-
+    win.ml + win.lc + win.mr == n || error("window dimensions do not match F")
+    _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, Val(false))
 end
 
 """

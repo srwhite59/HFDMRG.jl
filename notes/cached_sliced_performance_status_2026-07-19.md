@@ -4,7 +4,7 @@ Date: 2026-07-19
 Owner: `hfdmrg-manager`
 Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
-Status: **Milestone 2 corrective pass validated on macmini; awaiting cross-host verification**
+Status: **Milestone 3 validated on macmini; awaiting paper-manager review**
 
 Solver architecture, implementation, and line-budget ownership remain with
 `hfdmrg-manager`. `hfdmrg-paper-manager` reviews whether the partition,
@@ -486,7 +486,7 @@ These are engineering baselines, not scientific Be acceptance measurements.
 
 ## Milestone 2 Result
 
-The Milestone 2 implementation is ready for the required review. Outside this
+Milestone 2 is accepted cross-host through `6cb865d`. Outside this
 maintained memo, the change against `8450983` touches only
 `src/backends/sliced_basis_cached.jl` and `test/runtests.jl`, with `213`
 additions and `80` deletions. It does not change the core, backend API, README,
@@ -621,8 +621,81 @@ The same pass adds the right off-span reconstruction oracle, proves that
 complete-slice blocks missing their left or right physical anchor take the
 direct route, and proves through a public density-density solve that a supplied
 `SliceLayout` may reproduce the legacy ranges and result without a sliced
-backend. The macmini test script passes all 95 tests. Cross-host acceptance is
-still pending. The isolated `Pkg.test()` run also passes the same 95 tests.
+backend. The macmini test script and isolated `Pkg.test()` pass all 95 tests.
+Faraday independently passed the same 95 assertions at `6cb865d`; the signed
+acceptance record is committed at `c4e954b`.
+
+## Milestone 3 Result
+
+The aligned cached window now contracts the nine ordered left/center/right
+sectors directly from `Vijkl`, `W`, `Wswap`, raw center tensors, and the two
+cross tensors `VLR/VRL`. Pair-grouped tensors store `T_XY[x,z;y,w]`; conventional
+`Vijkl` stores `T[x,y,z,w]`; and `Wswap` reverses the two grouped region pairs.
+No interaction symmetry is inferred. For every ordered sector,
+
+```text
+J_X[x,z]   += sum(y,w) D_YY[y,w] T_XY[x,z;y,w]
+K_XY[x,w] += sum(z,y) D_XY[z,y] T_XY[x,z;y,w].
+```
+
+RHF adds `2J(D)-K(D)`. UHF adds `J(Dalpha+Dbeta)-K(Dspin)` independently to
+each spin Fock matrix. A complete, contiguous whole-slice L/C/R partition uses
+this local kernel. Any split or off-span window constructs the projection
+backend's window and delegates its entire interaction; there is no second
+global fallback contraction.
+
+The hot aligned kernel performs scalar contractions into caller-owned Fock
+matrices and allocates zero bytes after warmup. At fixed left/right ranks and
+center slices its work is independent of the total slice count. Window
+assembly still forms `VLR/VRL` separately and remains dependent on the active
+block spans; M3 does not claim to optimize that stage recursively.
+
+### M3 Numerical And Workflow Evidence
+
+The compact numerical test activates each of `LL`, `LC`, `LR`, `CL`, `CC`,
+`CR`, `RL`, `RC`, and `RR` independently with distinct unsymmetrized tensors
+and symmetric non-idempotent densities. It compares both cached and projection
+RHF/UHF results with an explicit signed four-index oracle, recovers direct and
+exchange pieces separately, and checks both-boundary split delegation.
+
+The direct test entry point and isolated `Pkg.test()` each pass all `169`
+assertions. The ordered-sector set contributes `79` assertions. The accepted
+structured solve reports `(window_local,window_projection)=(6,0)`, while the
+deliberate split fixture reports `(0,1)`. The supported fixed/ragged verifier
+uses aligned partitions and gives maximum window and sweep disagreements of
+`5.11e-15` and `3.55e-15 Ha`. The largest retained-benchmark Fock disagreement is
+`4.32e-15`, below the `1e-12` gate.
+
+### M3 Performance Evidence
+
+The retained harness uses fixed nine-orbital slices, rank-four left/right
+blocks, one center slice, one Julia thread, eight BLAS threads, three batches,
+and the median of per-call batch means. Inputs and cache plans are outside the
+timed Fock region.
+
+| Route | S=8 cached | S=52 cached | S52 projection | S52 speedup | S52/S8 |
+|---|---:|---:|---:|---:|---:|
+| RHF | `0.011139 ms` | `0.011205 ms` | `48.1257 ms` | `4295x` | `1.006` |
+| UHF | `0.018762 ms` | `0.018970 ms` | `60.6415 ms` | `3197x` | `1.011` |
+
+Both cached Fock batches allocate exactly zero bytes. At S=52, the complete
+initial cache chain takes `0.038221 s` and allocates `82.602 MiB`; the two-way
+absorption sweep takes `0.074562 s` and allocates `160.074 MiB`, for
+`242.676 MiB` combined. Counts are `(2,49,0)` for initialization,
+`(0,98,0)` for absorption, and `(1,0)` for the measured aligned window.
+Cached-window construction takes `0.0916 ms` and allocates `0.030 MiB`; it is
+reported separately from Fock work.
+
+The completed record is:
+
+```text
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/m3_validate.log
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/m3_validate.pid
+PID 27897
+```
+
+These are synthetic engineering measurements on macmini, not frozen-Be or
+end-to-end paper scaling claims. M5 scientific acceptance remains unrun.
 
 ## Validation Ladder
 
@@ -725,15 +798,15 @@ The provisional readiness gates are a warmed forced-four Be sweep below
 The status memo is maintained by replacement. The following caps cover added
 source, tests, scripts, and user/architecture documentation:
 
-| Milestone | Proposed files | Addition accounting | Deletion target |
+| Milestone | Proposed files | Addition accounting | Deletion accounting |
 |---|---|---:|---:|
-| M1 | `src/core.jl`, `test/runtests.jl`, `README.md` | `67` actual (`70` cap) | `0` |
-| M2 | `src/backends/sliced_basis_cached.jl`, `test/runtests.jl` | `213` actual (`220` cap) | `45` |
-| M2 correction | `src/core.jl`, `src/backends/sliced_basis_cached.jl`, `test/runtests.jl`, `README.md` | `97` actual | `0` |
-| M3 | `src/backends/sliced_basis_cached.jl`, `test/runtests.jl`, `scripts/bench_sliced.jl`, `README.md`, `docs/backend_architecture.md` | `300` individual cap | `360` |
-| M4 | `src/core.jl`, `test/runtests.jl`, `docs/backend_architecture.md` | `90` individual cap | `15` |
-| **M3 + M4 remaining** | | **`303` combined cap** | **`375`** |
-| **Program total** | | **`680`** | **`420`** |
+| M1 | `src/core.jl`, `test/runtests.jl`, `README.md` | `67` actual (`70` cap) | `2` actual (`0` target) |
+| M2 | `src/backends/sliced_basis_cached.jl`, `test/runtests.jl` | `213` actual (`220` cap) | `80` actual (`45` target) |
+| M2 correction | `src/core.jl`, `src/backends/sliced_basis_cached.jl`, `test/runtests.jl`, `README.md` | `97` actual | `45` actual (`0` target) |
+| M3 | Cached source/tests, both sliced scripts, cached example, user/architecture docs | `300` actual (`300` cap) | `829` actual (`360` target) |
+| M4 | `src/core.jl`, `test/runtests.jl`, `docs/backend_architecture.md` | not started; only `3` additions remain under the combined cap | `15` target |
+| **M3 + M4 remaining** | | **`300/303` used; `3` remain** | **`829` actual (`375` target)** |
+| **Program total** | | **`677/680` used; `3` remain** | **`956` actual (`420` target)** |
 
 Target net growth is at most `260` lines. Stop for renewed design review if a
 milestone exceeds its cap, needs `backend_api.jl`, introduces another public
@@ -747,11 +820,14 @@ in this status memo and the required paper-review governance memo are excluded.
 The corrective implementation uses `97` additions and `45` deletions. The ten
 unused M1/M2 additions reduce its debit to `87`, leaving a combined `303` for
 M3 and M4 without widening their individual ceilings or the program total.
-Deleting the superseded random sliced end-to-end test leaves cumulative net
-growth at `250` lines, within the firm `260`-line target.
+M3 uses `300` of those additions and deletes `829` lines. Across milestone
+commits through M3, counted files have `677` additions and `956` deletions,
+for net shrinkage of `279` lines. M4 therefore has only `3` additions left
+under the approved program budget and must not begin without review of that
+constraint.
 
 Milestone 2 specifically replaces the scalar global raw-cache loops. Milestone
-3 deletes:
+3 deleted:
 
 - duplicated split-slice exchange fallback in favor of the projection oracle;
 - aligned global `S`, `Srho`, `rho_slice`, `J`, and `tmp` scratch and scans;
@@ -759,10 +835,10 @@ Milestone 2 specifically replaces the scalar global raw-cache loops. Milestone
 - unused center metadata; and
 - misleading historical direct/exchange timing labels.
 
-Milestone 4 consolidates duplicate pre/post-density Fock construction without
-changing solver policy.
+Milestone 4 would consolidate duplicate pre/post-density Fock construction
+without changing solver policy; it remains held.
 
-No new source file or include wiring is proposed.
+M3 added no source file, include wiring, public type, or backend API operation.
 
 ## Risks And Stop Conditions
 
@@ -799,14 +875,15 @@ The manager design records three bounded decisions:
 3. delegate partial-slice cached windows to projection and enforce the
    addition/net-growth budget above.
 
-Paper-manager review accepted the M1/M2 cache algebra and performance evidence
-but held Milestone 3 for the bounded corrective pass recorded above. All five
-required clarifications are now implemented and validated on macmini. Solver
-architecture and implementation ownership remain with `hfdmrg-manager`.
+Paper-manager review and faraday verification accepted M1/M2 through
+`c4e954b`. M3 is now implemented and validated on macmini under every recorded
+numerical, routing, allocation, scaling, speed, deletion, and individual line
+gate. Solver architecture and implementation ownership remain with
+`hfdmrg-manager`.
 
-The exact next action is a faraday run of the corrected 95-test suite and
-paper-manager verification of the replacement trajectory and three-center
-regression. Do not begin the window-local Milestone 3 Fock rewrite until that
-cross-host check releases it.
+The exact next action is paper-manager review of the M3 commit and evidence
+above. Do not begin M4 duplicate-Fock reuse or M5 Be acceptance before that
+review; the remaining `3`-addition combined budget is itself an explicit M4
+review item.
 
 -- hfdmrg-manager@macmini

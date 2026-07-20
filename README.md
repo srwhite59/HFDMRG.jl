@@ -202,7 +202,7 @@ Common symptoms and checks:
 | Different initial guesses give different energies | This is possible for RHF and especially UHF. Check that the requested spin occupations are the same, converge each run to the same tolerance, and compare the resulting self-consistent energies and scientific diagnostics. |
 | Returned orbitals are not orthonormal | Check `norm(psiup' * psiup - I)` and the corresponding beta quantity. A large error indicates invalid input, numerical failure, or mutation by an observer; ordinary roundoff should be small. |
 | An independently recomputed energy differs from `energy` | First make sure the final sweep converged. During damped, unconverged iterations the internal density can be a mixture of determinants, so exact equality with the returned determinant is not promised. Also include the same interaction convention and exclude any nuclear or consumer offset. |
-| A sliced run is slow or uses too much memory | Confirm that uniform slices use `V6` and that production runs explicitly construct `SlicedBasisBackendCached`. See [Choosing an interaction backend](#choosing-an-interaction-backend). Observer work is also part of solver wall time. |
+| A sliced run is slow or uses too much memory | Confirm that uniform slices use `V6`, production runs explicitly construct `SlicedBasisBackendCached`, and the solve passes `block_partition=layout`. See [Choosing an interaction backend](#choosing-an-interaction-backend). Observer work is also part of solver wall time. |
 
 Before tuning, verify the input contract: one-body matrices and the
 density-density `V` should be finite and symmetric; every orbital matrix must
@@ -473,10 +473,13 @@ directly from `layout` and `V6`/`Vblocks`:
 
 ```julia
 backend = HFDMRG.SlicedBasisBackendCached(layout, V6)
-psiup, psidn, energy = HFDMRG.solve_hfdmrg(H, backend, psiup0; maxiter = 5, blocksize = 2)
+psiup, psidn, energy = HFDMRG.solve_hfdmrg(H, backend, psiup0; maxiter = 5, block_partition = layout)
 ```
 
-For ragged interactions, pass `Vblocks` instead of `V6`.
+For ragged interactions, pass `Vblocks` instead of `V6`. With
+`block_partition=layout`, whole-slice windows contract all nine ordered sectors
+with zero steady allocation and fixed-rank work independent of total slices.
+Any split window delegates its complete interaction to projection.
 
 ## Choosing an interaction backend
 
@@ -492,7 +495,7 @@ all routes also build temporary and retained block/window caches.
 | Density plus target residual `HFDMRG.DensityDensityTargetResidualBackend(V, Q, residual_pair)` | `O(N^2 + N*m + P^2)` | Adds target projection/lift work `O(w^2*m + w*m^2)` and dense-pair work `O(m^4)` to the base backend. | A fixed, small orthonormal target space needs a signed four-index correction. Do not use it as an arbitrary global interaction container. |
 | Fixed sliced projection `HFDMRG.SlicedBasisBackend(layout, V6)` | `O(ns^2*nj^4)` | Reconstructs full-`N` density/Fock intermediates for each Fock build; correctness-first and relatively slow. | Uniform slice sizes, validation, small calculations, or comparison against the cached route. |
 | Ragged sliced projection `HFDMRG.SlicedBasisBackend(layout, Vblocks)` | `O((sum_s dims[s]^2)^2)` | Uses the same full-basis projection strategy as fixed sliced data. | Slice sizes genuinely vary and a correctness/reference path is more important than speed. |
-| Cached sliced `HFDMRG.SlicedBasisBackendCached(layout, V)` | Same sliced input storage, plus retained block contractions and window scratch. | Reuses per-block sliced contractions and generally avoids full-`N` projection, trading additional cache memory for speed. | Production sliced calculations. Pass `V6` when slices are uniform; use `Vblocks` only for ragged layouts. |
+| Cached sliced `HFDMRG.SlicedBasisBackendCached(layout, V)` | Same sliced input storage, plus retained block contractions and local cross tensors. | Whole-slice windows use local ordered sectors with zero steady Fock allocation; split windows delegate entirely to projection. | Production sliced calculations with `block_partition=layout`. Pass `V6` when slices are uniform; use `Vblocks` only for ragged layouts. |
 
 The convenience forms `solve_hfdmrg(H, layout, V, ...)` construct
 the projection backend. Construct `HFDMRG.SlicedBasisBackendCached` explicitly

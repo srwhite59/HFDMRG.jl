@@ -1,187 +1,111 @@
-# Benchmark snapshot (make bench):
-# N = 120, ns = 30, nj = 4, ml = 10, lc = 40, mr = 10, nrep = 200
-# H norm = 85.22616536592902
-# == Projection backend ==
-#   split slices: n/a
-#   RHF: 1.233 ms/call, 0.423 MB/call
-#   UHF: 1.459 ms/call, 0.977 MB/call
-# == Cached backend ==
-#   split slices: none
-#   RHF: 0.269 ms/call, 0.051 MB/call
-#   RHF timing breakdown (ms/call):
-#   direct_LL_RR: 0.011
-#   direct_CL_CR: 0.099
-#   direct_LR: 0.011
-#   exchange: 0.111
-#   UHF: 0.435 ms/call, 0.109 MB/call
-#   UHF timing breakdown (ms/call):
-#   direct_LL_RR: 0.012
-#   direct_CL_CR: 0.106
-#   direct_LR: 0.012
-#   exchange: 0.224
-ENV["HFDMRG_BENCH_TIMING"] = "1"
-
 using LinearAlgebra
 using Random
 
 using HFDMRG
+
+const SEED, D, K, BATCHES, TARGET_SECONDS = 20260719, 9, 4, 3, 0.25
 
 function orthonormal_cols(rng, n, m)
     Q = Matrix(qr(randn(rng, n, m)).Q)
     Q[:, 1:m]
 end
 
-function build_window(backend, Lra, Cra, Rra, Lphi, Rphi, N)
-    Lvee = HFDMRG.vee_init_block(:left, Lra, (Lra[end] + 1):N, Lphi, backend)
-    Rvee = HFDMRG.vee_init_block(:right, Rra, 1:(Rra[1] - 1), Rphi, backend)
-    HFDMRG.vee_window(Lvee, Rvee, Cra, backend)
+function cache_plan(rng, ns)
+    A = cos(0.2) * Matrix{Float64}(I, K, K); C = sin(0.2) * orthonormal_cols(rng, D, K)
+    left, right = [orthonormal_cols(rng, D, K)], [orthonormal_cols(rng, D, K)]
+    for _ = 2:(ns - 2)
+        push!(left, vcat(left[end] * A, C)); push!(right, vcat(C, right[end] * A))
+    end
+    (; A, C, left, right)
 end
 
-function split_label(win)
-    if hasproperty(win, :split_slices)
-        isempty(win.split_slices) ? "none" : join(win.split_slices, ",")
-    else
-        "n/a"
+slice_range(s) = ((s - 1) * D + 1):(s * D)
+
+function init_edge(side, backend, plan, ns); ra = slice_range(side === :left ? 1 : ns); phi = side === :left ? plan.left[1] : plan.right[1]; raV = side === :left ? ((last(ra) + 1):(ns * D)) : (1:(first(ra) - 1)); HFDMRG.vee_init_block(side, ra, raV, phi, backend); end
+
+function grow(side, state, backend, plan, ns, nblocks)
+    phis = side === :left ? plan.left : plan.right
+    for j = 2:nblocks
+        cra = slice_range(side === :left ? j : ns - j + 1); phi = phis[j]
+        raV = side === :left ? ((last(cra) + 1):(ns * D)) : (1:(first(cra) - 1))
+        state = HFDMRG.vee_absorb_block(side, state, cra, plan.A, plan.C, phi, raV, backend)
     end
+    state
 end
 
-function bench_rhf!(win, rho; nrep)
-    F = zeros(size(rho))
-    HFDMRG.vee_add_fock_r!(F, rho, win)
+function stage(f); f(); samples = [(GC.gc(); t = @timed f(); (t.time, t.bytes)) for _ = 1:BATCHES]; times = sort(first.(samples)); (; time = times[2], range = extrema(times), bytes = maximum(last.(samples))); end
+function counted(f); ENV["HFDMRG_BENCH_TIMING"] = "1"; HFDMRG._bench_timing_reset!(); f(); counts = HFDMRG._bench_timing_snapshot(); ENV["HFDMRG_BENCH_TIMING"] = ""; counts; end
+function run_calls(f, n); for _ = 1:n; f(); end; end
+function batches(f); run_calls(f, 3); sample = @elapsed run_calls(f, 3); calls = clamp(ceil(Int, 3TARGET_SECONDS / max(sample, eps())), 3, 100_000); times = [(GC.gc(); (@elapsed run_calls(f, calls)) / calls) for _ = 1:BATCHES]; GC.gc(); bytes = @allocated run_calls(f, calls); sort!(times); (; time = times[2], range = extrema(times), calls, bytes); end
+function fock_calls(win, rho, rhoup, rhodn); F, Fup, Fdn = zeros(size(rho)), zeros(size(rho)), zeros(size(rho)); (; F, Fup, Fdn, rhf = () -> (HFDMRG.vee_add_fock_r!(F, rho, win); nothing), uhf = () -> (HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win); nothing)); end
 
-    if win isa HFDMRG.SlicedBasisCachedWindow
-        HFDMRG._bench_timing_reset!()
+relerr(A, B) = norm(A - B) / max(1.0, norm(A), norm(B))
+route(c, keys) = Tuple(round(Int, c[key]) for key in keys)
+showstage(s, x) = println(s, ": median=", x.time, " s range=", x.range, " allocation=", round(x.bytes / 2.0^20, digits = 3), " MiB")
+showfock(s, x) = println(s, ": median=", x.time * 1e3, " ms/call range=", x.range .* 1e3, " calls/batch=", x.calls, " batches=3 allocation=", x.bytes, " bytes/batch")
+
+function bench_size(ns)
+    rng = MersenneTwister(SEED + ns); layout = HFDMRG.SliceLayout(fill(D, ns))
+    V = randn(rng, D, D, D, D, ns, ns); plan, center = cache_plan(rng, ns), div(ns, 2) + 1
+    cached, projection = HFDMRG.SlicedBasisBackendCached(layout, V),
+        HFDMRG.SlicedBasisBackend(layout, V)
+    initial = () -> begin L, R = init_edge(:left, cached, plan, ns), init_edge(:right, cached, plan, ns); (L, grow(:right, R, cached, plan, ns, ns - 2)); end
+    L0, R0 = init_edge(:left, cached, plan, ns), init_edge(:right, cached, plan, ns)
+    sweep = () -> (grow(:left, L0, cached, plan, ns, ns - 2),
+        grow(:right, R0, cached, plan, ns, ns - 2))
+    initial_result, sweep_result = stage(initial), stage(sweep); initial_counts = counted(initial)
+    sweep_counts = counted(sweep)
+
+    L = grow(:left, L0, cached, plan, ns, center - 1); R = grow(:right, R0, cached, plan, ns, ns - center)
+    Cra = slice_range(center); Lra, Rra = 1:(first(Cra) - 1), (last(Cra) + 1):(ns * D)
+    Lp = HFDMRG.vee_init_block(:left, Lra, first(Cra):(ns * D), L.phi, projection)
+    Rp = HFDMRG.vee_init_block(:right, Rra, 1:last(Cra), R.phi, projection)
+    cwindow, pwindow = () -> HFDMRG.vee_window(L, R, Cra, cached),
+        () -> HFDMRG.vee_window(Lp, Rp, Cra, projection)
+    cw_result, pw_result = stage(cwindow), stage(pwindow); window_counts = counted(cwindow)
+    cw, pw = cwindow(), pwindow()
+
+    n = 2K + D; symmetric() = (x = randn(rng, n, n); (x + x') / 2)
+    rho, rhoup, rhodn = symmetric(), symmetric(), symmetric()
+    cc, pc = fock_calls(cw, rho, rhoup, rhodn), fock_calls(pw, rho, rhoup, rhodn)
+    cc.rhf(); pc.rhf(); cc.uhf(); pc.uhf()
+    parity = (relerr(cc.F, pc.F), max(relerr(cc.Fup, pc.Fup), relerr(cc.Fdn, pc.Fdn)))
+    cr, pr, cu, pu = batches(cc.rhf), batches(pc.rhf), batches(cc.uhf), batches(pc.uhf)
+
+    ck = (:cache_init_calls, :cache_incremental_calls, :cache_fallback_calls)
+    wk = (:window_local_calls, :window_projection_calls)
+    ic, sc, wc = route(initial_counts, ck), route(sweep_counts, ck), route(window_counts, wk)
+    println("\nS=", ns, " d=9 kL=kR=4 center_slices=1 seed=", SEED + ns)
+    showstage("  cache initial", initial_result); println("    route=", ic); showstage("  cache sweep", sweep_result)
+    println("    route=", sc)
+    showstage("  cached window", cw_result); showstage("  projection window", pw_result)
+    println("    window route(local,projection)=", wc, " parity(RHF,UHF)=", parity)
+    for (label, result) in (("cached RHF", cr), ("projection RHF", pr),
+        ("cached UHF", cu), ("projection UHF", pu))
+        showfock("  " * label, result)
     end
 
-    t0 = time_ns()
-    for _ = 1:nrep
-        fill!(F, 0.0)
-        HFDMRG.vee_add_fock_r!(F, rho, win)
-    end
-    dt = (time_ns() - t0) * 1e-9
-
-    timing = win isa HFDMRG.SlicedBasisCachedWindow ? HFDMRG._bench_timing_snapshot() : Dict{Symbol, Float64}()
-
-    env_flag = get(ENV, "HFDMRG_BENCH_TIMING", "")
-    if win isa HFDMRG.SlicedBasisCachedWindow
-        ENV["HFDMRG_BENCH_TIMING"] = ""
-    end
-    alloc = @allocated begin
-        for _ = 1:nrep
-            fill!(F, 0.0)
-            HFDMRG.vee_add_fock_r!(F, rho, win)
-        end
-    end
-    if win isa HFDMRG.SlicedBasisCachedWindow
-        ENV["HFDMRG_BENCH_TIMING"] = env_flag
-    end
-    (time_per_call = dt / nrep, alloc_per_call = alloc / nrep, timing = timing)
-end
-
-function bench_uhf!(win, rhoup, rhodn; nrep)
-    Fup = zeros(size(rhoup))
-    Fdn = zeros(size(rhoup))
-    HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
-
-    if win isa HFDMRG.SlicedBasisCachedWindow
-        HFDMRG._bench_timing_reset!()
-    end
-
-    t0 = time_ns()
-    for _ = 1:nrep
-        fill!(Fup, 0.0)
-        fill!(Fdn, 0.0)
-        HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
-    end
-    dt = (time_ns() - t0) * 1e-9
-
-    timing = win isa HFDMRG.SlicedBasisCachedWindow ? HFDMRG._bench_timing_snapshot() : Dict{Symbol, Float64}()
-
-    env_flag = get(ENV, "HFDMRG_BENCH_TIMING", "")
-    if win isa HFDMRG.SlicedBasisCachedWindow
-        ENV["HFDMRG_BENCH_TIMING"] = ""
-    end
-    alloc = @allocated begin
-        for _ = 1:nrep
-            fill!(Fup, 0.0)
-            fill!(Fdn, 0.0)
-            HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
-        end
-    end
-    if win isa HFDMRG.SlicedBasisCachedWindow
-        ENV["HFDMRG_BENCH_TIMING"] = env_flag
-    end
-    (time_per_call = dt / nrep, alloc_per_call = alloc / nrep, timing = timing)
-end
-
-function print_timing(label, res)
-    println(label, ": ", round(res.time_per_call * 1e3, digits = 3), " ms/call, ",
-        round(res.alloc_per_call / 1e6, digits = 3), " MB/call")
-end
-
-function print_cached_breakdown(label, timing, nrep)
-    isempty(timing) && return
-    println(label, " timing breakdown (ms/call):")
-    println("  direct_LL_RR: ", round(timing[:direct_LL_RR] / nrep * 1e3, digits = 3))
-    println("  direct_CL_CR: ", round(timing[:direct_CL_CR] / nrep * 1e3, digits = 3))
-    println("  direct_LR: ", round(timing[:direct_LR] / nrep * 1e3, digits = 3))
-    println("  exchange: ", round(timing[:exchange] / nrep * 1e3, digits = 3))
-end
-
-function bench_backend(name, win, rho, rhoup, rhodn; nrep)
-    println("== ", name, " ==")
-    println("  split slices: ", split_label(win))
-
-    rhf = bench_rhf!(win, rho; nrep = nrep)
-    print_timing("  RHF", rhf)
-    print_cached_breakdown("  RHF", rhf.timing, nrep)
-
-    uhf = bench_uhf!(win, rhoup, rhodn; nrep = nrep)
-    print_timing("  UHF", uhf)
-    print_cached_breakdown("  UHF", uhf.timing, nrep)
+    ic == (2, ns - 3, 0) && sc == (0, 2(ns - 3), 0) || error("cache route failed")
+    wc == (1, 0) || error("aligned window used fallback")
+    max(parity...) <= 1e-12 || error("Fock parity failed")
+    cr.bytes == 0 && cu.bytes == 0 || error("cached steady Fock allocated")
+    ns == 52 && (initial_result.time <= 16 && sweep_result.time <= 32 &&
+        initial_result.bytes + sweep_result.bytes <= 512 * 2^20 || error("cache-chain gate failed"))
+    (; rhf = (cached = cr.time, projection = pr.time),
+        uhf = (cached = cu.time, projection = pu.time))
 end
 
 function main()
-    rng = MersenneTwister(1234)
-    ns = 30
-    nj = 4
-    N = ns * nj
-    nrep = 200
-
-    A = randn(rng, N, N)
-    H = (A + A') / 2
-    V6 = randn(rng, nj, nj, nj, nj, ns, ns)
-
-    Lra = 1:40
-    Cra = 41:80
-    Rra = 81:120
-    ml = 10
-    mr = 10
-    Lphi = orthonormal_cols(rng, length(Lra), ml)
-    Rphi = orthonormal_cols(rng, length(Rra), mr)
-    superdim = ml + length(Cra) + mr
-
-    rho = randn(rng, superdim, superdim)
-    rho = (rho + rho') / 2
-    rhoup = randn(rng, superdim, superdim)
-    rhoup = (rhoup + rhoup') / 2
-    rhodn = randn(rng, superdim, superdim)
-    rhodn = (rhodn + rhodn') / 2
-
-    layout = HFDMRG.SliceLayout(fill(nj, ns))
-    backend_proj = HFDMRG.SlicedBasisBackend(layout, V6)
-    backend_cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
-
-    win_proj = build_window(backend_proj, Lra, Cra, Rra, Lphi, Rphi, N)
-    win_cached = build_window(backend_cached, Lra, Cra, Rra, Lphi, Rphi, N)
-
-    println("N = ", N, ", ns = ", ns, ", nj = ", nj,
-        ", ml = ", ml, ", lc = ", length(Cra), ", mr = ", mr,
-        ", nrep = ", nrep)
-    println("H norm = ", norm(H))
-
-    bench_backend("Projection backend", win_proj, rho, rhoup, rhodn; nrep = nrep)
-    bench_backend("Cached backend", win_cached, rho, rhoup, rhodn; nrep = nrep)
+    ENV["HFDMRG_BENCH_TIMING"] = ""
+    println("host=", gethostname(), " commit=", readchomp(`git rev-parse --short HEAD`), " julia=", VERSION,
+        " machine=", Sys.MACHINE, " julia_threads=", Threads.nthreads(), " blas_threads=", BLAS.get_num_threads(), " batches=3 statistic=median(per-call batch means)")
+    r8 = bench_size(8); GC.gc(); r52 = bench_size(52)
+    for spin in (:rhf, :uhf)
+        a, b = getproperty(r8, spin), getproperty(r52, spin)
+        speedup, scaling = b.projection / b.cached, b.cached / a.cached
+        println(spin, " S52 speedup=", speedup, " cached S52/S8=", scaling)
+        speedup >= 20 && scaling <= 1.5 || error("$spin performance gate failed")
+    end
 end
 
 main()

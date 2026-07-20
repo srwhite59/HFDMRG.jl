@@ -22,7 +22,7 @@ V6 = [pair_shape[a, b] * 0.08 / (1 + abs(n - m)) * pair_shape[c, d]
 # the cached backend explicitly for the production sliced route.
 backend = HFDMRG.SlicedBasisBackendCached(layout, V6)
 psiup, psidn, energy = solve_hfdmrg(H, backend, psi0;
-    maxiter = 4, blocksize = 2, cutoff = 1e-9, scf_cutoff = 1e-9)
+    maxiter = 4, block_partition = layout, cutoff = 1e-9, scf_cutoff = 1e-9)
 
 @assert psiup == psidn
 @assert isfinite(energy)
