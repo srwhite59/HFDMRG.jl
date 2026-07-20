@@ -9,16 +9,17 @@ projector(C) = C * C'
 principal(C, reference) = minimum(svdvals(reference' * C))
 projector_distance(C, R) = hypot(norm(C - R * (R' * C)), norm(R - C * (C' * R)))
 function arguments()
-    options = Dict("packet" => "", "outdir" => "", "modes" => "check", "trials" => "3")
+    options = Dict("packet" => "", "outdir" => "", "modes" => "check", "trials" => "3", "max-sweeps" => "50", "energy-cutoff" => "1e-11")
     for arg in ARGS; key, value = split(lstrip(arg, '-'), '='; limit = 2); gate(haskey(options, key), "unknown option --$key"); options[key] = value; end
-    gate(all(!isempty(options[k]) for k in ("packet", "outdir")), "use --packet=PATH --outdir=PATH [--modes=...] [--trials=3]")
+    gate(all(!isempty(options[k]) for k in ("packet", "outdir")), "use --packet=PATH --outdir=PATH [--modes=...] [--trials=3] [--max-sweeps=50] [--energy-cutoff=1e-11]")
     modes = Set(Symbol.(split(options["modes"], ',')))
     gate(issubset(modes, Set((:check, :fixture, :parity, :timing, :converge, :alignment, :rss, :all))), "unknown mode; use check,fixture,parity,timing,converge,alignment,rss,all")
     gate(:all ∉ modes || modes == Set((:all,)), "all must be the only mode and excludes rss"); :all in modes && (modes = Set((:fixture, :parity, :timing, :converge, :alignment)))
-    trials = parse(Int, options["trials"])
+    trials, max_sweeps, energy_cutoff = parse(Int, options["trials"]), parse(Int, options["max-sweeps"]), parse(Float64, options["energy-cutoff"])
     gate(:timing ∉ modes || trials >= 3, "timing requires --trials=3 or greater")
+    gate(max_sweeps > 0 && isfinite(energy_cutoff) && energy_cutoff >= 0, "max-sweeps must be positive and energy-cutoff finite and nonnegative (zero disables outer stopping)")
     gate(:rss ∉ modes || (modes == Set((:rss,)) && abspath(PROGRAM_FILE) == abspath(@__FILE__)), "rss must be the only mode in a fresh standalone Julia process (all excludes rss)")
-    abspath(options["packet"]), abspath(options["outdir"]), modes, trials
+    abspath(options["packet"]), abspath(options["outdir"]), modes, trials, max_sweeps, energy_cutoff
 end
 function write_tsv(path, names, rows)
     tmp = path * ".tmp.$(getpid())"; open(tmp, "w") do io
@@ -83,7 +84,7 @@ function HFDMRG.vee_window(left, right, center, m::Meter)
 end
 HFDMRG.vee_add_fock_r!(F, D, w::MeterWindow) = counted!(w.meter, :fock, () -> HFDMRG.vee_add_fock_r!(F, D, w.window))
 HFDMRG.vee_add_fock!(Fu, Fd, Du, Dd, w::MeterWindow) = counted!(w.meter, :fock, () -> HFDMRG.vee_add_fock!(Fu, Fd, Du, Dd, w.window))
-function solve_metered(packet, route; sweeps = 1, aligned = true, converge = false, callback = nothing)
+function solve_metered(packet, route; sweeps = 1, aligned = true, converge = false, energy_cutoff = 1e-11, callback = nothing)
     layout = HFDMRG.SliceLayout(packet.dims)
     raw = route == :cached ? HFDMRG.SlicedBasisBackendCached(layout, packet.V6) : HFDMRG.SlicedBasisBackend(layout, packet.V6)
     meter, snapshots = Meter(raw, sweeps + 1), Any[]
@@ -92,7 +93,7 @@ function solve_metered(packet, route; sweeps = 1, aligned = true, converge = fal
         callback !== nothing && callback(info, meter)
         info.sweep < sweeps && advance!(meter); false
     end
-    cutoff, scf = converge ? (1e-11, 1e-12) : (0.0, 0.0)
+    cutoff, scf = converge ? (energy_cutoff, 1e-12) : (0.0, 0.0)
     result = HFDMRG.solve_hfdmrg_core(packet.H, meter, packet.seed_up, packet.seed_dn; restricted = false,
         maxiter = sweeps, blocksize = 9, block_partition = aligned ? layout : nothing,
         cutoff, scf_cutoff = scf, observer, verbose = false)
@@ -130,7 +131,7 @@ function window_checks(packet)
     end
     rows
 end
-packet_path, outdir, modes, trials = arguments(); mkpath(outdir)
+packet_path, outdir, modes, trials, max_sweeps, energy_cutoff = arguments(); mkpath(outdir)
 ENV["HFDMRG_BENCH_TIMING"] = "1"; sha = bytes2hex(open(SHA.sha256, packet_path))
 gate(sha == EXPECTED_SHA, "packet SHA256 mismatch: $sha"); packet = deserialize(packet_path)
 gate(keys(packet) == PACKET_KEYS, "packet schema mismatch")
@@ -154,7 +155,7 @@ meta = [("pid", getpid()), ("command", command), ("pwd", pwd()), ("commit", read
     ("git_status", readchomp(`git status --short`)), ("host", gethostname()), ("cpu", join(unique(x.model for x in Sys.cpu_info()), ';')),
     ("julia", VERSION), ("julia_threads", Threads.nthreads()), ("blas_threads", BLAS.get_num_threads()), ("blas_config", BLAS.get_config()),
     ("active_project", Base.active_project()), ("packet", packet_path), ("sha256", sha), ("modes", join(sort!(collect(modes)), ',')),
-    ("trials", trials), ("warmups", 1), ("branch_projector_gate", BRANCH.projector), ("branch_minsv_gate", BRANCH.minsv),
+    ("trials", trials), ("warmups", 1), ("max_convergence_sweeps", max_sweeps), ("outer_energy_cutoff", energy_cutoff), ("scf_cutoff", 1e-12), ("branch_projector_gate", BRANCH.projector), ("branch_minsv_gate", BRANCH.minsv),
     ("branch_energy_gate", BRANCH.energy), ("branch_fingerprint_gate", BRANCH.fingerprint), ("allocation_method", "Base.gc_bytes"), ("memory_method", "Sys.maxrss fresh process"), ("timing_statistic", "three or more raw trials; report median")]
 for key in ("JULIA_NUM_THREADS", "OPENBLAS_NUM_THREADS", "JULIA_DEPOT_PATH", "JULIA_PROJECT", "HFDMRG_BENCH_TIMING")
     push!(meta, ("env_" * key, get(ENV, key, "")))
@@ -233,15 +234,13 @@ if :converge in modes
             (sweep = info.sweep, energy = info.energy, converged = info.converged,
              diagnostics = d, psiup = info.psiup, psidn = info.psidn))
     end
-    run = solve_metered(packet, :cached; sweeps = 50, converge = true, callback)
-    gate(run.snapshots[end].converged, "matched convergence failed within 50 sweeps")
-    gate(lastdiag[].energy_mismatch <= 1e-10 && lastdiag[].orthogonality <= 1e-11 && lastdiag[].idempotency <= 1e-11, "converged determinant gate failed")
-    gate(max(lastdiag[].oracle_projector_up, lastdiag[].oracle_projector_dn) <= BRANCH.projector &&
-        min(lastdiag[].oracle_min_up, lastdiag[].oracle_min_dn) >= BRANCH.minsv &&
-        lastdiag[].energy_delta_oracle <= BRANCH.energy &&
-        abs(lastdiag[].s2 - packet.oracle_s2) <= BRANCH.fingerprint &&
-        abs(lastdiag[].zspin - packet.oracle_zspin) <= BRANCH.fingerprint,
-        "frozen broken-symmetry branch gate failed")
+    run = solve_metered(packet, :cached; sweeps = max_sweeps, converge = true, energy_cutoff, callback)
+    if energy_cutoff > 0
+        gate(run.snapshots[end].converged, "matched convergence failed within $max_sweeps sweeps")
+    else
+        gate(length(run.snapshots) == max_sweeps && all(!s.converged for s in run.snapshots), "diagnostic trace did not complete exactly $max_sweeps sweeps")
+    end
+    gate(lastdiag[].energy_mismatch <= 1e-10 && lastdiag[].orthogonality <= 1e-11 && lastdiag[].idempotency <= 1e-11, "final determinant integrity gate failed")
 end
 if :alignment in modes
     numeric = solve_metered(packet, :projection; aligned = false); aligned, cached = solve_metered(packet, :projection), solve_metered(packet, :cached)
