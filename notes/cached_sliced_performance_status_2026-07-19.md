@@ -4,6 +4,7 @@ Date: 2026-07-19
 Owner: `hfdmrg-manager`
 Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
+M3 implementation commit: `ce20a73`
 Status: **Milestone 3 validated on macmini; awaiting paper-manager review**
 
 Solver architecture, implementation, and line-budget ownership remain with
@@ -668,22 +669,22 @@ uses aligned partitions and gives maximum window and sweep disagreements of
 
 ### M3 Performance Evidence
 
-The retained harness uses fixed nine-orbital slices, rank-four left/right
-blocks, one center slice, one Julia thread, eight BLAS threads, three batches,
-and the median of per-call batch means. Inputs and cache plans are outside the
-timed Fock region.
+The retained harness ran committed tree `ce20a73` on `rh310l.ps.uci.edu` with
+fixed nine-orbital slices, rank-four left/right blocks, one center slice, one
+Julia thread, eight BLAS threads, three batches, and the median of per-call
+batch means. Inputs and cache plans are outside the timed Fock region.
 
 | Route | S=8 cached | S=52 cached | S52 projection | S52 speedup | S52/S8 |
 |---|---:|---:|---:|---:|---:|
-| RHF | `0.011139 ms` | `0.011205 ms` | `48.1257 ms` | `4295x` | `1.006` |
-| UHF | `0.018762 ms` | `0.018970 ms` | `60.6415 ms` | `3197x` | `1.011` |
+| RHF | `0.011232 ms` | `0.011259 ms` | `36.5246 ms` | `3244x` | `1.002` |
+| UHF | `0.018985 ms` | `0.018989 ms` | `61.4505 ms` | `3236x` | `1.000` |
 
 Both cached Fock batches allocate exactly zero bytes. At S=52, the complete
-initial cache chain takes `0.038221 s` and allocates `82.602 MiB`; the two-way
-absorption sweep takes `0.074562 s` and allocates `160.074 MiB`, for
+initial cache chain takes `0.038434 s` and allocates `82.602 MiB`; the two-way
+absorption sweep takes `0.074425 s` and allocates `160.074 MiB`, for
 `242.676 MiB` combined. Counts are `(2,49,0)` for initialization,
 `(0,98,0)` for absorption, and `(1,0)` for the measured aligned window.
-Cached-window construction takes `0.0916 ms` and allocates `0.030 MiB`; it is
+Cached-window construction takes `0.0943 ms` and allocates `0.030 MiB`; it is
 reported separately from Fock work.
 
 The completed record is:
@@ -691,11 +692,12 @@ The completed record is:
 ```text
 ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m3_validate.log
 ~/dmrgtmp/hfdmrg_cached_sliced_20260719/m3_validate.pid
-PID 27897
+PID 28197
 ```
 
-These are synthetic engineering measurements on macmini, not frozen-Be or
-end-to-end paper scaling claims. M5 scientific acceptance remains unrun.
+These are synthetic engineering measurements on the recorded manager host,
+not frozen-Be or end-to-end paper scaling claims. M5 scientific acceptance
+remains unrun.
 
 ## Validation Ladder
 
