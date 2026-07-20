@@ -6,7 +6,8 @@ Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
 M3 implementation commit: `ce20a73`
 M4 implementation commit: `1c2a837`
-Status: **Milestone 4 validated on macmini; awaiting paper-manager review before M5**
+M5 runner commit: `6054a2d`
+Status: **Milestone 5 executed but not accepted on macmini; held for paper-manager review after frozen convergence and branch gates failed**
 
 Solver architecture, implementation, and line-budget ownership remain with
 `hfdmrg-manager`. `hfdmrg-paper-manager` reviews whether the partition,
@@ -775,8 +776,47 @@ baseline and comparison records are under:
 ~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_projection_timing_1c2a837.pid
 ```
 
-These remain engineering measurements. M5 end-to-end Be timing, peak memory,
-and scientific acceptance have not started.
+These remain engineering measurements; the separate frozen M5 evidence follows.
+
+## Milestone 5 Result
+
+Milestone 5 was executed at runner commit `6054a2d` without changing
+production source, tests, solver policy, the Hamiltonian, damping, iteration
+counts, convergence settings, or frozen acceptance gates. The packet SHA256
+was verified as
+`fba29651c02cde3cdde90850d90ba30a1abd120ebfa8ac8b64cf2e5a92fea629`.
+The full durable record is in
+[the M5 evidence memo](cached_sliced_performance_m5_evidence_2026-07-19.md),
+with all 50 convergence sweeps in
+[the reduced TSV](cached_sliced_performance_m5_sweeps_2026-07-19.tsv).
+
+The numerical and performance routes pass. One identically aligned
+projection/cached forced-four sweep differs by `1.17e-13 Ha` in energy and at
+most `2.05e-10` in occupied-projector norm. Representative explicit physical,
+projection, and cached total Fock matrices agree within `2.27e-13`. Each
+forced-four cached sweep uses exactly 98 local windows and 490 Fock builds,
+with zero fallback or projection windows.
+
+After one warmup, three same-process trials give median initialization, first
+sweep, and steady second-sweep times of `0.036709`, `0.171570`, and
+`0.132383 s`. The two sweep allocations are `193.927` and `193.159 MiB` by
+`Base.gc_bytes`. A separate fresh-process run records `855.0625 MiB` final
+peak RSS by `Sys.maxrss()`. These clear the `40 s` and `2 GiB` readiness gates.
+
+The frozen matched-convergence run does not pass within 50 sweeps. At sweep 50
+the independently recomputed energy agrees within `1.78e-15 Ha`, lies
+`3.73e-10 Ha` from the oracle, and has orthonormality/idempotency error
+`3.64e-15`, but the solver remains unconverged: the last energy change is
+`9.64e-11 Ha`, the full-Fock residual is `3.60e-5`, the minimum oracle overlap
+is `0.999999999632`, and the maximum projector distance is `3.83e-5`.
+The `S2` and `Zspin` deviations are `3.19e-5` and `1.47e-4`, also above their
+`1e-6` fingerprint gates.
+
+The recent energy tail contracts smoothly by about `0.793` per sweep, which
+suggests approximately ten additional sweeps to the energy cutoff. That is a
+diagnosis only: the frozen 50-sweep cap was not widened and no extra sweep was
+run. M5 is therefore **executed but not accepted** pending paper-manager
+review.
 
 ## Validation Ladder
 
@@ -886,8 +926,9 @@ source, tests, scripts, and user/architecture documentation:
 | M2 correction | `src/core.jl`, `src/backends/sliced_basis_cached.jl`, `test/runtests.jl`, `README.md` | `97` actual | `45` actual (`0` target) |
 | M3 | Cached source/tests, both sliced scripts, cached example, user/architecture docs | `300` actual (`300` cap) | `829` actual (`360` target) |
 | M4 | `src/core.jl`, `test/runtests.jl`, `docs/backend_architecture.md` | `86` actual (`90` amended cap) | `20` actual (`15` target) |
+| M5 validation runner | `scripts/bench_radial_be.jl` | `275` actual (`220` preferred) | `0` actual |
 | **M3 + M4** | | **`386` actual after M4 amendment** | **`849` actual** |
-| **Program total** | | **`763` actual** | **`976` actual** |
+| **Program total through M5 runner** | | **`1038` actual** | **`976` actual** |
 
 Target net growth is at most `260` lines. Stop for renewed design review if a
 milestone exceeds its cap, needs `backend_api.jl`, introduces another public
@@ -899,7 +940,8 @@ paper-review note supersedes only the previous three-addition M4 remainder: M4
 again has its original `90`-addition cap, retains the `15`-deletion target, and
 may not increase the production `src/core.jl` line count. Counts come from each
 milestone commit's `git diff --numstat`. Replacement-only churn in this status
-memo and required paper-review governance memos are excluded.
+memo, compact validation evidence, and required paper-review governance memos
+are excluded.
 The corrective implementation uses `97` additions and `45` deletions. The ten
 unused M1/M2 additions reduce its debit to `87`, leaving a combined `303` for
 M3 and M4 without widening their individual ceilings or the program total.
@@ -907,6 +949,12 @@ M3 uses `300` additions and deletes `829` lines. M4 adds `86` and deletes `20`;
 `src/core.jl` shrinks from `866` to `863` lines. Across milestone commits
 through M4, counted files have `763` additions and `976` deletions, for a
 substantial net shrinkage of `213` lines.
+
+The retained M5 validation runner adds `275` lines and deletes none, exceeding
+its preferred `220`-line cap by `55`. The cap was preferred rather than a hard
+stop; the runner adds no source, public API, test, framework, or machine path.
+Including it, the counted program has `1038` additions and `976` deletions,
+for net growth of `62` lines, still below the `260`-line program target.
 
 Milestone 2 specifically replaces the scalar global raw-cache loops. Milestone
 3 deleted:
@@ -958,12 +1006,16 @@ The manager design records three bounded decisions:
 3. delegate partial-slice cached windows to projection and enforce the
    addition/net-growth budget above.
 
-Paper-manager and faraday accepted M3 through `22f7c07` and authorized M4 in
-`b3362f3`. M4 now passes its call-count, exact trajectory, timing, deletion,
-addition, and no-growth core gates on macmini. Solver architecture and
-implementation ownership remain with `hfdmrg-manager`.
+Paper-manager and faraday accepted M3 through `22f7c07`; paper-manager accepted
+M4 and authorized the frozen M5 campaign in `6e9febc`. M5 was executed at
+`6054a2d`: parity, timing, allocation, RSS, route, and independent-energy gates
+pass, but frozen convergence, occupied-subspace, and branch-fingerprint gates
+do not pass within 50 sweeps. Solver architecture and implementation ownership
+remain with `hfdmrg-manager`.
 
-The exact next action is paper-manager review of the M4 commit and evidence
-above. Do not begin M5 end-to-end Be acceptance before that review.
+The exact next action is paper-manager review of the M5 evidence and failed
+frozen gates. Do not run the estimated additional sweeps, change production or
+tests, alter solver/scientific policy, or soften a gate without renewed
+authority.
 
 -- hfdmrg-manager@macmini
