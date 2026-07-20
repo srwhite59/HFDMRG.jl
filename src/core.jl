@@ -566,11 +566,15 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 psidn_occ = @view psidn[:, 1:Ndn]
                 rhodn = psidn_occ * psidn_occ'
             end
-            scf_iter = 4
-            for s = 1:scf_iter
+            Fup = copy(H1B)
+            if restricted
+                vee_add_fock_r!(Fup, rhoup, win)
+            else
+                Fdn = copy(H1B)
+                vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+            end
+            for s = 1:4
                 if restricted
-                    Fup = copy(H1B)
-                    vee_add_fock_r!(Fup, rhoup, win)
                     evals, evecs = eigsym(Fup)
                     psiup = evecs[:, 1:Nup]
                     rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
@@ -578,8 +582,6 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                     vee_add_fock_r!(Fup, rhoup, win)
                     energy = tr(rhoup * (Fup + H1B))
                 else
-                    Fup, Fdn = copy(H1B), copy(H1B)
-                    vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
                     evals, evecs = eigsym(Fup)
                     psiup = evecs[:, 1:Nup]
                     rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
@@ -593,9 +595,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 if energy > energylast
                     lambda[b] *= 0.5
                 end
-                if abs(energylast - energy) < scf_cutoff || s == scf_iter
-                    break
-                end
+                (abs(energylast - energy) < scf_cutoff || s == 4) && break
                 energylast = energy
             end
 
@@ -730,10 +730,9 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
             psidn_occ = @view psidn[:, 1:Ndn]
             rhoup = psiup_occ * psiup_occ'
             rhodn = psidn_occ * psidn_occ'
-            scf_iter = 4
-            for s = 1:scf_iter
-                Fup, Fdn = copy(H1Bup), copy(H1Bdn)
-                vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+            Fup, Fdn = copy(H1Bup), copy(H1Bdn)
+            vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+            for s = 1:4
                 evals, evecs = eigsym(Fup)
                 psiup = evecs[:, 1:Nup]
                 rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
@@ -748,9 +747,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 if energy > energylast
                     lambda[b] *= 0.5
                 end
-                if _rel_converged(energylast, energy, scf_cutoff) || s == scf_iter
-                    break
-                end
+                (_rel_converged(energylast, energy, scf_cutoff) || s == 4) && break
                 energylast = energy
             end
 

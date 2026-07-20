@@ -5,7 +5,7 @@ Owner: `hfdmrg-manager`
 Branch: `perf/cached-sliced-20260719`
 Base commit: `f097ce49f661a9a6881131a4fc77af8d00d3b9f7`
 M3 implementation commit: `ce20a73`
-Status: **Milestone 3 validated on macmini; awaiting paper-manager review**
+Status: **Milestone 4 validated on macmini; awaiting paper-manager review before M5**
 
 Solver architecture, implementation, and line-budget ownership remain with
 `hfdmrg-manager`. `hfdmrg-paper-manager` reviews whether the partition,
@@ -699,6 +699,82 @@ These are synthetic engineering measurements on the recorded manager host,
 not frozen-Be or end-to-end paper scaling claims. M5 scientific acceptance
 remains unrun.
 
+## Milestone 4 Result
+
+The core now builds one Fock matrix for the initial density in each moving
+window. Every local microiteration diagonalizes the current Fock matrix, mixes
+the resulting occupied projector into the density exactly as before, builds a
+fresh post-density Fock matrix for the energy, and retains that completed
+matrix for the next diagonalization. In symbols,
+
+```text
+F_s       = H_window + G(D_s)
+P_s       = occupied projector from F_s
+D_(s+1)   = (1-lambda_b) D_s + lambda_b P_s
+F_(s+1)   = H_window + G(D_(s+1))
+E_(s+1)   = existing RHF or UHF trace expression.
+```
+
+The pre-M4 loop redundantly reconstructed `F_(s+1)` before the next
+diagonalization. Removing only that duplicate changes `2n` backend calls into
+`n+1`; four forced updates require five calls instead of eight. Every genuinely
+new density still starts from a fresh copy of the projected one-body matrix,
+and the backend adds its complete interaction contribution exactly once. No
+zero-interaction, delta-Fock, backend-purity, or retained-backend-state
+assumption was introduced.
+
+Damping, energy evaluation, local and sweep convergence, block transforms,
+physical-basis expansion, and observer notification remain in their original
+order. The same rearrangement applies to common-H RHF/UHF and genuinely split
+one-body UHF.
+
+### M4 Numerical And Call-Count Evidence
+
+The compact committed fixture wraps real nonzero density-density and cached
+sliced backends without changing their results. Forced-four common RHF, common
+UHF, split UHF, and aligned cached UHF all make exactly five calls per window;
+an immediate-convergence RHF window makes two calls for one update. Wrapped
+and unwrapped solve results are exactly equal.
+
+A saved pre/post comparison uses the same analytic six-slice fixture for
+density-density and cached-sliced RHF, common UHF, and split UHF. All six
+one-sweep energies, full orbital matrices, and occupied projectors are
+bit-for-bit identical. All twelve snapshots from the corresponding two-sweep
+observer histories are likewise bit-for-bit identical. Calls in every matched
+forced-four window change from eight to five.
+
+Both ordinary test entry points pass all `182` assertions, including `13` M4
+assertions. The aligned fixed/ragged verifier still has maximum window and
+sweep disagreements of `5.11e-15` and `3.55e-15 Ha`.
+
+### M4 Performance Evidence
+
+The timing fixture is sliced projection RHF with 16 nine-orbital slices,
+rank-four retained blocks, one center slice, and four forced local updates.
+Only delegated backend Fock time and allocation are compared; this is not a
+complete-sweep speedup claim. One warmup preceded three measured trials.
+
+| Metric | Pre-M4 | M4 worktree | Change |
+|---|---:|---:|---:|
+| Calls per trial | `208` | `130` | `-37.5%` |
+| Calls per window | `8` | `5` | `-37.5%` |
+| Median delegated Fock time | `0.736171 s` | `0.463363 s` | `-37.058%` |
+| Delegated allocation | `80.212 MiB` | `50.133 MiB` | `-37.5%` |
+
+The post-M4 three-trial timing range is `0.462895-0.464995 s`. The saved
+baseline and comparison records are under:
+
+```text
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/pre_m4_baseline_b3362f3.jls
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/pre_m4_observer_history_b3362f3.jls
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/pre_m4_projection_timing_b3362f3.log
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_compare_b3362f3_worktree.log
+~/dmrgtmp/hfdmrg_cached_sliced_20260719/post_m4_projection_timing_b3362f3_worktree.log
+```
+
+These remain engineering measurements. M5 end-to-end Be timing, peak memory,
+and scientific acceptance have not started.
+
 ## Validation Ladder
 
 ### Milestone 1: Explicit Aligned Partition
@@ -806,27 +882,28 @@ source, tests, scripts, and user/architecture documentation:
 | M2 | `src/backends/sliced_basis_cached.jl`, `test/runtests.jl` | `213` actual (`220` cap) | `80` actual (`45` target) |
 | M2 correction | `src/core.jl`, `src/backends/sliced_basis_cached.jl`, `test/runtests.jl`, `README.md` | `97` actual | `45` actual (`0` target) |
 | M3 | Cached source/tests, both sliced scripts, cached example, user/architecture docs | `300` actual (`300` cap) | `829` actual (`360` target) |
-| M4 | `src/core.jl`, `test/runtests.jl`, `docs/backend_architecture.md` | not started; only `3` additions remain under the combined cap | `15` target |
-| **M3 + M4 remaining** | | **`300/303` used; `3` remain** | **`829` actual (`375` target)** |
-| **Program total** | | **`677/680` used; `3` remain** | **`956` actual (`420` target)** |
+| M4 | `src/core.jl`, `test/runtests.jl`, `docs/backend_architecture.md` | `86` actual (`90` amended cap) | `20` actual (`15` target) |
+| **M3 + M4** | | **`386` actual after M4 amendment** | **`849` actual** |
+| **Program total** | | **`763` actual** | **`976` actual** |
 
 Target net growth is at most `260` lines. Stop for renewed design review if a
 milestone exceeds its cap, needs `backend_api.jl`, introduces another public
 type/framework, or fails to shrink the cached source materially by Milestone
 3.
 
-Addition caps and the total net-growth cap are firm. Deletion figures are
-targets, not correctness gates; they must not force over-compression. Counts
-come from each milestone commit's `git diff --numstat`. Replacement-only churn
-in this status memo and the required paper-review governance memo are excluded.
+Addition caps and the total net-growth cap were firm through M3. The M3
+paper-review note supersedes only the previous three-addition M4 remainder: M4
+again has its original `90`-addition cap, retains the `15`-deletion target, and
+may not increase the production `src/core.jl` line count. Counts come from each
+milestone commit's `git diff --numstat`. Replacement-only churn in this status
+memo and required paper-review governance memos are excluded.
 The corrective implementation uses `97` additions and `45` deletions. The ten
 unused M1/M2 additions reduce its debit to `87`, leaving a combined `303` for
 M3 and M4 without widening their individual ceilings or the program total.
-M3 uses `300` of those additions and deletes `829` lines. Across milestone
-commits through M3, counted files have `677` additions and `956` deletions,
-for net shrinkage of `279` lines. M4 therefore has only `3` additions left
-under the approved program budget and must not begin without review of that
-constraint.
+M3 uses `300` additions and deletes `829` lines. M4 adds `86` and deletes `20`;
+`src/core.jl` shrinks from `866` to `863` lines. Across milestone commits
+through M4, counted files have `763` additions and `976` deletions, for a
+substantial net shrinkage of `213` lines.
 
 Milestone 2 specifically replaces the scalar global raw-cache loops. Milestone
 3 deleted:
@@ -837,10 +914,11 @@ Milestone 2 specifically replaces the scalar global raw-cache loops. Milestone
 - unused center metadata; and
 - misleading historical direct/exchange timing labels.
 
-Milestone 4 would consolidate duplicate pre/post-density Fock construction
-without changing solver policy; it remains held.
+Milestone 4 consolidates duplicate pre/post-density Fock construction without
+changing solver policy.
 
-M3 added no source file, include wiring, public type, or backend API operation.
+M3/M4 added no source file, include wiring, public type, or backend API
+operation.
 
 ## Risks And Stop Conditions
 
@@ -877,15 +955,12 @@ The manager design records three bounded decisions:
 3. delegate partial-slice cached windows to projection and enforce the
    addition/net-growth budget above.
 
-Paper-manager review and faraday verification accepted M1/M2 through
-`c4e954b`. M3 is now implemented and validated on macmini under every recorded
-numerical, routing, allocation, scaling, speed, deletion, and individual line
-gate. Solver architecture and implementation ownership remain with
-`hfdmrg-manager`.
+Paper-manager and faraday accepted M3 through `22f7c07` and authorized M4 in
+`b3362f3`. M4 now passes its call-count, exact trajectory, timing, deletion,
+addition, and no-growth core gates on macmini. Solver architecture and
+implementation ownership remain with `hfdmrg-manager`.
 
-The exact next action is paper-manager review of the M3 commit and evidence
-above. Do not begin M4 duplicate-Fock reuse or M5 Be acceptance before that
-review; the remaining `3`-addition combined budget is itself an explicit M4
-review item.
+The exact next action is paper-manager review of the M4 commit and evidence
+above. Do not begin M5 end-to-end Be acceptance before that review.
 
 -- hfdmrg-manager@macmini

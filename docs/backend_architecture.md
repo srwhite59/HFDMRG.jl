@@ -65,10 +65,10 @@ The core then follows this lifecycle:
 1. Build initial left and right block states with `vee_init_block`.
 2. At each position, assemble the projected one-body matrix and call
    `vee_window` once.
-3. Run at most four local SCF micro-iterations. Each micro-iteration builds a
-   Fock matrix to obtain new occupied orbitals and builds it again to evaluate
-   the mixed-density energy, so one window can receive up to eight calls to a
-   backend Fock method.
+3. Build one Fock matrix for the initial density, then run at most four local
+   SCF micro-iterations. Each iteration builds one post-density Fock matrix for
+   both its energy and the next diagonalization, so `n` iterations make `n+1`
+   backend calls and one window receives at most five.
 4. Expand the updated orbitals to the physical basis, retaining the latest
    expansion for end-of-sweep return and observer/checkpoint use.
 5. Obtain a new environment basis from an occupied-orbital SVD, absorb the

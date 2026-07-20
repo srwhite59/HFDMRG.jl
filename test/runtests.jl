@@ -46,9 +46,78 @@ try
         Q[:, 1:m]
     end
 
+    mutable struct FockCountingBackend{B}
+        backend::B
+        calls::Int
+        windows::Int
+    end
+
+    struct CountedFockWindow{W, B}
+        window::W
+        backend::B
+    end
+
+    HFDMRG.vee_init_block(side, ra, raV, phi, b::FockCountingBackend) =
+        HFDMRG.vee_init_block(side, ra, raV, phi, b.backend)
+    HFDMRG.vee_absorb_block(side, old, cra, Phi_old, Phi_C, phi, raV,
+        b::FockCountingBackend) = HFDMRG.vee_absorb_block(side, old, cra,
+        Phi_old, Phi_C, phi, raV, b.backend)
+
+    function HFDMRG.vee_window(L, R, Cra, b::FockCountingBackend)
+        b.windows += 1
+        CountedFockWindow(HFDMRG.vee_window(L, R, Cra, b.backend), b)
+    end
+
+    function HFDMRG.vee_add_fock_r!(F, rho, win::CountedFockWindow)
+        win.backend.calls += 1
+        HFDMRG.vee_add_fock_r!(F, rho, win.window)
+    end
+
+    function HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::CountedFockWindow)
+        win.backend.calls += 1
+        HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win.window)
+    end
+
     @testset "Public API" begin
         @test isdefined(HFDMRG, :solve_hfdmrg)
         @test :solve_hfdmrg in names(HFDMRG, all = false)
+    end
+
+    @testset "Local Fock reuse" begin
+        rng = MersenneTwister(719)
+        layout = HFDMRG.SliceLayout(fill(2, 6))
+        N = layout.offs[end]
+        A = randn(rng, N, N); H = Matrix(Symmetric(A))
+        B = randn(rng, N, N); V = 0.02 * Matrix(Symmetric(B))
+        V6 = 0.002 * randn(rng, 2, 2, 2, 2, 6, 6)
+        up = orthonormal_cols(rng, N, 1)
+        dn = orthonormal_cols(rng, N, 1)
+        Hdn = H + Diagonal(range(-0.05, 0.05; length = N))
+        kw = (; maxiter = 1, blocksize = 2, cutoff = 0.0, verbose = false)
+        density = HFDMRG.DensityDensityBackend(V)
+        cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+        routes = (
+            (density, b -> HFDMRG.solve_hfdmrg_core(H, b, up, up;
+                restricted = true, scf_cutoff = 0.0, kw...)),
+            (density, b -> HFDMRG.solve_hfdmrg_core(H, b, up, dn;
+                restricted = false, scf_cutoff = 0.0, kw...)),
+            (density, b -> HFDMRG.solve_hfdmrg_core_split(H, Hdn, b, up, dn;
+                scf_cutoff = 0.0, kw...)),
+            (cached, b -> HFDMRG.solve_hfdmrg_core(H, b, up, dn;
+                restricted = false, block_partition = layout,
+                scf_cutoff = 0.0, kw...)),
+        )
+        for (backend, run) in routes
+            counted = FockCountingBackend(backend, 0, 0)
+            @test run(counted) == run(backend)
+            @test counted.windows > 0
+            @test counted.calls == 5 * counted.windows
+        end
+
+        counted = FockCountingBackend(density, 0, 0)
+        HFDMRG.solve_hfdmrg_core(H, counted, up, up; restricted = true,
+            scf_cutoff = Inf, kw...)
+        @test counted.calls == 2 * counted.windows
     end
 
     @testset "Split one-body UHF API" begin
