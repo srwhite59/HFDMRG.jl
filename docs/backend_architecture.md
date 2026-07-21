@@ -272,6 +272,9 @@ and the number of local SCF builds. The cached sliced route deliberately spends
 more persistent memory than the projection route to avoid repeated full-basis
 work. Neither route should create a global four-index interaction.
 
+The accepted cached-sliced design and frozen-Be evidence are preserved in the
+[final performance account](../notes/cached_sliced_performance_final_2026-07-20.md).
+
 A design proposal for a new backend must state:
 
 - global, per-block, and per-window storage;
