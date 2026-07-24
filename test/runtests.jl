@@ -10,9 +10,6 @@ try
         pushfirst!(LOAD_PATH, testdir)
     end
 
-    include(joinpath(testdir, "..", "reference", "HF_dmrg_legacy.jl"))
-    Legacy = HF_dmrg
-
     function slice_local(p, nj)
         n = (p - 1) ÷ nj + 1
         a = p - (n - 1) * nj
@@ -913,35 +910,82 @@ try
             atol = 1e-12, rtol = 0)
     end
 
-    @testset "HF-DMRG regression" begin
-        rng = MersenneTwister(1234)
-        N = 16
-        A = randn(rng, N, N)
-        H = (A + A') / 2
-        B = randn(rng, N, N)
-        V = (B + B') / 2
+    @testset "Complete fixed boundary spans" begin
+        N = 12
+        eye = Matrix{Float64}(I, N, N)
+        orbital(i) = eye[:, i:i]
+        projector(C) = C * C'
+        layout = HFDMRG.SliceLayout(fill(2, 6))
+        V = zeros(N, N)
+        V6 = zeros(2, 2, 2, 2, 6, 6)
+        projection = HFDMRG.SlicedBasisBackend(layout, V6)
+        cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+        kw = (; maxiter = 1, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = 0.0, verbose = false)
+        partitions = ((;), (; block_partition = layout))
 
-        maxiter = 1
-        blocksize = 2
-        cutoff = 1e-8
+        H = Matrix(Diagonal(fill(4.0, N)))
+        H[2, 2] = H[11, 11] = -2.0
+        H[2, 11] = H[11, 2] = -0.4
+        rhf0 = hcat(orbital(1), orbital(12))
+        Pref = projector(hcat(orbital(2), orbital(11)))
+        q = (orbital(2) + orbital(11)) / sqrt(2)
+        up0, dn0 = orbital(1), orbital(12)
+        Hup, Hdn = copy(H), copy(H)
+        Hup[11, 11] = Hdn[2, 2] = 2.0
+        Hup[2, 11] = Hup[11, 2] = 0.0
+        Hdn[2, 11] = Hdn[11, 2] = 0.0
 
-        Nup = 1
-        Ndn = 1
-        psiup0 = orthonormal_cols(rng, N, Nup)
-        psidn0 = orthonormal_cols(rng, N, Ndn)
-        _, _, e_new = solve_hfdmrg(H, V, psiup0, psidn0;
-            maxiter, blocksize, cutoff, verbose = false)
-        _, _, e_legacy = Legacy.dohfdmrg(H, V, psiup0, psidn0, false, 1,
-            blocksize, maxiter, cutoff; verbose = false)
-        @test isapprox(e_new, e_legacy; atol = 1e-6, rtol = 0)
+        for part in partitions
+            rhf = solve_hfdmrg(H, V, rhf0; kw..., part...)
+            @test isapprox(rhf[3], -8.0; atol = 1e-12, rtol = 0)
+            @test norm(projector(rhf[1]) - Pref) <= 1e-12
+            uhf = solve_hfdmrg(H, V, up0, dn0; kw..., part...)
+            @test isapprox(uhf[3], -4.8; atol = 1e-12, rtol = 0)
+            @test max(norm(projector(uhf[1]) - projector(q)),
+                norm(projector(uhf[2]) - projector(q))) <= 1e-12
+            split = solve_hfdmrg(Hup, Hdn, V, up0, dn0; kw..., part...)
+            @test isapprox(split[3], -4.0; atol = 1e-12, rtol = 0)
+            @test max(norm(projector(split[1]) - projector(orbital(2))),
+                norm(projector(split[2]) - projector(orbital(11)))) <= 1e-12
 
-        Nup_r = 1
-        psiup_r = orthonormal_cols(rng, N, Nup_r)
-        _, _, e_new_r = solve_hfdmrg(H, V, psiup_r;
-            maxiter, blocksize, cutoff, verbose = false)
-        _, _, e_legacy_r = Legacy.dohfdmrg(H, V, psiup_r, psiup_r, true, 1,
-            blocksize, maxiter, cutoff; verbose = false)
-        @test isapprox(e_new_r, e_legacy_r; atol = 1e-6, rtol = 0)
+            for backend in (projection, cached)
+                rhf = solve_hfdmrg(H, backend, rhf0; kw..., part...)
+                @test isapprox(rhf[3], -8.0; atol = 1e-12, rtol = 0)
+                @test norm(projector(rhf[1]) - Pref) <= 1e-12
+                uhf = solve_hfdmrg(H, backend, up0, dn0; kw..., part...)
+                @test isapprox(uhf[3], -4.8; atol = 1e-12, rtol = 0)
+                @test max(norm(projector(uhf[1]) - projector(q)),
+                    norm(projector(uhf[2]) - projector(q))) <= 1e-12
+                split = solve_hfdmrg(
+                    Hup, Hdn, backend, up0, dn0; kw..., part...)
+                @test isapprox(split[3], -4.0; atol = 1e-12, rtol = 0)
+                @test max(norm(projector(split[1]) - projector(orbital(2))),
+                    norm(projector(split[2]) - projector(orbital(11)))) <= 1e-12
+            end
+        end
+
+        routes = withenv("HFDMRG_BENCH_TIMING" => "1") do
+            HFDMRG._bench_timing_reset!()
+            solve_hfdmrg(Hup, Hdn, cached, up0, dn0;
+                kw..., block_partition = layout)
+            HFDMRG._bench_timing_snapshot()
+        end
+        @test (routes[:cache_init_calls], routes[:cache_incremental_calls],
+            routes[:cache_fallback_calls]) == (2.0, 9.0, 0.0)
+        @test (routes[:window_local_calls], routes[:window_projection_calls]) ==
+              (6.0, 0.0)
+
+        complete = hcat((orbital(1) + orbital(11)) / sqrt(2),
+            (orbital(2) + orbital(12)) / sqrt(2))
+        Hcomplete = Matrix(Diagonal(fill(4.0, N)))
+        Hcomplete[1, 1] = Hcomplete[11, 11] = 0.0
+        Hcomplete[1, 11] = Hcomplete[11, 1] = -3.0
+        Hcomplete[2, 2] = Hcomplete[12, 12] = 0.0
+        Hcomplete[2, 12] = Hcomplete[12, 2] = -2.0
+        unchanged = solve_hfdmrg(Hcomplete, V, complete; kw...)
+        @test isapprox(unchanged[3], -10.0; atol = 1e-12, rtol = 0)
+        @test norm(projector(unchanged[1]) - projector(complete)) <= 1e-12
     end
 finally
     empty!(LOAD_PATH)

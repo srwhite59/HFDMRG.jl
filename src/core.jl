@@ -124,21 +124,27 @@ function getphi(psira)
     u[:, 1:mkeep], mkeep
 end
 
-function getblock(side, range, psi, H, Vee, firstindsH, finalindsH; dofull = true)
-    N = size(psi, 1)
+function _makeblock(side, range, phi, H, Vee, firstindsH, finalindsH;
+    dofull = true)
+    N = size(H, 1)
     raH1 = getraH1(range, firstindsH, finalindsH)
     raV = getraV(range, N)
-    phi, m = getphi(psi[range, :])
+    m = size(phi, 2)
     if dofull
         H1ij = phi' * H[range, range] * phi
         H1phi = H[raH1, range] * phi
     else
-        T = eltype(psi)
+        T = eltype(phi)
         H1ij = zeros(T, m, m)
         H1phi = zeros(T, length(raH1), m)
     end
     vee_state = vee_init_block(side, range, raV, phi, Vee)
     LRBlock(range, raH1, raV, m, phi, H1ij, H1phi, vee_state)
+end
+
+function getblock(side, range, psi, H, Vee, firstindsH, finalindsH; dofull = true)
+    phi, _ = getphi(psi[range, :])
+    _makeblock(side, range, phi, H, Vee, firstindsH, finalindsH; dofull)
 end
 
 function _h1cache(range, phi, m, H, raH1; dofull = true)
@@ -149,16 +155,23 @@ function _h1cache(range, phi, m, H, raH1; dofull = true)
     BlockH1Cache(zeros(T, m, m), zeros(T, length(raH1), m))
 end
 
-function getblock_split(side, range, psi, Hup, Hdn, Vee, firstindsH, finalindsH;
+function _makeblock_split(side, range, phi, Hup, Hdn, Vee, firstindsH, finalindsH;
     dofull = true)
-    N = size(psi, 1)
+    N = size(Hup, 1)
     raH1 = getraH1(range, firstindsH, finalindsH)
     raV = getraV(range, N)
-    phi, m = getphi(psi[range, :])
+    m = size(phi, 2)
     hup = _h1cache(range, phi, m, Hup, raH1; dofull)
     hdn = _h1cache(range, phi, m, Hdn, raH1; dofull)
     vee_state = vee_init_block(side, range, raV, phi, Vee)
     SplitLRBlock(range, raH1, raV, m, phi, hup, hdn, vee_state)
+end
+
+function getblock_split(side, range, psi, Hup, Hdn, Vee, firstindsH, finalindsH;
+    dofull = true)
+    phi, _ = getphi(psi[range, :])
+    _makeblock_split(
+        side, range, phi, Hup, Hdn, Vee, firstindsH, finalindsH; dofull)
 end
 
 function _addblockright_h1(cra, PhiC, PhiR, oldcache, oldraH1, H, raH1)
@@ -356,8 +369,14 @@ end
 
 function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH, finalindsH; verbose = false)
     N = size(H, 1)
-    block1 = getblock(:left, 1:blocksizes[1], psi, H, Vee, firstindsH, finalindsH)
-    blockn = getblock(:right, N - blocksizes[nblocks] + 1:N, psi, H, Vee, firstindsH, finalindsH)
+    left = 1:blocksizes[1]
+    right = N - blocksizes[nblocks] + 1:N
+    # Fixed edge blocks never become centers, so retain their complete physical spans.
+    block1 = _makeblock(:left, left, Matrix{eltype(psi)}(I, length(left), length(left)),
+        H, Vee, firstindsH, finalindsH)
+    blockn = _makeblock(:right, right,
+        Matrix{eltype(psi)}(I, length(right), length(right)),
+        H, Vee, firstindsH, finalindsH)
     block = Vector{typeof(block1)}(undef, nblocks)
     block[1] = block1
     block[nblocks] = blockn
@@ -377,10 +396,14 @@ end
 function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee,
     firstindsH, finalindsH; verbose = false)
     N = size(Hup, 1)
-    block1 = getblock_split(:left, 1:blocksizes[1], psi, Hup, Hdn, Vee, firstindsH,
-        finalindsH)
-    blockn = getblock_split(:right, N - blocksizes[nblocks] + 1:N, psi, Hup, Hdn,
-        Vee, firstindsH, finalindsH)
+    left = 1:blocksizes[1]
+    right = N - blocksizes[nblocks] + 1:N
+    block1 = _makeblock_split(:left, left,
+        Matrix{eltype(psi)}(I, length(left), length(left)),
+        Hup, Hdn, Vee, firstindsH, finalindsH)
+    blockn = _makeblock_split(:right, right,
+        Matrix{eltype(psi)}(I, length(right), length(right)),
+        Hup, Hdn, Vee, firstindsH, finalindsH)
     block = Vector{typeof(block1)}(undef, nblocks)
     block[1] = block1
     block[nblocks] = blockn
