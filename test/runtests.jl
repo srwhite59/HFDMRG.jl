@@ -986,6 +986,43 @@ try
         unchanged = solve_hfdmrg(Hcomplete, V, complete; kw...)
         @test isapprox(unchanged[3], -10.0; atol = 1e-12, rtol = 0)
         @test norm(projector(unchanged[1]) - projector(complete)) <= 1e-12
+
+        dims = [3, 1, 2, 1, 4]
+        ragged_layout = HFDMRG.SliceLayout(dims)
+        Nragged = sum(dims)
+        Qragged = [sqrt(2 / (Nragged + 1)) *
+                   sinpi(i * j / (Nragged + 1))
+                   for i = 1:Nragged, j = 1:Nragged]
+        levels = [-4.0, -3.0, -2.0, -1.0, collect(1.0:7.0)...]
+        Hragged = Qragged * Diagonal(levels) * Qragged'
+        Vragged = [[zeros(dims[n], dims[n], dims[m], dims[m])
+                    for m = 1:length(dims)] for n = 1:length(dims)]
+        ragged_backend =
+            HFDMRG.SlicedBasisBackendCached(ragged_layout, Vragged)
+        ragged_eye = Matrix{Float64}(I, Nragged, Nragged)
+        ragged_start = ragged_eye[:, [1, 4, 5, 6, 7, 8, 11]]
+        ragged_kw = (; maxiter = 1, blocksize = 999,
+            block_partition = ragged_layout, cutoff = 0.0, scf_cutoff = 0.0,
+            verbose = false)
+        ragged_result, ragged_routes =
+            withenv("HFDMRG_BENCH_TIMING" => "1") do
+                HFDMRG._bench_timing_reset!()
+                result = solve_hfdmrg(
+                    Hragged, ragged_backend, ragged_start; ragged_kw...)
+                result, HFDMRG._bench_timing_snapshot()
+            end
+        ragged_oracle = Qragged[:, 1:7]
+        @test isapprox(ragged_result[3], 2sum(levels[1:7]);
+            atol = 1e-12, rtol = 0)
+        @test norm(projector(ragged_result[1]) -
+                   projector(ragged_oracle)) <= 1e-12
+        @test (count(>(1e-10), svdvals(ragged_result[1][1:3, :])),
+            count(>(1e-10), svdvals(ragged_result[1][8:11, :]))) == (3, 4)
+        @test (ragged_routes[:cache_init_calls],
+            ragged_routes[:cache_incremental_calls],
+            ragged_routes[:cache_fallback_calls]) == (2.0, 6.0, 0.0)
+        @test (ragged_routes[:window_local_calls],
+            ragged_routes[:window_projection_calls]) == (4.0, 0.0)
     end
 finally
     empty!(LOAD_PATH)

@@ -31,7 +31,8 @@ The sweep core owns:
 - physical partitioning and left-to-right/right-to-left scheduling;
 - projected common or spin-dependent one-body Hamiltonians;
 - occupied orbitals, densities, diagonalization, occupation, and damping;
-- the SVD that chooses each new environment basis;
+- complete identity bases for the two permanently fixed physical edge blocks,
+  and the occupied-orbital SVD that chooses each grown interior environment;
 - RHF/UHF energy evaluation, convergence, and observer notification; and
 - expansion of the final orbitals into the physical basis.
 
@@ -62,7 +63,10 @@ center contains `c` sites, the local window dimension is
 
 The core then follows this lifecycle:
 
-1. Build initial left and right block states with `vee_init_block`.
+1. Seed the permanently fixed left and right physical edge blocks with literal
+   coordinate identities over their complete ranges, then build their backend
+   states with `vee_init_block`. Build larger initial interior environments
+   from occupied-orbital SVDs.
 2. At each position, assemble the projected one-body matrix and call
    `vee_window` once.
 3. Build one Fock matrix for the initial density, then run at most four local
@@ -103,6 +107,10 @@ for the same backend need to understand it.
 - `raV`, the physical range outside the block that can still couple to it;
 - `phi`, an `length(ra) x k` orthonormal block basis; and
 - the solve-wide backend object.
+
+A fixed edge's initial `phi` is the complete identity on `ra`, rather than an
+occupied-subspace truncation. Later, grown interior environments come from the
+occupied-orbital SVD described under absorption.
 
 A left block grows from low physical indices and has
 `raV = (ra[end]+1):N`. A right block grows from high indices and has
@@ -271,6 +279,12 @@ Actual time depends on block ranks, center placement, slice sizes, BLAS shape,
 and the number of local SCF builds. The cached sliced route deliberately spends
 more persistent memory than the projection route to avoid repeated full-basis
 work. Neither route should create a global four-index interaction.
+
+For a permanently fixed edge block of physical dimension `d`, completeness
+sets `k = d`. The `k^4` retained block term is therefore `O(d^4)` at each
+fixed edge in the density-density and cached sliced routes. This edge cost does
+not change the occupied-SVD compression of grown interior environments, but it
+makes oversized edge chunks a potentially important storage choice.
 
 The accepted cached-sliced design and frozen-Be evidence are preserved in the
 [final performance account](../notes/cached_sliced_performance_final_2026-07-20.md).

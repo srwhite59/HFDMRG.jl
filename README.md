@@ -91,19 +91,23 @@ step. HFDMRG instead moves a smaller working problem through the ordered
 physical basis. At each position it divides that basis into
 
 ```text
-compressed left environment | explicit center sites | compressed right environment
+retained left environment | explicit center sites | retained right environment
 ```
 
-The center contains bare physical sites. Each environment is represented by a
-small basis obtained from the occupied orbitals on that side. This is the
-DMRG-like part of the algorithm; there is no user-selected many-body bond
-dimension.
+The center contains bare physical sites. The permanently fixed first and last
+physical blocks use complete coordinate-identity bases, so startup cannot
+discard unoccupied boundary directions. Interior environments grown during
+initialization or a sweep are represented by smaller bases obtained from the
+occupied orbitals on that side. This is the DMRG-like part of the algorithm;
+there is no user-selected many-body bond dimension.
 
 One calculation proceeds as follows:
 
 1. **Build the initial environments.** The physical basis is divided into
-   contiguous chunks. `blocksize` controls the requested chunk size, while
-   `nblockcenter` controls how many center chunks remain explicit.
+   contiguous chunks, and the two fixed edge chunks are seeded with literal
+   identity bases over their complete physical ranges. `blocksize` controls
+   the requested chunk size, while `nblockcenter` controls how many center
+   chunks remain explicit.
 2. **Assemble one moving window.** The one-body Hamiltonian is transformed into
    the current left-center-right basis. The active backend supplies the needed
    block and window interaction caches from its density-density, sliced, or
@@ -120,6 +124,12 @@ One calculation proceeds as follows:
    right-to-left pass is one sweep. After the sweep, HFDMRG expands the
    orbitals back into the full physical basis, tests the energy change, and
    calls the optional observer.
+
+If a fixed edge chunk has physical dimension `d`, its complete retained rank
+is also `d`. The density-density and cached sliced routes therefore retain an
+edge interaction term with `O(d^4)` storage. Grown interior environments remain
+occupied-SVD compressed, so this cost is localized to the two fixed edges;
+unusually large edge chunks can nevertheless be expensive.
 
 This organization is intended for ordered bases whose interactions fit one of
 HFDMRG's compact backend representations. It is still Hartree-Fock: the
@@ -541,7 +551,8 @@ julia --project=. examples/cached_sliced.jl
   scaling policy, and extension checklist.
 - `examples/`: executable introductory and advanced workflows.
 - `test/`: compact numerical and end-to-end regression tests.
-- `reference/HF_dmrg_legacy.jl`: legacy solver used for regression tests.
+- `reference/HF_dmrg_legacy.jl`: historical implementation retained for
+  reference; it is not an active regression oracle.
 
 ## How to run tests
 
