@@ -52,11 +52,11 @@ end
 # Input: ranges for A and B in absolute sites
 # Output: intersection in abs. sites, as part of A range, then B, then isempty?
 function intersectrange(Ara, Bra)
-    firstidx = max(Ara[1], Bra[1])
-    lastidx = min(Ara[end], Bra[end])
+    firstidx = max(first(Ara), first(Bra))
+    lastidx = min(last(Ara), last(Bra))
     absra = firstidx:lastidx
-    ara = (absra) .- (Ara[1] - 1)
-    bra = (absra) .- (Bra[1] - 1)
+    ara = (absra) .- (first(Ara) - 1)
+    bra = (absra) .- (first(Bra) - 1)
     absra, ara, bra, (lastidx >= firstidx)
 end
 

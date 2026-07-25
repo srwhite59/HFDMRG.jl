@@ -1024,6 +1024,36 @@ try
         @test (ragged_routes[:window_local_calls],
             ragged_routes[:window_projection_calls]) == (4.0, 0.0)
     end
+
+    @testset "Diagonal one-body coupling ranges" begin
+        N = 10
+        eye = Matrix{Float64}(I, N, N)
+        orbital(i) = eye[:, i:i]
+        projector(C) = C * C'
+        levels = [0.0, -4.0, fill(5.0, 6)..., -3.0, 1.0]
+        H = Matrix(Diagonal(levels))
+        Hdn = Matrix(Diagonal(reverse(levels)))
+        V = zeros(N, N)
+        layout = HFDMRG.SliceLayout(fill(2, 5))
+        rhf0 = hcat(orbital(1), orbital(10))
+        up0, dn0 = orbital(1), orbital(10)
+        kw = (; maxiter = 1, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = 0.0, verbose = false)
+        for part in ((;), (; block_partition = layout))
+            rhf = solve_hfdmrg(H, V, rhf0; kw..., part...)
+            @test isapprox(rhf[3], -14.0; atol = 1e-12, rtol = 0)
+            @test norm(projector(rhf[1]) -
+                       projector(hcat(orbital(2), orbital(9)))) <= 1e-12
+            uhf = solve_hfdmrg(H, V, up0, dn0; kw..., part...)
+            @test isapprox(uhf[3], -8.0; atol = 1e-12, rtol = 0)
+            @test max(norm(projector(uhf[1]) - projector(orbital(2))),
+                norm(projector(uhf[2]) - projector(orbital(2)))) <= 1e-12
+            split = solve_hfdmrg(H, Hdn, V, up0, dn0; kw..., part...)
+            @test isapprox(split[3], -8.0; atol = 1e-12, rtol = 0)
+            @test max(norm(projector(split[1]) - projector(orbital(2))),
+                norm(projector(split[2]) - projector(orbital(9)))) <= 1e-12
+        end
+    end
 finally
     empty!(LOAD_PATH)
     append!(LOAD_PATH, old_load_path)
