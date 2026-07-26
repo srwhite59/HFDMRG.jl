@@ -122,12 +122,12 @@ construction.
 
 `vee_absorb_block` constructs a replacement state after the SVD moves a center
 chunk into an environment. `Phi_old` has shape `k_old x k_new`; `Phi_C` has
-shape `length(cra) x k_new`. Before the core's small reorthonormalization, the
-new physical basis has the block form
+shape `length(cra) x k_new`. Both maps include the core's small
+post-SVD reorthogonalization, so the final stored physical basis satisfies
 
 ```text
-left growth:  [phi_old * Phi_old; Phi_C]
-right growth: [Phi_C; phi_old * Phi_old]
+left growth:  phi_new = [phi_old * Phi_old; Phi_C]
+right growth: phi_new = [Phi_C; phi_old * Phi_old]
 ```
 
 The core also supplies the final `phi_new` and new outside range `raV_new`.
