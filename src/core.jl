@@ -42,6 +42,45 @@ struct SweepInfo{E, U, D}
     converged::Bool
 end
 
+mutable struct _RunDiagnostics
+    mode::Symbol
+    spectra::Vector{NamedTuple}
+    windows::Vector{NamedTuple}
+    eigsym_seconds::Float64
+    eigsym_calls::Int
+end
+
+function _RunDiagnostics(mode::Symbol = :detailed)
+    mode in (:detailed, :timing) ||
+        error("_RunDiagnostics mode must be :detailed or :timing")
+    _RunDiagnostics(mode, NamedTuple[], NamedTuple[], 0.0, 0)
+end
+
+_detailed(diagnostics) =
+    diagnostics !== nothing && diagnostics.mode === :detailed
+
+function _record_fixed_edge!(diagnostics, side, range)
+    _detailed(diagnostics) || return
+    push!(diagnostics.spectra, (; sweep = 0, direction = :initialization,
+        window_ordinal = 0, side, physical_range = range,
+        retained_rank = length(range), status = :not_applicable,
+        singular_values = nothing))
+end
+
+function _record_window!(diagnostics, sweep, direction, window_ordinal,
+        left, center_range, right, local_iterations, locally_converged,
+        damping_before, damping_after, rise_updates, local_energies, final_energy,
+        eigsym_before)
+    _detailed(diagnostics) || return
+    push!(diagnostics.windows, (; sweep, direction, window_ordinal,
+        left_range = left.ra, center_range, right_range = right.ra,
+        left_rank = left.m, right_rank = right.m, local_iterations,
+        reached_iteration_four = local_iterations == 4, locally_converged,
+        cap_exhausted = local_iterations == 4 && !locally_converged,
+        damping_before, damping_after, rise_updates, local_energies, final_energy,
+        eigsym_seconds = diagnostics.eigsym_seconds - eigsym_before))
+end
+
 function _notify_observer(observer, info::SweepInfo)
     observer === nothing && return false
     stop = observer(info)
@@ -116,11 +155,17 @@ function getraV(ra, N)
     ra[end] + 1:N
 end
 
-function getphi(psira)
+function getphi(psira, diagnostics = nothing, sweep = 0, direction = :none,
+        window_ordinal = 0, side = :none, physical_range = 1:0)
     u, d, v = svd(psira)
     i = findlast(x -> x > 1.0e-10, d)
     i === nothing && (i = 1)
     mkeep = max(1, i)
+    if _detailed(diagnostics)
+        push!(diagnostics.spectra, (; sweep, direction, window_ordinal, side,
+            physical_range, retained_rank = mkeep, status = :measured,
+            singular_values = copy(d)))
+    end
     u[:, 1:mkeep], mkeep
 end
 
@@ -375,7 +420,8 @@ function getfinal(Hup, Hdn, N)
     max.(finalup, finaldn), min.(firstup, firstdn)
 end
 
-function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH, finalindsH; verbose = false)
+function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
+        finalindsH; verbose = false, _diagnostics = nothing)
     N = size(H, 1)
     left = 1:blocksizes[1]
     right = N - blocksizes[nblocks] + 1:N
@@ -388,12 +434,15 @@ function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
     block = Vector{typeof(block1)}(undef, nblocks)
     block[1] = block1
     block[nblocks] = blockn
+    _record_fixed_edge!(_diagnostics, :left, left)
+    _record_fixed_edge!(_diagnostics, :right, right)
     verbose && @show block[1].ra
     for b = nblocks - 1:-1:3
         cra = Cranges[b]
         lc = length(cra)
         crra = cra[1]:N
-        phi, m = getphi(psi[crra, :])
+        phi, m = getphi(psi[crra, :], _diagnostics, 0, :initialization,
+            nblocks - b, :right, crra)
         phi1 = block[b + 1].phi
         O = vcat(phi[1:lc, :], phi1' * phi[lc + 1:end, :])
         block[b] = addblockright(cra, O, block[b + 1], N, H, Vee, firstindsH)
@@ -402,7 +451,7 @@ function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
 end
 
 function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee,
-    firstindsH, finalindsH; verbose = false)
+    firstindsH, finalindsH; verbose = false, _diagnostics = nothing)
     N = size(Hup, 1)
     left = 1:blocksizes[1]
     right = N - blocksizes[nblocks] + 1:N
@@ -415,12 +464,15 @@ function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee
     block = Vector{typeof(block1)}(undef, nblocks)
     block[1] = block1
     block[nblocks] = blockn
+    _record_fixed_edge!(_diagnostics, :left, left)
+    _record_fixed_edge!(_diagnostics, :right, right)
     verbose && @show block[1].ra
     for b = nblocks - 1:-1:3
         cra = Cranges[b]
         lc = length(cra)
         crra = cra[1]:N
-        phi, m = getphi(psi[crra, :])
+        phi, m = getphi(psi[crra, :], _diagnostics, 0, :initialization,
+            nblocks - b, :right, crra)
         phi1 = block[b + 1].phi
         O = vcat(phi[1:lc, :], phi1' * phi[lc + 1:end, :])
         block[b] = addblockright_split(cra, O, block[b + 1], N, Hup, Hdn, Vee,
@@ -535,8 +587,12 @@ function getpsireduced(psiup, Lra, Lphi, Cra, Rra, Rphi)
     vcat(psiL, psiC, psiR)
 end
 
-function eigsym(A)
+function eigsym(A, diagnostics = nothing)
+    start_ns = diagnostics === nothing ? 0 : time_ns()
     E = eigen(Symmetric(A))
+    diagnostics === nothing || (diagnostics.eigsym_calls += 1)
+    diagnostics === nothing ||
+        (diagnostics.eigsym_seconds += (time_ns() - start_ns) * 1.0e-9)
     E.values, E.vectors
 end
 
@@ -554,6 +610,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     cutoff = 1e-11,
     scf_cutoff = nothing,
     observer = nothing,
+    _diagnostics = nothing,
     verbose = false)
 
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(H, 1)
@@ -562,7 +619,8 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     psiall = restricted ? psiup0 : hcat(psiup0, psidn0)
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
-    block = getinitialblocks(nblocks, blocksizes, Cranges, psiall, H, Vee, firstindsH, finalindsH; verbose)
+    block = getinitialblocks(nblocks, blocksizes, Cranges, psiall, H, Vee,
+        firstindsH, finalindsH; verbose, _diagnostics)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -587,10 +645,19 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
         verbose && println()
         verbose && @show iter
         for (b, dir, transdir) in fullsweep
+            detailed = _detailed(_diagnostics)
+            direction = detailed ? (dir == 1 ? :left_to_right : :right_to_left) : :none
+            window_ordinal = detailed ?
+                (dir == 1 ? b : nblocks - 1 - nblockcenter - b) : 0
             H1B = getH1(block[b], block[b + 1 + nblockcenter], H)
             Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
             win = vee_window(block[b].vee, block[b + 1 + nblockcenter].vee, Cra, Vee)
             energy = energylast = 1e10
+            local_energies = detailed ? Float64[] : nothing
+            rise_updates = detailed ? Int[] : nothing
+            damping_before = detailed ? lambda[b] : 0.0
+            eigsym_before = _diagnostics === nothing ? 0.0 : _diagnostics.eigsym_seconds
+            local_iterations, locally_converged = 0, false
             psiup_occ = @view psiup[:, 1:Nup]
             rhoup = psiup_occ * psiup_occ'
             if !restricted
@@ -606,29 +673,38 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
             end
             for s = 1:4
                 if restricted
-                    evals, evecs = eigsym(Fup)
+                    evals, evecs = eigsym(Fup, _diagnostics)
                     psiup = evecs[:, 1:Nup]
                     rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
                     Fup = copy(H1B)
                     vee_add_fock_r!(Fup, rhoup, win)
                     energy = tr(rhoup * (Fup + H1B))
                 else
-                    evals, evecs = eigsym(Fup)
+                    evals, evecs = eigsym(Fup, _diagnostics)
                     psiup = evecs[:, 1:Nup]
                     rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
-                    evals, evecs = eigsym(Fdn)
+                    evals, evecs = eigsym(Fdn, _diagnostics)
                     psidn = evecs[:, 1:Ndn]
                     rhodn = (1 - lambda[b]) * rhodn + lambda[b] * psidn * psidn'
                     Fup, Fdn = copy(H1B), copy(H1B)
                     vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
                     energy = 0.5 * tr(rhoup * (Fup + H1B)) + 0.5 * tr(rhodn * (Fdn + H1B))
                 end
+                local_iterations = s
+                detailed && push!(local_energies, energy)
                 if energy > energylast
+                    detailed && push!(rise_updates, s)
                     lambda[b] *= 0.5
                 end
-                (abs(energylast - energy) < scf_cutoff || s == 4) && break
+                locally_converged = abs(energylast - energy) < scf_cutoff
+                (locally_converged || s == 4) && break
                 energylast = energy
             end
+
+            _record_window!(_diagnostics, iter, direction, window_ordinal, block[b],
+                Cra, block[b + 1 + nblockcenter], local_iterations,
+                locally_converged, damping_before, lambda[b], rise_updates,
+                local_energies, energy, eigsym_before)
 
             rbl = block[b + 1 + nblockcenter]
             psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
@@ -643,7 +719,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 oldlc = length(Cra)
                 if transdir == 1
                     oldm = block[b].m
-                    O, m = getphi(psi[1:oldm + oldlc, :])
+                    O, m = getphi(psi[1:oldm + oldlc, :], _diagnostics, iter, direction, window_ordinal, :left, block[b].ra[1]:last(Cra))
                     block[b + 1] = addblockleft(Cra, O, block[b], N, H, Vee, finalindsH)
                     lc = length(Cranges[b + 2])
                     psibb1 = transrangeleft(psi, 1, O')
@@ -651,7 +727,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                     psi = transrangeleft(psiR, m + lc + 1, block[b + 3].phi')
                 else
                     oldm = block[b].m
-                    O, m = getphi(psi[oldm + 1:end, :])
+                    O, m = getphi(psi[oldm + 1:end, :], _diagnostics, iter, direction, window_ordinal, :right, first(Cra):block[b + 2].ra[end])
                     block[b + 1] = addblockright(Cra, O, block[b + 2], N, H, Vee, firstindsH)
                     psiL = transrangeleft(psi, m + 1, O')
                     psiLL = transrangeleft(psiL, 1:oldm, block[b].phi)
@@ -661,7 +737,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 d = nblockcenter
                 if transdir == 1
                     oldm = block[b].m
-                    O, m = getphi(psi[1:oldm + blocksizes[b + 1], :])
+                    O, m = getphi(psi[1:oldm + blocksizes[b + 1], :], _diagnostics, iter, direction, window_ordinal, :left, block[b].ra[1]:Cranges[b + 1][end])
                     block[b + 1] = addblockleft(Cranges[b + 1], O, block[b], N, H, Vee, finalindsH)
                     Cra = Cranges[b + 2][1]:Cranges[b + 1 + d][end]
                     lc = length(Cra)
@@ -677,7 +753,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 else
                     startO = size(psi, 1) - block[b + 1 + d].m - blocksizes[b + d] + 1
                     oldm = block[b].m
-                    O, m = getphi(psi[startO:end, :])
+                    O, m = getphi(psi[startO:end, :], _diagnostics, iter, direction, window_ordinal, :right, Cranges[b + d][1]:block[b + 1 + d].ra[end])
                     block[b + d] = addblockright(Cranges[b + d], O, block[b + 1 + d], N, H, Vee, firstindsH)
                     psiL = transrangeleft(psiup, startO, O')
                     psiLL = transrangeleft(psiL, 1:oldm, block[b].phi)
@@ -711,6 +787,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     cutoff = 1e-11,
     scf_cutoff = nothing,
     observer = nothing,
+    _diagnostics = nothing,
     verbose = false)
 
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(Hup, 1)
@@ -725,7 +802,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
     block = getinitialblocks_split(nblocks, blocksizes, Cranges, psiall, Hup, Hdn,
-        Vee, firstindsH, finalindsH; verbose)
+        Vee, firstindsH, finalindsH; verbose, _diagnostics)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -752,11 +829,20 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
         verbose && @show iter
         verbose && flush(stdout)
         for (b, dir, transdir) in fullsweep
+            detailed = _detailed(_diagnostics)
+            direction = detailed ? (dir == 1 ? :left_to_right : :right_to_left) : :none
+            window_ordinal = detailed ?
+                (dir == 1 ? b : nblocks - 1 - nblockcenter - b) : 0
             H1Bup = getH1(block[b], block[b + 1 + nblockcenter], Hup, Val(:up))
             H1Bdn = getH1(block[b], block[b + 1 + nblockcenter], Hdn, Val(:dn))
             Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
             win = vee_window(block[b].vee, block[b + 1 + nblockcenter].vee, Cra, Vee)
             energy = energylast = 1e10
+            local_energies = detailed ? Float64[] : nothing
+            rise_updates = detailed ? Int[] : nothing
+            damping_before = detailed ? lambda[b] : 0.0
+            eigsym_before = _diagnostics === nothing ? 0.0 : _diagnostics.eigsym_seconds
+            local_iterations, locally_converged = 0, false
             psiup_occ = @view psiup[:, 1:Nup]
             psidn_occ = @view psidn[:, 1:Ndn]
             rhoup = psiup_occ * psiup_occ'
@@ -764,10 +850,10 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
             Fup, Fdn = copy(H1Bup), copy(H1Bdn)
             vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
             for s = 1:4
-                evals, evecs = eigsym(Fup)
+                evals, evecs = eigsym(Fup, _diagnostics)
                 psiup = evecs[:, 1:Nup]
                 rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
-                evals, evecs = eigsym(Fdn)
+                evals, evecs = eigsym(Fdn, _diagnostics)
                 psidn = evecs[:, 1:Ndn]
                 rhodn = (1 - lambda[b]) * rhodn + lambda[b] * psidn * psidn'
                 Fup, Fdn = copy(H1Bup), copy(H1Bdn)
@@ -775,12 +861,21 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 energy = 0.5 * tr(rhoup * (Fup + H1Bup)) +
                          0.5 * tr(rhodn * (Fdn + H1Bdn))
 
+                local_iterations = s
+                detailed && push!(local_energies, energy)
                 if energy > energylast
+                    detailed && push!(rise_updates, s)
                     lambda[b] *= 0.5
                 end
-                (_rel_converged(energylast, energy, scf_cutoff) || s == 4) && break
+                locally_converged = _rel_converged(energylast, energy, scf_cutoff)
+                (locally_converged || s == 4) && break
                 energylast = energy
             end
+
+            _record_window!(_diagnostics, iter, direction, window_ordinal, block[b],
+                Cra, block[b + 1 + nblockcenter], local_iterations,
+                locally_converged, damping_before, lambda[b], rise_updates,
+                local_energies, energy, eigsym_before)
 
             rbl = block[b + 1 + nblockcenter]
             psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
@@ -793,7 +888,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 oldlc = length(Cra)
                 if transdir == 1
                     oldm = block[b].m
-                    O, m = getphi(psi[1:oldm + oldlc, :])
+                    O, m = getphi(psi[1:oldm + oldlc, :], _diagnostics, iter, direction, window_ordinal, :left, block[b].ra[1]:last(Cra))
                     block[b + 1] = addblockleft_split(Cra, O, block[b], N, Hup, Hdn,
                         Vee, finalindsH)
                     lc = length(Cranges[b + 2])
@@ -802,7 +897,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                     psi = transrangeleft(psiR, m + lc + 1, block[b + 3].phi')
                 else
                     oldm = block[b].m
-                    O, m = getphi(psi[oldm + 1:end, :])
+                    O, m = getphi(psi[oldm + 1:end, :], _diagnostics, iter, direction, window_ordinal, :right, first(Cra):block[b + 2].ra[end])
                     block[b + 1] = addblockright_split(Cra, O, block[b + 2], N, Hup,
                         Hdn, Vee, firstindsH)
                     psiL = transrangeleft(psi, m + 1, O')
@@ -815,7 +910,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 d = nblockcenter
                 if transdir == 1
                     oldm = block[b].m
-                    O, m = getphi(psi[1:oldm + blocksizes[b + 1], :])
+                    O, m = getphi(psi[1:oldm + blocksizes[b + 1], :], _diagnostics, iter, direction, window_ordinal, :left, block[b].ra[1]:Cranges[b + 1][end])
                     block[b + 1] = addblockleft_split(Cranges[b + 1], O, block[b], N,
                         Hup, Hdn, Vee, finalindsH)
                     Cra = Cranges[b + 2][1]:Cranges[b + 1 + d][end]
@@ -830,7 +925,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 else
                     startO = size(psi, 1) - block[b + 1 + d].m - blocksizes[b + d] + 1
                     oldm = block[b].m
-                    O, m = getphi(psi[startO:end, :])
+                    O, m = getphi(psi[startO:end, :], _diagnostics, iter, direction, window_ordinal, :right, Cranges[b + d][1]:block[b + 1 + d].ra[end])
                     block[b + d] = addblockright_split(Cranges[b + d], O,
                         block[b + 1 + d], N, Hup, Hdn, Vee, firstindsH)
                     psiL = transrangeleft(psiup, startO, O')

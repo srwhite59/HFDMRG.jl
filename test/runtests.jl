@@ -117,6 +117,71 @@ try
         @test counted.calls == 2 * counted.windows
     end
 
+    @testset "Hidden run diagnostics" begin
+        N = 12
+        Q = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1))
+             for i = 1:N, j = 1:N]
+        H = Matrix(Symmetric(Q * Diagonal(0.0:N - 1) * Q'))
+        Hdn = Matrix(Symmetric(Q *
+            Diagonal([2.0, 1.0, 0.0, collect(3.0:N - 1)...]) * Q'))
+        V = [0.01 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
+        up, dn = Q[:, 1:1], Q[:, 3:3]
+        kw = (; maxiter = 1, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = 0.0, verbose = false)
+
+        plain = solve_hfdmrg(H, V, up, dn; kw...)
+        detailed = HFDMRG._RunDiagnostics(:detailed)
+        result = solve_hfdmrg(H, V, up, dn; kw..., _diagnostics = detailed)
+        @test result == plain
+        @test [(w.direction, w.window_ordinal) for w in detailed.windows] ==
+              [(:left_to_right, 1), (:left_to_right, 2),
+               (:left_to_right, 3), (:left_to_right, 4),
+               (:right_to_left, 1), (:right_to_left, 2)]
+        @test all(w -> w.local_iterations == 4 && w.reached_iteration_four &&
+                         !w.locally_converged && w.cap_exhausted, detailed.windows)
+        @test detailed.windows[end].final_energy == result[3]
+        for w in detailed.windows
+            expected_rises = [s for s = eachindex(w.local_energies)
+                if w.local_energies[s] >
+                   (s == 1 ? 1e10 : w.local_energies[s - 1])]
+            @test w.rise_updates == expected_rises
+            @test w.damping_after ==
+                  w.damping_before * 0.5^length(w.rise_updates)
+        end
+        fixed = filter(s -> s.status === :not_applicable, detailed.spectra)
+        measured = filter(s -> s.status === :measured, detailed.spectra)
+        @test [(s.side, s.physical_range, s.retained_rank, s.singular_values)
+               for s in fixed] ==
+              [(:left, 1:2, 2, nothing), (:right, 11:12, 2, nothing)]
+        @test all(s -> s.retained_rank ==
+                         something(findlast(>(1e-10), s.singular_values), 1),
+            measured)
+        @test detailed.eigsym_calls == 2sum(w.local_iterations for w in detailed.windows)
+        @test detailed.eigsym_seconds > 0
+
+        fourth = HFDMRG._RunDiagnostics(:detailed)
+        solve_hfdmrg(H, V, up, dn; kw..., scf_cutoff = 1e-14,
+            _diagnostics = fourth)
+        @test fourth.windows[1].reached_iteration_four
+        @test fourth.windows[1].locally_converged
+        @test !fourth.windows[1].cap_exhausted
+
+        timing = HFDMRG._RunDiagnostics(:timing)
+        @test solve_hfdmrg(H, V, up, dn; kw..., _diagnostics = timing) == plain
+        @test isempty(timing.windows) && isempty(timing.spectra)
+        @test timing.eigsym_calls == detailed.eigsym_calls
+        @test timing.eigsym_seconds > 0
+
+        split_diagnostics = HFDMRG._RunDiagnostics(:detailed)
+        split = solve_hfdmrg(H, Hdn, V, up, dn; kw..., scf_cutoff = Inf,
+            _diagnostics = split_diagnostics)
+        @test split_diagnostics.windows[end].final_energy == split[3]
+        @test all(w -> w.local_iterations == 1 && w.locally_converged &&
+                         !w.reached_iteration_four && !w.cap_exhausted,
+            split_diagnostics.windows)
+        @test_throws ErrorException HFDMRG._RunDiagnostics(:invalid)
+    end
+
     @testset "Split one-body UHF API" begin
         rng = MersenneTwister(301)
         N = 12
