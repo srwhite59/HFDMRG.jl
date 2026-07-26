@@ -315,6 +315,79 @@ try
               solve_hfdmrg(Hup, Hdn, V, up, dn; kw...)
     end
 
+    @testset "Post-reorthogonalization block recurrence" begin
+        rng = MersenneTwister(725)
+        N = 12
+        A = randn(rng, N, N)
+        H = Matrix(Symmetric(A))
+        Hup = H + Diagonal(range(-0.1, 0.1; length = N))
+        Hdn = H - Diagonal(range(-0.08, 0.12; length = N))
+        B = randn(rng, N, N)
+        V = 0.02 * Matrix(Symmetric(B))
+        Q = orthonormal_cols(rng, N, 3)
+        C = randn(rng, 6, 6)
+        dd_backend = HFDMRG.DensityDensityBackend(V)
+        target_backend = HFDMRG.DensityDensityTargetResidualBackend(
+            V, Q, 0.01 * Matrix(Symmetric(C)))
+        firstindsH, finalindsH = fill(1, N), fill(N, N)
+        tol = 5e-12
+
+        for backend in (dd_backend, target_backend),
+            side in (:left, :right), split_H in (false, true)
+            oldra = side === :left ? (1:2) : (11:12)
+            oldphi = orthonormal_cols(rng, 2, 2) *
+                     [1.0 1e-4; -5e-5 1.0]
+            block = split_H ?
+                HFDMRG._makeblock_split(side, oldra, oldphi, Hup, Hdn,
+                    backend, firstindsH, finalindsH) :
+                HFDMRG._makeblock(side, oldra, oldphi, H, backend,
+                    firstindsH, finalindsH)
+            for step = 1:2
+                cra = side === :left ? (2step + 1:2step + 2) :
+                      (N - 2step - 1:N - 2step)
+                O = orthonormal_cols(rng, block.m + length(cra), block.m + 1)
+                block = if split_H
+                    side === :left ?
+                        HFDMRG.addblockleft_split(cra, O, block, N, Hup, Hdn,
+                            backend, finalindsH) :
+                        HFDMRG.addblockright_split(cra, O, block, N, Hup, Hdn,
+                            backend, firstindsH)
+                else
+                    side === :left ?
+                        HFDMRG.addblockleft(cra, O, block, N, H, backend,
+                            finalindsH) :
+                        HFDMRG.addblockright(cra, O, block, N, H, backend,
+                            firstindsH)
+                end
+
+                if split_H
+                    for (cache, hspin) in ((block.hup, Hup), (block.hdn, Hdn))
+                        @test norm(cache.H1ij -
+                            block.phi' * hspin[block.ra, block.ra] * block.phi,
+                            Inf) <= tol
+                        @test norm(cache.H1phi -
+                            hspin[block.raH1, block.ra] * block.phi, Inf) <= tol
+                    end
+                else
+                    @test norm(block.H1ij -
+                        block.phi' * H[block.ra, block.ra] * block.phi, Inf) <= tol
+                    @test norm(block.H1phi -
+                        H[block.raH1, block.ra] * block.phi, Inf) <= tol
+                end
+                direct = HFDMRG.vee_init_block(
+                    side, block.ra, block.raV, block.phi, backend)
+                state = backend === target_backend ? block.vee.base : block.vee
+                direct_state = backend === target_backend ? direct.base : direct
+                @test norm(state.Vijkl - direct_state.Vijkl, Inf) <= tol
+                @test norm(state.Vpp - direct_state.Vpp, Inf) <= tol
+                if backend === target_backend
+                    @test norm(block.vee.Q -
+                        block.phi' * Q[block.ra, :], Inf) <= tol
+                end
+            end
+        end
+    end
+
     @testset "Sliced backend stub" begin
         nj = 2
         ns = 3
@@ -609,6 +682,7 @@ try
                 phi = vcat(Phi_C, state.phi * Phi_old) * rotation
                 raV = 1:(first(cra) - 1)
             end
+            Phi_old, Phi_C = Phi_old * rotation, Phi_C * rotation
             HFDMRG.vee_absorb_block(side, state, cra, Phi_old, Phi_C, phi, raV,
                 backend)
         end

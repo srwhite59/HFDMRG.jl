@@ -224,7 +224,9 @@ function addblockright(cra, O, rblock, N, H, Vee, firstindsH)
     PhiC, PhiR = O[1:lc, :], O[lc + 1:end, :]
     phi = vcat(PhiC, rblock.phi * PhiR)
     Ophi = phi' * phi
-    phi = phi * inv(sqrt(Symmetric(Ophi)))
+    R = inv(sqrt(Symmetric(Ophi)))
+    phi = phi * R
+    PhiC, PhiR = PhiC * R, PhiR * R
     H1ij = PhiR' * rblock.H1ij * PhiR + PhiC' * H[cra, cra] * PhiC
 
     interabs, cr, rr, nonnull = intersectrange(cra, rblock.raH1)
@@ -249,7 +251,9 @@ function addblockleft(cra, O, lblock, N, H, Vee, finalindsH)
     PhiC, PhiL = O[mold + 1:end, :], O[1:mold, :]
     phi = vcat(lblock.phi * PhiL, PhiC)
     Ophi = phi' * phi
-    phi = phi * inv(sqrt(Symmetric(Ophi)))
+    R = inv(sqrt(Symmetric(Ophi)))
+    phi = phi * R
+    PhiC, PhiL = PhiC * R, PhiL * R
     H1ij = PhiL' * lblock.H1ij * PhiL + PhiC' * H[cra, cra] * PhiC
 
     interabs, cr, lr, nonnull = intersectrange(cra, lblock.raH1)
@@ -273,7 +277,9 @@ function addblockright_split(cra, O, rblock, N, Hup, Hdn, Vee, firstindsH)
     PhiC, PhiR = O[1:lc, :], O[lc + 1:end, :]
     phi = vcat(PhiC, rblock.phi * PhiR)
     Ophi = phi' * phi
-    phi = phi * inv(sqrt(Symmetric(Ophi)))
+    R = inv(sqrt(Symmetric(Ophi)))
+    phi = phi * R
+    PhiC, PhiR = PhiC * R, PhiR * R
 
     hup = _addblockright_h1(cra, PhiC, PhiR, rblock.hup, rblock.raH1, Hup, raH1)
     hdn = _addblockright_h1(cra, PhiC, PhiR, rblock.hdn, rblock.raH1, Hdn, raH1)
@@ -291,7 +297,9 @@ function addblockleft_split(cra, O, lblock, N, Hup, Hdn, Vee, finalindsH)
     PhiC, PhiL = O[mold + 1:end, :], O[1:mold, :]
     phi = vcat(lblock.phi * PhiL, PhiC)
     Ophi = phi' * phi
-    phi = phi * inv(sqrt(Symmetric(Ophi)))
+    R = inv(sqrt(Symmetric(Ophi)))
+    phi = phi * R
+    PhiC, PhiL = PhiC * R, PhiL * R
 
     hup = _addblockleft_h1(cra, PhiL, PhiC, lblock.hup, lblock.raH1, Hup, raH1)
     hdn = _addblockleft_h1(cra, PhiL, PhiC, lblock.hdn, lblock.raH1, Hdn, raH1)

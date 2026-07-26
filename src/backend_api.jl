@@ -24,11 +24,13 @@ Arguments:
 - side::Symbol: :left or :right, indicating which block is being grown.
 - vee_old: backend state for the old block.
 - cra::UnitRange{Int}: physical center range being absorbed (absolute indices).
-- Phi_old::AbstractMatrix: part of the isometry for the old block basis; for
-  :left it maps the old-left block into the new basis, for :right it maps the
-  old-right block into the new basis. Size (m_old, m_new).
-- Phi_C::AbstractMatrix: part of the isometry for the absorbed center chunk,
-  size (length(cra), m_new).
+- Phi_old::AbstractMatrix: expansion map from the old block basis into the
+  final stored new basis; for :left it maps the old-left block, for :right the
+  old-right block. It includes any post-SVD reorthogonalization. Size
+  (m_old, m_new).
+- Phi_C::AbstractMatrix: corresponding final-basis expansion map for the
+  absorbed center chunk, including post-SVD reorthogonalization. Size
+  (length(cra), m_new).
 - phi_new::AbstractMatrix: new block basis on the expanded range, size
   (length(new ra), m_new).
 - raV_new::UnitRange{Int}: new outside range after absorption.
