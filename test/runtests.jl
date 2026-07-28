@@ -649,6 +649,11 @@ try
                 backends = (HFDMRG.SlicedBasisBackend(layout, Vblocks),
                     HFDMRG.SlicedBasisBackendCached(layout, Vblocks))
                 outputs = map(b -> focks(make_window(b, Lra, Cra, Rra, eye, eye)), backends)
+                Eint_r = map(x -> sum(rho .* x[1]), outputs)
+                Eint_u = map(x -> 0.5 * sum(rho .* x[2]) +
+                    0.5 * sum(rhodn .* x[3]), outputs)
+                @test abs(Eint_r[2] - Eint_r[1]) <= 1e-12 * max(1.0, abs(Eint_r[1]))
+                @test abs(Eint_u[2] - Eint_u[1]) <= 1e-12 * max(1.0, abs(Eint_u[1]))
                 for (F, Fup, Fdn) in outputs
                     Kgot = (Fdn - Fup) / (1 - alpha)
                     Jgot = (Fup + Kgot) / (1 + alpha)
