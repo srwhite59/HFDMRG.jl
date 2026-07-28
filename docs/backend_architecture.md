@@ -286,6 +286,11 @@ fixed edge in the density-density and cached sliced routes. This edge cost does
 not change the occupied-SVD compression of grown interior environments, but it
 makes oversized edge chunks a potentially important storage choice.
 
+The cached sliced state stores its two ordered slice-channel orientations as
+separate `k² × (Σ_s d_s²)` packed matrices. Ragged pair-width offsets select a slice
+without padding. Packing changes allocation layout and GEMM shape, not logical
+storage, orientation, or the exact block recurrence.
+
 The accepted cached-sliced design and frozen-Be evidence are preserved in the
 [final performance account](../notes/cached_sliced_performance_final_2026-07-20.md).
 

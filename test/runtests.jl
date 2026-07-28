@@ -770,7 +770,8 @@ try
 
         withenv("HFDMRG_BENCH_TIMING" => "1") do
             HFDMRG._bench_timing_reset!()
-            for dims in ([2, 2, 2, 2, 2, 2, 2], [2, 1, 3, 2, 3, 1, 2])
+            for dims in ([2, 2, 2, 2, 2, 2, 2, 2, 2],
+                [2, 1, 3, 2, 2, 3, 2, 1, 2])
                 layout = HFDMRG.SliceLayout(dims)
                 ns, N = length(dims), layout.offs[end]
                 V = if all(==(dims[1]), dims)
@@ -784,12 +785,14 @@ try
                 projection = HFDMRG.SlicedBasisBackend(layout, V)
                 L = HFDMRG.vee_init_block(:left, HFDMRG.orb_range(layout, 1),
                     (dims[1] + 1):N, orthonormal_cols(rng, dims[1], 2), cached)
-                R = HFDMRG.vee_init_block(:right, HFDMRG.orb_range(layout, 7),
-                    1:(N - dims[7]), orthonormal_cols(rng, dims[7], 2), cached)
+                R = HFDMRG.vee_init_block(:right, HFDMRG.orb_range(layout, ns),
+                    1:(N - dims[ns]), orthonormal_cols(rng, dims[ns], 2), cached)
                 L = grow(L, :left, HFDMRG.orb_range(layout, 2), 3, cached)
-                L = grow(L, :left, HFDMRG.orb_range(layout, 3), 2, cached)
-                R = grow(R, :right, HFDMRG.orb_range(layout, 6), 3, cached)
-                R = grow(R, :right, HFDMRG.orb_range(layout, 5), 2, cached)
+                L = grow(L, :left, HFDMRG.orb_range(layout, 3), 3, cached)
+                L = grow(L, :left, HFDMRG.orb_range(layout, 4), 2, cached)
+                R = grow(R, :right, HFDMRG.orb_range(layout, ns - 1), 3, cached)
+                R = grow(R, :right, HFDMRG.orb_range(layout, ns - 2), 3, cached)
+                R = grow(R, :right, HFDMRG.orb_range(layout, ns - 3), 2, cached)
                 Ldirect = HFDMRG.vee_init_block(:left, L.ra, (last(L.ra) + 1):N,
                     L.phi, cached)
                 Rdirect = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1),
@@ -798,7 +801,7 @@ try
                     L.phi, projection)
                 Rproj = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1),
                     R.phi, projection)
-                Cra = HFDMRG.orb_range(layout, 4)
+                Cra = HFDMRG.orb_range(layout, 5)
                 wins = (HFDMRG.vee_window(L, R, Cra, cached),
                     HFDMRG.vee_window(Ldirect, Rdirect, Cra, cached),
                     HFDMRG.vee_window(Lproj, Rproj, Cra, projection))
@@ -806,7 +809,7 @@ try
             end
             counts = HFDMRG._bench_timing_snapshot()
             @test (counts[:cache_init_calls], counts[:cache_incremental_calls],
-                counts[:cache_fallback_calls]) == (8.0, 8.0, 0.0)
+                counts[:cache_fallback_calls]) == (8.0, 12.0, 0.0)
 
             HFDMRG._bench_timing_reset!()
             layout = HFDMRG.SliceLayout(fill(3, 5))

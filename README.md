@@ -490,6 +490,9 @@ For ragged interactions, pass `Vblocks` instead of `V6`. With
 `block_partition=layout`, whole-slice windows contract all nine ordered sectors
 with zero steady allocation and fixed-rank work independent of total slices.
 Any split window delegates its complete interaction to projection.
+Each block keeps the two ordered slice-channel orientations in separate packed
+matrices with ragged pair-width offsets. This changes allocation layout, not
+logical payload or tensor symmetry.
 
 ## Choosing an interaction backend
 
