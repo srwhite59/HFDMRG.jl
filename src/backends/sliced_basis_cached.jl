@@ -155,6 +155,11 @@ end
 
 _whole_slice_range(layout, ra) = first(ra) - 1 in layout.offs && last(ra) in layout.offs
 
+function _check_cached_exterior(side, ra, raV, N)
+    expected = side === :left ? (last(ra) + 1:N) : (1:first(ra) - 1)
+    raV == expected || error("raV must be the complete one-sided exterior range")
+end
+
 function _aligned_absorption(side, oldra, cra, raV, layout)
     _whole_slice_range(layout, oldra) && _whole_slice_range(layout, cra) || return false
     N = layout.offs[end]
@@ -220,6 +225,7 @@ function vee_init_block(side, ra, raV, phi, backend::SlicedBasisBackendCached)
     _check_side(side)
     _check_range(ra, "ra")
     _check_range(raV, "raV")
+    _check_cached_exterior(side, ra, raV, backend.layout.offs[end])
     size(phi, 1) == length(ra) || error("phi has wrong row count for ra")
     _bench_timing_enabled() && (_bench_timing[:cache_init_calls] += 1)
     _build_cached_state(ra, raV, phi, backend)
@@ -232,6 +238,7 @@ function vee_absorb_block(side, vee_old::SlicedCachedBlockState, cra, Phi_old, P
     _check_range(raV_new, "raV_new")
     oldra = vee_old.ra
     newra = side == :left ? (oldra[1]:cra[end]) : (cra[1]:oldra[end])
+    _check_cached_exterior(side, newra, raV_new, backend.layout.offs[end])
     size(phi_new, 1) == length(newra) || error("phi_new has wrong row count for new ra")
     aligned = _aligned_absorption(side, oldra, cra, raV_new, backend.layout)
     A = aligned ? _old_basis_map(side, vee_old, cra, phi_new) : nothing

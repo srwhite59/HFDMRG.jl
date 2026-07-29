@@ -788,9 +788,12 @@ try
                 HFDMRG.vee_add_fock_r!(Fr[i], rho, wins[i])
                 HFDMRG.vee_add_fock!(Fu[i], Fd[i], rhoup, rhodn, wins[i])
             end
+            Er, Eu = [sum(rho .* F) for F in Fr], [0.5 * sum(rhoup .* Fu[i]) + 0.5 * sum(rhodn .* Fd[i]) for i = 1:3]
             maximum((relerr(Fr[1], Fr[2]), relerr(Fr[1], Fr[3]),
                 relerr(Fu[1], Fu[2]), relerr(Fu[1], Fu[3]),
-                relerr(Fd[1], Fd[2]), relerr(Fd[1], Fd[3])))
+                relerr(Fd[1], Fd[2]), relerr(Fd[1], Fd[3]),
+                relerr(Er[1], Er[2]), relerr(Er[1], Er[3]),
+                relerr(Eu[1], Eu[2]), relerr(Eu[1], Eu[3])))
         end
 
         withenv("HFDMRG_BENCH_TIMING" => "1") do
@@ -910,6 +913,47 @@ try
         Ldirect = HFDMRG.vee_init_block(
             :left, L.ra, (last(L.ra) + 1):N, L.phi, backend)
         @test maximum(state_errors(L, Ldirect)) <= 1e-11
+
+        dims = [2, 1, 3, 2, 4, 1]; layout = HFDMRG.SliceLayout(dims); N = layout.offs[end]
+        V = [[randn(rng, dims[n], dims[n], dims[m], dims[m]) for m in eachindex(dims)]
+             for n in eachindex(dims)]
+        @test norm(V[1][2] - permutedims(V[2][1], (3, 4, 1, 2))) > 1e-6
+        cached, projection = HFDMRG.SlicedBasisBackendCached(layout, V),
+            HFDMRG.SlicedBasisBackend(layout, V)
+        Lra, Cra = HFDMRG.orb_range(layout, 1), HFDMRG.orb_range(layout, 2:3)
+        L = HFDMRG.vee_init_block(:left, Lra, (last(Lra) + 1):N,
+            Matrix{Float64}(I, dims[1], dims[1]), cached)
+        R0 = HFDMRG.vee_init_block(:right, HFDMRG.orb_range(layout, lastindex(dims)),
+            1:(N - dims[end]), ones(dims[end], 1), cached)
+        R, win, routes = withenv("HFDMRG_BENCH_TIMING" => "1") do
+            HFDMRG._bench_timing_reset!()
+            state = grow(R0, :right, HFDMRG.orb_range(layout, 4:5), 3, cached)
+            state, HFDMRG.vee_window(L, state, Cra, cached),
+                HFDMRG._bench_timing_snapshot()
+        end
+        Rdirect = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1), R.phi, cached)
+        @test maximum(state_errors(R, Rdirect)) <= 1e-11
+        Lproj = HFDMRG.vee_init_block(:left, L.ra, (last(L.ra) + 1):N, L.phi, projection)
+        Rproj = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1), R.phi, projection)
+        @test fock_error((win, HFDMRG.vee_window(L, Rdirect, Cra, cached),
+            HFDMRG.vee_window(Lproj, Rproj, Cra, projection)), 2 + length(Cra) + 3) <= 1e-11
+        @test (routes[:cache_incremental_calls], routes[:cache_fallback_calls],
+            routes[:window_local_calls], routes[:window_projection_calls]) == (1.0, 0.0, 1.0, 0.0)
+
+        bad_left = ((last(Lra) + 2):N, last(Lra):N, (last(Lra) + 1):(N - 1))
+        bad_right = (1:(first(R0.ra) - 2), 1:first(R0.ra), 2:(first(R0.ra) - 1))
+        for (side, ra, bad) in ((:left, Lra, bad_left), (:right, R0.ra, bad_right))
+            phi = orthonormal_cols(rng, length(ra), 1)
+            for raV in bad
+                @test_throws ErrorException HFDMRG.vee_init_block(side, ra, raV, phi, cached)
+            end
+        end
+        for (side, old, cra, raV) in ((:left, L, Cra, first(bad_left)), (:right, R0,
+                HFDMRG.orb_range(layout, 4:5), first(bad_right)))
+            phi = orthonormal_cols(rng, length(old.ra) + length(cra), 2)
+            @test_throws ErrorException HFDMRG.vee_absorb_block(side, old, cra,
+                zeros(size(old.phi, 2), 2), zeros(length(cra), 2), phi, raV, cached)
+        end
 
         layout = HFDMRG.SliceLayout(fill(2, 4))
         oldphi = orthonormal_cols(rng, 2, 2)

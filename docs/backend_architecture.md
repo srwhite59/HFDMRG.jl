@@ -116,7 +116,8 @@ A left block grows from low physical indices and has
 `raV = (ra[end]+1):N`. A right block grows from high indices and has
 `raV = 1:(ra[1]-1)`. The returned state should contain only
 representation-specific information needed by later absorption and window
-construction.
+construction. The exterior-only cached sliced representation validates this
+complete one-sided physical range on initialization and after every absorption.
 
 ### Absorb a center chunk
 
