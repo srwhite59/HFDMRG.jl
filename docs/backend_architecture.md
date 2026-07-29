@@ -262,8 +262,8 @@ window state is built. Do not silently drop a merely small correction.
 Let `N` be the full basis size, `k` a retained block dimension, `c` a center
 size, and `w` the window dimension. For sliced data, let `ns` be the number of
 slices, `nj` a uniform slice size, `d_s` each ragged slice size, and
-`S2 = sum_s d_s^2`. For a target space, let `t` be its dimension and
-`P = t(t+1)/2`.
+`S2 = sum_s d_s^2`; `S2ext` restricts that sum to slices still exterior to a
+block. For a target space, let `t` be its dimension and `P = t(t+1)/2`.
 
 The leading storage terms are:
 
@@ -272,7 +272,7 @@ The leading storage terms are:
 | Density-density | `O(N^2)` | `O(length(ra)*k^2 + length(raV)*k^2 + k^4)` | Dense retained-block and cross-block tensors; no global `N^4` object. |
 | Density plus target residual | Base plus `O(N*t + P^2)` | Base plus `O(k*t)` | Projection/lift `O(w^2*t + w*t^2)` and exact pair contraction `O(t^4)`. |
 | Sliced projection | Fixed `O(ns^2*nj^4)` or ragged `O(S2^2)` | Primarily the block basis | Builds full-`N` density and Fock intermediates, requiring `O(N^2 + N*w)` temporary storage per Fock route. |
-| Cached sliced | Same sliced input | About `O(k^4 + k^2*S2 + N*k)` | Whole-slice windows retain `O(kL^2*kR^2)` cross tensors and reference block caches. Their local Fock work is independent of `ns` at fixed ranks and center; split windows delegate entirely to projection. |
+| Cached sliced | Same sliced input | About `O(length(ra)*k + k^4 + k^2*S2ext)` | Whole-slice windows retain `O(kL^2*kR^2)` cross tensors and reference block caches. Their local Fock work is independent of `ns` at fixed ranks and center; split windows delegate entirely to projection. |
 
 These terms describe interaction-specific storage, not the complete solver.
 Actual time depends on block ranks, center placement, slice sizes, BLAS shape,
@@ -286,10 +286,11 @@ fixed edge in the density-density and cached sliced routes. This edge cost does
 not change the occupied-SVD compression of grown interior environments, but it
 makes oversized edge chunks a potentially important storage choice.
 
-The cached sliced state stores its two ordered slice-channel orientations as
-separate `k² × (Σ_s d_s²)` packed matrices. Ragged pair-width offsets select a slice
-without padding. Packing changes allocation layout and GEMM shape, not logical
-storage, orientation, or the exact block recurrence.
+The cached sliced state stores the complete block interaction directly in
+pair-grouped order. Its two ordered channel orientations cover only slices
+still outside the block, as separate `k² × S2ext` packed matrices with
+range-local ragged offsets and no padding. Absorption updates all four
+old/new sectors exactly before discarding the newly internal channels.
 
 The accepted cached-sliced design and frozen-Be evidence are preserved in the
 [final performance account](../notes/cached_sliced_performance_final_2026-07-20.md).

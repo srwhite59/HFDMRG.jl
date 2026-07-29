@@ -7,19 +7,18 @@ windows that split a slice delegate to the projection backend.
 struct SlicedBasisBackendCached{T}
     layout::SliceLayout
     V::T
-    ns::Int
-    pair_offs::Vector{Int}
 end
 
 struct SlicedCachedBlockState
     ra::UnitRange{Int}
     phi::Matrix{Float64}
-    Vijkl::Array{Float64,4}
+    G::Matrix{Float64}
+    exterior_slices::UnitRange{Int}
+    pair_offs::Vector{Int}
     W::Matrix{Float64}
     # Packed Wswap[:,pair(s,a,b)] uses the swapped orientation
     # V6[a,b,c,d,s,n] without assuming additional physical symmetries.
     Wswap::Matrix{Float64}
-    P::Vector{Matrix{Float64}}
 end
 
 struct SlicedBasisCachedWindow{T}
@@ -29,13 +28,8 @@ struct SlicedBasisCachedWindow{T}
     lc::Int
     mr::Int
     center_slices::UnitRange{Int}
-    VLL::Array{Float64,4}
-    VRR::Array{Float64,4}
-    WL::Matrix{Float64}
-    WR::Matrix{Float64}
-    WLswap::Matrix{Float64}
-    WRswap::Matrix{Float64}
-    pair_offs::Vector{Int}
+    L::SlicedCachedBlockState
+    R::SlicedCachedBlockState
     VLR::Array{Float64,4}
     VRL::Array{Float64,4}
 end
@@ -59,23 +53,22 @@ end
 
 _bench_timing_snapshot() = Dict(key => value for (key, value) in _bench_timing)
 
-_pair_offs(layout) = [0; cumsum(abs2.(layout.dims))]
+_pair_offs(layout, slices) = [0; cumsum(abs2.(layout.dims[slices]))]
 _pair_range(offs, s) = offs[s] + 1:offs[s + 1]
-_packed_tensor(W, offs, s, m, d) =
-    reshape(view(W, :, _pair_range(offs, s)), m, m, d, d)
+_state_pair_range(state, s) = _pair_range(state.pair_offs, s - first(state.exterior_slices) + 1)
+_packed_tensor(W, state, s, m, d) = reshape(view(W, :, _state_pair_range(state, s)), m, m, d, d)
 
 function SlicedBasisBackendCached(layout::SliceLayout, V6::Array{Float64,6})
     ns = nslices(layout)
     nj = layout.dims[1]
     any(d -> d != nj, layout.dims) && error("layout must have fixed slice size")
     size(V6) == (nj, nj, nj, nj, ns, ns) || error("V6 must have size (nj,nj,nj,nj,ns,ns)")
-    SlicedBasisBackendCached{Array{Float64,6}}(layout, V6, ns, _pair_offs(layout))
+    SlicedBasisBackendCached{Array{Float64,6}}(layout, V6)
 end
 
 function SlicedBasisBackendCached(layout::SliceLayout, vee::SlicedVeeRagged)
     layout.dims == vee.layout.dims || error("layout does not match ragged interaction")
-    ns = nslices(layout)
-    SlicedBasisBackendCached{SlicedVeeRagged}(layout, vee, ns, _pair_offs(layout))
+    SlicedBasisBackendCached{SlicedVeeRagged}(layout, vee)
 end
 
 SlicedBasisBackendCached(vee::SlicedVeeRagged) = SlicedBasisBackendCached(vee.layout, vee)
@@ -99,7 +92,7 @@ function _build_slice_basis(layout::SliceLayout, ra::UnitRange{Int}, phi::Matrix
     P
 end
 
-function _pair_map_mat!(U::AbstractMatrix{Float64}, P::Matrix{Float64})
+function _pair_map_mat!(U::AbstractMatrix{Float64}, P::AbstractMatrix{Float64})
     nj, m = size(P)
     size(U, 1) == nj * nj || error("pair map has wrong row count")
     size(U, 2) == m * m || error("pair map has wrong column count")
@@ -113,7 +106,7 @@ function _pair_map_mat!(U::AbstractMatrix{Float64}, P::Matrix{Float64})
     U
 end
 
-function _pair_map_mat(P::Matrix{Float64})
+function _pair_map_mat(P::AbstractMatrix{Float64})
     nj, m = size(P)
     U = zeros(Float64, nj * nj, m * m)
     _pair_map_mat!(U, P)
@@ -123,41 +116,41 @@ function _active_slices(layout::SliceLayout, ra::UnitRange{Int})
     first(_slice_local(layout, first(ra))):first(_slice_local(layout, last(ra)))
 end
 
-function _cached_vijkl(W, P, active, m, pair_offs)
-    grouped = zeros(Float64, m * m, m * m)
-    for s in active
-        mul!(grouped, view(W, :, _pair_range(pair_offs, s)),
-            _pair_map_mat(P[s]), 1.0, 1.0)
+_add_grouped!(G, L, M, R, tmp) = (work = view(tmp, :, 1:size(M, 2));
+    mul!(work, L', M); mul!(G, work, R, 1.0, 1.0))
+function _direct_grouped(P, active, m, backend)
+    G, tmp = zeros(Float64, m^2, m^2), zeros(Float64, m^2, maximum(abs2.(backend.layout.dims[active])))
+    for n in active
+        Rn = _pair_map_mat(P[n])
+        for s in active
+            ds, dn = backend.layout.dims[s], backend.layout.dims[n]
+            M = reshape(_slice_vee(backend.V, n, s), dn^2, ds^2)
+            _add_grouped!(G, Rn, M, _pair_map_mat(P[s]), tmp)
+        end
     end
-    permutedims(reshape(grouped, m, m, m, m), (1, 3, 2, 4))
+    G
 end
 
-function _build_cached_state(ra::UnitRange{Int}, phi_in::AbstractMatrix,
-    backend::SlicedBasisBackendCached)
-    phi = Float64.(phi_in)
-    layout = backend.layout
-    dims = layout.dims
-    ns = backend.ns
-    m = size(phi, 2)
-    P = _build_slice_basis(layout, ra, phi)
-    active = _active_slices(layout, ra)
-    W = zeros(Float64, m * m, backend.pair_offs[end])
-    Wswap = similar(W)
-    fill!(Wswap, 0.0)
+function _build_cached_state(ra::UnitRange{Int}, raV::UnitRange{Int},
+    phi_in::AbstractMatrix, backend::SlicedBasisBackendCached)
+    phi = Float64.(phi_in); layout, dims = backend.layout, backend.layout.dims
+    m = size(phi, 2); P = _build_slice_basis(layout, ra, phi)
+    active, exterior = _active_slices(layout, ra), _active_slices(layout, raV)
+    pair_offs = _pair_offs(layout, exterior)
+    W, Wswap = zeros(Float64, m^2, pair_offs[end]), zeros(Float64, m^2, pair_offs[end])
     for n in active
-        dn = dims[n]
-        Rn = _pair_map_mat(P[n])
-        for s = 1:ns
+        dn = dims[n]; Rn = _pair_map_mat(P[n])
+        for (j, s) in enumerate(exterior)
             ds = dims[s]
-            mul!(view(W, :, _pair_range(backend.pair_offs, s)), Rn',
+            mul!(view(W, :, _pair_range(pair_offs, j)), Rn',
                 reshape(_slice_vee(backend.V, n, s), dn * dn, ds * ds), 1.0, 1.0)
-            mul!(view(Wswap, :, _pair_range(backend.pair_offs, s)), Rn',
+            mul!(view(Wswap, :, _pair_range(pair_offs, j)), Rn',
                 transpose(reshape(_slice_vee(backend.V, s, n), ds * ds, dn * dn)),
                 1.0, 1.0)
         end
     end
-    Vijkl = _cached_vijkl(W, P, active, m, backend.pair_offs)
-    SlicedCachedBlockState(ra, phi, Vijkl, W, Wswap, P)
+    SlicedCachedBlockState(ra, phi, _direct_grouped(P, active, m, backend), exterior,
+        pair_offs, W, Wswap)
 end
 
 _whole_slice_range(layout, ra) = first(ra) - 1 in layout.offs && last(ra) in layout.offs
@@ -180,33 +173,47 @@ function _old_basis_map(side, old::SlicedCachedBlockState, cra, phi_new)
     err <= 32 * eps(Float64) * scale ? A : nothing
 end
 
+_slice_phi(layout, ra, phi, s) = view(phi, (layout.offs[s] - first(ra) + 2):(layout.offs[s + 1] - first(ra) + 1), :)
+
 function _incremental_cached_state(side, old::SlicedCachedBlockState, cra, phi_in, A,
-    backend::SlicedBasisBackendCached)
-    phi = Float64.(phi_in)
-    layout, dims, ns = backend.layout, backend.layout.dims, backend.ns
+    raV, backend::SlicedBasisBackendCached)
+    phi = Float64.(phi_in); layout, dims = backend.layout, backend.layout.dims
     newra = side === :left ? (first(old.ra):last(cra)) : (first(cra):last(old.ra))
-    mnew = size(phi, 2)
-    P = _build_slice_basis(layout, newra, phi)
-    W = zeros(Float64, mnew * mnew, backend.pair_offs[end])
-    Wswap = similar(W)
+    absorbed, exterior = _active_slices(layout, cra), _active_slices(layout, raV)
+    expected = side === :left ? (first(absorbed):last(exterior)) : (first(exterior):last(absorbed))
+    old.exterior_slices == expected || error("cached exterior span is inconsistent")
+    mnew, mold = size(phi, 2), size(old.phi, 2); pair_offs = _pair_offs(layout, exterior)
+    W, Wswap = zeros(Float64, mnew^2, pair_offs[end]), zeros(Float64, mnew^2, pair_offs[end])
     RA = _pair_map_mat(A)
-    mul!(W, RA', old.W)
-    mul!(Wswap, RA', old.Wswap)
-    for n in _active_slices(layout, cra)
+    oldcols = first(_state_pair_range(old, first(exterior))):last(_state_pair_range(old, last(exterior)))
+    mul!(W, RA', view(old.W, :, oldcols))
+    mul!(Wswap, RA', view(old.Wswap, :, oldcols))
+    Rnew = [_pair_map_mat(_slice_phi(layout, newra, phi, n)) for n in absorbed]
+    for (i, n) in enumerate(absorbed)
         dn = dims[n]
-        Rn = _pair_map_mat(P[n])
-        for s = 1:ns
+        for (j, s) in enumerate(exterior)
             ds = dims[s]
-            mul!(view(W, :, _pair_range(backend.pair_offs, s)), Rn',
+            mul!(view(W, :, _pair_range(pair_offs, j)), Rnew[i]',
                 reshape(_slice_vee(backend.V, n, s), dn * dn, ds * ds), 1.0, 1.0)
-            mul!(view(Wswap, :, _pair_range(backend.pair_offs, s)), Rn',
+            mul!(view(Wswap, :, _pair_range(pair_offs, j)), Rnew[i]',
                 transpose(reshape(_slice_vee(backend.V, s, n), ds * ds, dn * dn)),
                 1.0, 1.0)
         end
     end
-    active = _active_slices(layout, newra)
-    Vijkl = _cached_vijkl(W, P, active, mnew, backend.pair_offs)
-    SlicedCachedBlockState(newra, phi, Vijkl, W, Wswap, P)
+    G = zeros(Float64, mnew^2, mnew^2)
+    tmp = zeros(Float64, mnew^2, max(mold^2, maximum(abs2.(dims[absorbed]))))
+    _add_grouped!(G, RA, old.G, RA, tmp)
+    for (i, n) in enumerate(absorbed)
+        Rn = Rnew[i]; _add_grouped!(
+            G, RA, view(old.W, :, _state_pair_range(old, n)), Rn, tmp)
+        _add_grouped!(G, Rn,
+            transpose(view(old.Wswap, :, _state_pair_range(old, n))), RA, tmp)
+        for (j, s) in enumerate(absorbed)
+            M = reshape(_slice_vee(backend.V, n, s), dims[n]^2, dims[s]^2)
+            _add_grouped!(G, Rn, M, Rnew[j], tmp)
+        end
+    end
+    SlicedCachedBlockState(newra, phi, G, exterior, pair_offs, W, Wswap)
 end
 
 function vee_init_block(side, ra, raV, phi, backend::SlicedBasisBackendCached)
@@ -215,7 +222,7 @@ function vee_init_block(side, ra, raV, phi, backend::SlicedBasisBackendCached)
     _check_range(raV, "raV")
     size(phi, 1) == length(ra) || error("phi has wrong row count for ra")
     _bench_timing_enabled() && (_bench_timing[:cache_init_calls] += 1)
-    _build_cached_state(ra, phi, backend)
+    _build_cached_state(ra, raV, phi, backend)
 end
 
 function vee_absorb_block(side, vee_old::SlicedCachedBlockState, cra, Phi_old, Phi_C,
@@ -230,10 +237,10 @@ function vee_absorb_block(side, vee_old::SlicedCachedBlockState, cra, Phi_old, P
     A = aligned ? _old_basis_map(side, vee_old, cra, phi_new) : nothing
     if A === nothing
         _bench_timing_enabled() && (_bench_timing[:cache_fallback_calls] += 1)
-        return _build_cached_state(newra, phi_new, backend)
+        return _build_cached_state(newra, raV_new, phi_new, backend)
     end
     _bench_timing_enabled() && (_bench_timing[:cache_incremental_calls] += 1)
-    _incremental_cached_state(side, vee_old, cra, phi_new, A, backend)
+    _incremental_cached_state(side, vee_old, cra, phi_new, A, raV_new, backend)
 end
 
 function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
@@ -276,35 +283,33 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
     for s in _active_slices(backend.layout, Rra)
         ds = dims[s]
         Uview = view(Utmp_R, 1:(ds * ds), :)
-        _pair_map_mat!(Uview, Rvee.P[s])
-        mul!(VLR_mat, view(Lvee.W, :, _pair_range(backend.pair_offs, s)),
+        _pair_map_mat!(Uview, _slice_phi(backend.layout, Rra, Rvee.phi, s))
+        mul!(VLR_mat, view(Lvee.W, :, _state_pair_range(Lvee, s)),
             Uview, 1.0, 1.0)
     end
     for s in _active_slices(backend.layout, Lra)
         ds = dims[s]
         Uview = view(Utmp_L, 1:(ds * ds), :)
-        _pair_map_mat!(Uview, Lvee.P[s])
-        mul!(VRL_mat, view(Rvee.W, :, _pair_range(backend.pair_offs, s)),
+        _pair_map_mat!(Uview, _slice_phi(backend.layout, Lra, Lvee.phi, s))
+        mul!(VRL_mat, view(Rvee.W, :, _state_pair_range(Rvee, s)),
             Uview, 1.0, 1.0)
     end
 
     SlicedBasisCachedWindow(backend.V, backend.layout, ml, lc, mr, center_slices,
-        Lvee.Vijkl, Rvee.Vijkl, Lvee.W, Rvee.W, Lvee.Wswap, Rvee.Wswap,
-        backend.pair_offs, VLR, VRL)
+        Lvee, Rvee, VLR, VRL)
 end
 
-# Pair-grouped tensors store T[x,z;y,w]. Vijkl retains the conventional
-# T[x,y,z,w] order, while Wswap reverses the two grouped region pairs.
-@inline _sector_value(V, x, z, y, w, ::Val{:pair_grouped}) = V[x, z, y, w]
-@inline _sector_value(V, x, z, y, w, ::Val{:four_index}) = V[x, y, z, w]
-@inline _sector_value(V, x, z, y, w, ::Val{:pair_swapped}) = V[y, w, x, z]
+# Pair-grouped tensors store T[x,z;y,w]; Wswap reverses the grouped region pairs.
+@inline _sector_value(V, x, z, y, w, nx, ny, ::Val{:pair_grouped}) = V[x, z, y, w]
+@inline _sector_value(V, x, z, y, w, nx, ny, ::Val{:pair_matrix}) = V[x + (z - 1) * nx, y + (w - 1) * ny]
+@inline _sector_value(V, x, z, y, w, nx, ny, ::Val{:pair_swapped}) = V[y, w, x, z]
 
 function _add_cached_sector!(Fup, Fdn, rhoup, rhodn, V, xoff, yoff, nx, ny,
     ordering, ::Val{restricted}) where {restricted}
     @inbounds for w = 1:ny, y = 1:ny, z = 1:nx, x = 1:nx
         px, pz = xoff + x, xoff + z
         py, pw = yoff + y, yoff + w
-        v = _sector_value(V, x, z, y, w, ordering)
+        v = _sector_value(V, x, z, y, w, nx, ny, ordering)
         if restricted
             Fup[px, pz] += 2.0 * rhoup[py, pw] * v
             Fup[px, pw] -= rhoup[pz, py] * v
@@ -325,15 +330,15 @@ function _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
     dims = win.layout.dims
     grouped = Val(:pair_grouped)
     swapped = Val(:pair_swapped)
-    four_index = Val(:four_index)
+    matrix = Val(:pair_matrix)
 
-    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.VLL, 0, 0, ml, ml,
-        four_index, restricted)
+    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.L.G, 0, 0, ml, ml,
+        matrix, restricted)
     coff = ml
     for s in win.center_slices
         ds = dims[s]
         _add_cached_sector!(Fup, Fdn, rhoup, rhodn,
-            _packed_tensor(win.WL, win.pair_offs, s, ml, ds), 0, coff, ml, ds,
+            _packed_tensor(win.L.W, win.L, s, ml, ds), 0, coff, ml, ds,
             grouped, restricted)
         coff += ds
     end
@@ -344,7 +349,7 @@ function _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
     for s in win.center_slices
         ds = dims[s]
         _add_cached_sector!(Fup, Fdn, rhoup, rhodn,
-            _packed_tensor(win.WLswap, win.pair_offs, s, ml, ds), coff, 0, ds,
+            _packed_tensor(win.L.Wswap, win.L, s, ml, ds), coff, 0, ds,
             ml, swapped, restricted)
         coff += ds
     end
@@ -362,7 +367,7 @@ function _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
     for s in win.center_slices
         ds = dims[s]
         _add_cached_sector!(Fup, Fdn, rhoup, rhodn,
-            _packed_tensor(win.WRswap, win.pair_offs, s, mr, ds), coff, roff, ds,
+            _packed_tensor(win.R.Wswap, win.R, s, mr, ds), coff, roff, ds,
             mr, swapped, restricted)
         coff += ds
     end
@@ -373,12 +378,12 @@ function _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
     for s in win.center_slices
         ds = dims[s]
         _add_cached_sector!(Fup, Fdn, rhoup, rhodn,
-            _packed_tensor(win.WR, win.pair_offs, s, mr, ds), roff, coff, mr, ds,
+            _packed_tensor(win.R.W, win.R, s, mr, ds), roff, coff, mr, ds,
             grouped, restricted)
         coff += ds
     end
-    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.VRR, roff, roff, mr, mr,
-        four_index, restricted)
+    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.R.G, roff, roff, mr, mr,
+        matrix, restricted)
     nothing
 end
 

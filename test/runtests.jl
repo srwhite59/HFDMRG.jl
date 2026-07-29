@@ -739,6 +739,26 @@ try
         rng = MersenneTwister(92)
         relerr(A, B) = norm(A - B, Inf) / max(1.0, norm(B, Inf))
 
+        function cache_semantics(state)
+            channels = Dict{Int, Tuple{Matrix{Float64}, Matrix{Float64}}}()
+            for (j, s) in enumerate(state.exterior_slices)
+                cols = state.pair_offs[j] + 1:state.pair_offs[j + 1]
+                channels[s] = (copy(view(state.W, :, cols)),
+                    copy(view(state.Wswap, :, cols)))
+            end
+            (; G = copy(state.G), channels)
+        end
+
+        function state_errors(state, direct)
+            a, b = cache_semantics(state), cache_semantics(direct)
+            keys(a.channels) == keys(b.channels) || return (Inf, Inf, Inf)
+            (norm(a.G - b.G, Inf),
+             maximum(norm(a.channels[s][1] - b.channels[s][1], Inf)
+                for s in keys(a.channels)),
+             maximum(norm(a.channels[s][2] - b.channels[s][2], Inf)
+                for s in keys(a.channels)))
+        end
+
         function grow(state, side, cra, knew, backend)
             mold, dc = size(state.phi, 2), length(cra)
             O = orthonormal_cols(rng, mold + dc, knew)
@@ -802,6 +822,8 @@ try
                     L.phi, cached)
                 Rdirect = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1),
                     R.phi, cached)
+                @test maximum(state_errors(L, Ldirect)) <= 1e-11
+                @test maximum(state_errors(R, Rdirect)) <= 1e-11
                 Lproj = HFDMRG.vee_init_block(:left, L.ra, (last(L.ra) + 1):N,
                     L.phi, projection)
                 Rproj = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1),
@@ -874,6 +896,35 @@ try
             counts = HFDMRG._bench_timing_snapshot()
             @test (counts[:cache_incremental_calls], counts[:cache_fallback_calls]) ==
                 (0.0, 6.0)
+        end
+
+        dims = [2, 1, 3, 2, 1, 2]
+        layout = HFDMRG.SliceLayout(dims)
+        N = layout.offs[end]
+        V = [[randn(rng, dims[n], dims[n], dims[m], dims[m])
+              for m = 1:length(dims)] for n = 1:length(dims)]
+        backend = HFDMRG.SlicedBasisBackendCached(layout, V)
+        L = HFDMRG.vee_init_block(:left, HFDMRG.orb_range(layout, 1),
+            (dims[1] + 1):N, orthonormal_cols(rng, dims[1], 2), backend)
+        L = grow(L, :left, HFDMRG.orb_range(layout, 2:3), 3, backend)
+        Ldirect = HFDMRG.vee_init_block(
+            :left, L.ra, (last(L.ra) + 1):N, L.phi, backend)
+        @test maximum(state_errors(L, Ldirect)) <= 1e-11
+
+        layout = HFDMRG.SliceLayout(fill(2, 4))
+        oldphi = orthonormal_cols(rng, 2, 2)
+        O = orthonormal_cols(rng, 4, 3)
+        A, C = O[1:2, :], O[3:4, :]
+        phinew = vcat(oldphi * A, C)
+        for (n, m) in ((1, 1), (1, 2), (2, 1), (2, 2))
+            V = [[zeros(2, 2, 2, 2) for _ = 1:4] for _ = 1:4]
+            V[n][m] .= randn(rng, 2, 2, 2, 2)
+            backend = HFDMRG.SlicedBasisBackendCached(layout, V)
+            old = HFDMRG.vee_init_block(:left, 1:2, 3:8, oldphi, backend)
+            state = HFDMRG.vee_absorb_block(
+                :left, old, 3:4, A, C, phinew, 5:8, backend)
+            direct = HFDMRG.vee_init_block(:left, 1:4, 5:8, phinew, backend)
+            @test state_errors(state, direct)[1] <= 1e-11
         end
     end
 
