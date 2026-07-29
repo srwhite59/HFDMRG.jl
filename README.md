@@ -195,7 +195,7 @@ Tune one control at a time:
   still require `block_partition` to align with the interaction slices.
 - `environment_cutoff` controls environment compression independently of
   `cutoff` and `scf_cutoff`, which govern sweep-energy and local-SCF stopping.
-  Lower values retain more occupied-response directions and increase retained
+  Lower values retain more restricted occupied-orbital directions and increase retained
   ranks; compare energy and stationarity as well as runtime and memory.
 - Interpret `cutoff` in the units of the supplied Hamiltonian. A looser value
   is useful for exploratory runs; tighten it and compare the final orbitals
