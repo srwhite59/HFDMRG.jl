@@ -155,10 +155,18 @@ function getraV(ra, N)
     ra[end] + 1:N
 end
 
+function _check_environment_cutoff(environment_cutoff)
+    environment_cutoff isa Real && isfinite(environment_cutoff) &&
+        environment_cutoff >= 0 ||
+        error("environment_cutoff must be a finite, nonnegative real value")
+    environment_cutoff
+end
+
 function getphi(psira, diagnostics = nothing, sweep = 0, direction = :none,
-        window_ordinal = 0, side = :none, physical_range = 1:0)
+        window_ordinal = 0, side = :none, physical_range = 1:0,
+        environment_cutoff = 1e-10)
     u, d, v = svd(psira)
-    i = findlast(x -> x > 1.0e-10, d)
+    i = findlast(x -> x > environment_cutoff, d)
     i === nothing && (i = 1)
     mkeep = max(1, i)
     if _detailed(diagnostics)
@@ -421,7 +429,8 @@ function getfinal(Hup, Hdn, N)
 end
 
 function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
-        finalindsH; verbose = false, _diagnostics = nothing)
+        finalindsH; verbose = false, _diagnostics = nothing,
+        environment_cutoff = 1e-10)
     N = size(H, 1)
     left = 1:blocksizes[1]
     right = N - blocksizes[nblocks] + 1:N
@@ -442,7 +451,7 @@ function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
         lc = length(cra)
         crra = cra[1]:N
         phi, m = getphi(psi[crra, :], _diagnostics, 0, :initialization,
-            nblocks - b, :right, crra)
+            nblocks - b, :right, crra, environment_cutoff)
         phi1 = block[b + 1].phi
         O = vcat(phi[1:lc, :], phi1' * phi[lc + 1:end, :])
         block[b] = addblockright(cra, O, block[b + 1], N, H, Vee, firstindsH)
@@ -451,7 +460,8 @@ function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
 end
 
 function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee,
-    firstindsH, finalindsH; verbose = false, _diagnostics = nothing)
+    firstindsH, finalindsH; verbose = false, _diagnostics = nothing,
+    environment_cutoff = 1e-10)
     N = size(Hup, 1)
     left = 1:blocksizes[1]
     right = N - blocksizes[nblocks] + 1:N
@@ -472,7 +482,7 @@ function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee
         lc = length(cra)
         crra = cra[1]:N
         phi, m = getphi(psi[crra, :], _diagnostics, 0, :initialization,
-            nblocks - b, :right, crra)
+            nblocks - b, :right, crra, environment_cutoff)
         phi1 = block[b + 1].phi
         O = vcat(phi[1:lc, :], phi1' * phi[lc + 1:end, :])
         block[b] = addblockright_split(cra, O, block[b + 1], N, Hup, Hdn, Vee,
@@ -609,10 +619,12 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     maxiter = 1000,
     cutoff = 1e-11,
     scf_cutoff = nothing,
+    environment_cutoff = 1e-10,
     observer = nothing,
     _diagnostics = nothing,
     verbose = false)
 
+    environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(H, 1)
     finalindsH, firstindsH = getfinal(H, N)
     m = restricted ? Nup : Nup + Ndn
@@ -620,7 +632,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
     block = getinitialblocks(nblocks, blocksizes, Cranges, psiall, H, Vee,
-        firstindsH, finalindsH; verbose, _diagnostics)
+        firstindsH, finalindsH; verbose, _diagnostics, environment_cutoff)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -719,7 +731,9 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 oldlc = length(Cra)
                 if transdir == 1
                     oldm = block[b].m
-                    O, m = getphi(psi[1:oldm + oldlc, :], _diagnostics, iter, direction, window_ordinal, :left, block[b].ra[1]:last(Cra))
+                    O, m = getphi(psi[1:oldm + oldlc, :], _diagnostics, iter,
+                        direction, window_ordinal, :left,
+                        block[b].ra[1]:last(Cra), environment_cutoff)
                     block[b + 1] = addblockleft(Cra, O, block[b], N, H, Vee, finalindsH)
                     lc = length(Cranges[b + 2])
                     psibb1 = transrangeleft(psi, 1, O')
@@ -727,7 +741,9 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                     psi = transrangeleft(psiR, m + lc + 1, block[b + 3].phi')
                 else
                     oldm = block[b].m
-                    O, m = getphi(psi[oldm + 1:end, :], _diagnostics, iter, direction, window_ordinal, :right, first(Cra):block[b + 2].ra[end])
+                    O, m = getphi(psi[oldm + 1:end, :], _diagnostics, iter,
+                        direction, window_ordinal, :right,
+                        first(Cra):block[b + 2].ra[end], environment_cutoff)
                     block[b + 1] = addblockright(Cra, O, block[b + 2], N, H, Vee, firstindsH)
                     psiL = transrangeleft(psi, m + 1, O')
                     psiLL = transrangeleft(psiL, 1:oldm, block[b].phi)
@@ -737,7 +753,9 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 d = nblockcenter
                 if transdir == 1
                     oldm = block[b].m
-                    O, m = getphi(psi[1:oldm + blocksizes[b + 1], :], _diagnostics, iter, direction, window_ordinal, :left, block[b].ra[1]:Cranges[b + 1][end])
+                    O, m = getphi(psi[1:oldm + blocksizes[b + 1], :],
+                        _diagnostics, iter, direction, window_ordinal, :left,
+                        block[b].ra[1]:Cranges[b + 1][end], environment_cutoff)
                     block[b + 1] = addblockleft(Cranges[b + 1], O, block[b], N, H, Vee, finalindsH)
                     Cra = Cranges[b + 2][1]:Cranges[b + 1 + d][end]
                     lc = length(Cra)
@@ -753,7 +771,10 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 else
                     startO = size(psi, 1) - block[b + 1 + d].m - blocksizes[b + d] + 1
                     oldm = block[b].m
-                    O, m = getphi(psi[startO:end, :], _diagnostics, iter, direction, window_ordinal, :right, Cranges[b + d][1]:block[b + 1 + d].ra[end])
+                    O, m = getphi(psi[startO:end, :], _diagnostics, iter,
+                        direction, window_ordinal, :right,
+                        Cranges[b + d][1]:block[b + 1 + d].ra[end],
+                        environment_cutoff)
                     block[b + d] = addblockright(Cranges[b + d], O, block[b + 1 + d], N, H, Vee, firstindsH)
                     psiL = transrangeleft(psiup, startO, O')
                     psiLL = transrangeleft(psiL, 1:oldm, block[b].phi)
@@ -786,10 +807,12 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     maxiter = 1000,
     cutoff = 1e-11,
     scf_cutoff = nothing,
+    environment_cutoff = 1e-10,
     observer = nothing,
     _diagnostics = nothing,
     verbose = false)
 
+    environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(Hup, 1)
     size(Hup, 2) == N || error("Hup must be square")
     size(Hdn) == (N, N) || error("Hdn must have the same size as Hup")
@@ -802,7 +825,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
     block = getinitialblocks_split(nblocks, blocksizes, Cranges, psiall, Hup, Hdn,
-        Vee, firstindsH, finalindsH; verbose, _diagnostics)
+        Vee, firstindsH, finalindsH; verbose, _diagnostics, environment_cutoff)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -888,7 +911,9 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 oldlc = length(Cra)
                 if transdir == 1
                     oldm = block[b].m
-                    O, m = getphi(psi[1:oldm + oldlc, :], _diagnostics, iter, direction, window_ordinal, :left, block[b].ra[1]:last(Cra))
+                    O, m = getphi(psi[1:oldm + oldlc, :], _diagnostics, iter,
+                        direction, window_ordinal, :left,
+                        block[b].ra[1]:last(Cra), environment_cutoff)
                     block[b + 1] = addblockleft_split(Cra, O, block[b], N, Hup, Hdn,
                         Vee, finalindsH)
                     lc = length(Cranges[b + 2])
@@ -897,7 +922,9 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                     psi = transrangeleft(psiR, m + lc + 1, block[b + 3].phi')
                 else
                     oldm = block[b].m
-                    O, m = getphi(psi[oldm + 1:end, :], _diagnostics, iter, direction, window_ordinal, :right, first(Cra):block[b + 2].ra[end])
+                    O, m = getphi(psi[oldm + 1:end, :], _diagnostics, iter,
+                        direction, window_ordinal, :right,
+                        first(Cra):block[b + 2].ra[end], environment_cutoff)
                     block[b + 1] = addblockright_split(Cra, O, block[b + 2], N, Hup,
                         Hdn, Vee, firstindsH)
                     psiL = transrangeleft(psi, m + 1, O')
@@ -910,7 +937,9 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 d = nblockcenter
                 if transdir == 1
                     oldm = block[b].m
-                    O, m = getphi(psi[1:oldm + blocksizes[b + 1], :], _diagnostics, iter, direction, window_ordinal, :left, block[b].ra[1]:Cranges[b + 1][end])
+                    O, m = getphi(psi[1:oldm + blocksizes[b + 1], :],
+                        _diagnostics, iter, direction, window_ordinal, :left,
+                        block[b].ra[1]:Cranges[b + 1][end], environment_cutoff)
                     block[b + 1] = addblockleft_split(Cranges[b + 1], O, block[b], N,
                         Hup, Hdn, Vee, finalindsH)
                     Cra = Cranges[b + 2][1]:Cranges[b + 1 + d][end]
@@ -925,7 +954,10 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 else
                     startO = size(psi, 1) - block[b + 1 + d].m - blocksizes[b + d] + 1
                     oldm = block[b].m
-                    O, m = getphi(psi[startO:end, :], _diagnostics, iter, direction, window_ordinal, :right, Cranges[b + d][1]:block[b + 1 + d].ra[end])
+                    O, m = getphi(psi[startO:end, :], _diagnostics, iter,
+                        direction, window_ordinal, :right,
+                        Cranges[b + d][1]:block[b + 1 + d].ra[end],
+                        environment_cutoff)
                     block[b + d] = addblockright_split(Cranges[b + d], O,
                         block[b + 1 + d], N, Hup, Hdn, Vee, firstindsH)
                     psiL = transrangeleft(psiup, startO, O')

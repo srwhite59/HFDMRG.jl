@@ -118,8 +118,9 @@ One calculation proceeds as follows:
    window receives at most four of these SCF micro-iterations.
 4. **Move and rebuild an environment.** An SVD of the occupied-orbital
    coefficients supplies the new environment basis as the center advances.
-   The solver transforms the one-body and backend caches into that basis; it
-   does not carry a tunable DMRG bond dimension.
+   `environment_cutoff` controls which singular vectors are retained. The
+   solver transforms the one-body and backend caches into that basis; it does
+   not carry a tunable DMRG bond dimension.
 5. **Complete both directions.** A left-to-right pass followed by a
    right-to-left pass is one sweep. After the sweep, HFDMRG expands the
    orbitals back into the full physical basis, tests the energy change, and
@@ -150,10 +151,11 @@ All `solve_hfdmrg` entry points accept the same solver keywords:
 |---|---:|---|
 | `blocksize` | `200` | Requested number of physical sites in each interior block chunk. HFDMRG may reduce it for small systems to obtain more than four blocks. This is not a DMRG bond dimension. |
 | `block_partition` | `nothing` | Optional `SliceLayout` defining one complete physical slice per block for any backend. It overrides `blocksize` and requires `nblockcenter >= 1` and enough slices for the sweep; when the backend owns a `SliceLayout`, the two layouts must match exactly. |
-| `nblockcenter` | `1` | Number of consecutive center chunks kept explicit between the left and right environment blocks. This is an advanced window-layout control; normal calculations should leave it at `1`. |
+| `nblockcenter` | `1` | Number of consecutive physical chunks or slices kept explicit between the left and right environments in each moving window. Larger values enlarge the local variational space while increasing local work. |
 | `maxiter` | `1000` | Maximum number of complete left-to-right plus right-to-left sweeps. |
 | `cutoff` | `1e-11` | Sweep-energy convergence tolerance. Common-H routes use `abs(Eold - Enew) < cutoff`; genuinely split-H routes use `abs(Eold - Enew) < cutoff * max(1, abs(Enew))`. |
 | `scf_cutoff` | `nothing` | Local SCF energy tolerance, using the same absolute common-H or scale-aware split-H comparison as `cutoff`. `nothing` means `cutoff` on common-H routes and `cutoff / 10` on genuinely split-H routes. Each window performs at most four SCF micro-iterations. |
+| `environment_cutoff` | `1e-10` | Absolute cutoff for singular values of the restricted occupied-orbital coefficient matrix used to build grown environments. Vectors with `sigma > environment_cutoff` are retained; at least one is always kept. Must be finite and nonnegative. |
 | `observer` | `nothing` | Callable notified after every complete sweep. Return `true` to stop, or `false`/`nothing` to continue. See below. |
 | `verbose` | `false` | Print block decomposition and sweep-energy progress. |
 
@@ -186,9 +188,15 @@ better choice for saving a durable energy history or checkpoint.
 
 Tune one control at a time:
 
-- Start with `nblockcenter = 1` and the default relationship between `cutoff`
-  and `scf_cutoff`. Tightening `scf_cutoff` cannot increase the hard limit of
-  four local SCF micro-iterations.
+- `nblockcenter` is a scientific window-size control. Larger values expose a
+  larger local variational space and may reduce sweep count or improve basin
+  and stationarity behavior. They slightly reduce the number of windows but
+  increase local Fock, eigensolve, and cache-window work. Cached sliced runs
+  still require `block_partition` to align with the interaction slices.
+- `environment_cutoff` controls environment compression independently of
+  `cutoff` and `scf_cutoff`, which govern sweep-energy and local-SCF stopping.
+  Lower values retain more occupied-response directions and increase retained
+  ranks; compare energy and stationarity as well as runtime and memory.
 - Interpret `cutoff` in the units of the supplied Hamiltonian. A looser value
   is useful for exploratory runs; tighten it and compare the final orbitals
   and energy for production work.

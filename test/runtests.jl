@@ -182,6 +182,74 @@ try
         @test_throws ErrorException HFDMRG._RunDiagnostics(:invalid)
     end
 
+    @testset "Environment cutoff control" begin
+        spectrum = [1.0, 1e-7, 1e-9, 1e-11, 1e-13]
+        for (cutoff, expected) in ((0.0, 5), (1e-12, 4), (1e-10, 3), (1e-6, 1))
+            _, rank = HFDMRG.getphi(Matrix(Diagonal(spectrum)), nothing, 0,
+                :initialization, 1, :right, 1:5, cutoff)
+            @test rank == expected
+        end
+        @test last(HFDMRG.getphi(Matrix(Diagonal(spectrum)), nothing, 1,
+            :left_to_right, 1, :left, 1:5, 2.0)) == 1
+
+        N = 12
+        Q = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1))
+             for i = 1:N, j = 1:N]
+        H = Matrix(Symmetric(Q * Diagonal(0.0:N - 1) * Q'))
+        Hdn = Matrix(Symmetric(Q *
+            Diagonal([2.0, 1.0, 0.0, collect(3.0:N - 1)...]) * Q'))
+        V = [0.01 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
+        up, dn = Q[:, 1:1], Q[:, 3:3]
+        layout = HFDMRG.SliceLayout(fill(2, 6))
+        V6 = 0.002 * reshape(sin.(1:(2^4 * 6^2)), 2, 2, 2, 2, 6, 6)
+        cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+        target = HFDMRG.DensityDensityTargetResidualBackend(
+            V, Q[:, 1:2], Matrix(Diagonal([1e-4, -2e-4, 3e-4])))
+        kw = (; maxiter = 1, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = Inf, verbose = false)
+        routes = (
+            extra -> solve_hfdmrg(H, V, up; kw..., extra...),
+            extra -> solve_hfdmrg(H, V, up, dn; kw..., extra...),
+            extra -> solve_hfdmrg(H, Hdn, V, up, dn; kw..., extra...),
+            extra -> solve_hfdmrg(H, cached, up, dn;
+                kw..., block_partition = layout, extra...),
+            extra -> solve_hfdmrg(H, target, up, dn; kw..., extra...),
+        )
+        for run in routes
+            @test run((;)) == run((; environment_cutoff = 1e-10))
+        end
+
+        expected_spans = [
+            (:initialization, :right, 9:12),
+            (:initialization, :right, 7:12),
+            (:initialization, :right, 5:12),
+            (:left_to_right, :left, 1:4),
+            (:left_to_right, :left, 1:6),
+            (:left_to_right, :left, 1:8),
+            (:left_to_right, :right, 9:12),
+            (:right_to_left, :right, 7:12),
+            (:right_to_left, :right, 5:12),
+        ]
+        for environment_cutoff in (0.0, 1e-12, 1e-10, 1e-6)
+            diagnostics = HFDMRG._RunDiagnostics(:detailed)
+            solve_hfdmrg(H, V, up, dn;
+                kw..., environment_cutoff, _diagnostics = diagnostics)
+            measured = filter(s -> s.status === :measured, diagnostics.spectra)
+            @test [(s.direction, s.side, s.physical_range) for s in measured] ==
+                expected_spans
+            @test all(s -> s.retained_rank ==
+                something(findlast(>(environment_cutoff), s.singular_values), 1),
+                measured)
+        end
+
+        for environment_cutoff in (-1.0, NaN, Inf)
+            @test_throws ErrorException solve_hfdmrg(
+                H, V, up; kw..., environment_cutoff)
+            @test_throws ErrorException solve_hfdmrg(
+                H, Hdn, V, up, dn; kw..., environment_cutoff)
+        end
+    end
+
     @testset "Split one-body UHF API" begin
         rng = MersenneTwister(301)
         N = 12
@@ -1111,6 +1179,83 @@ try
         mismatch = HFDMRG.SliceLayout([1, 3, 2, 2, 2, 2])
         @test_throws ErrorException solve_hfdmrg(H, backend_proj, psiup0, psidn0;
             aligned..., block_partition = mismatch)
+    end
+
+    @testset "Center width control" begin
+        rng = MersenneTwister(729)
+        d, ns, N = 2, 8, 16
+        layout = HFDMRG.SliceLayout(fill(d, ns))
+        Q = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1))
+             for i = 1:N, j = 1:N]
+        H = Matrix(Symmetric(Q * Diagonal(0.0:N - 1) * Q'))
+        V6 = zeros(d, d, d, d, ns, ns)
+        for n = 1:ns, m = 1:ns, a = 1:d, c = 1:d
+            p, q = (n - 1) * d + a, (m - 1) * d + c
+            V6[a, a, c, c, n, m] = 0.005 / (1 + abs(p - q))
+        end
+        projection = HFDMRG.SlicedBasisBackend(layout, V6)
+        cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+        psi0 = Q[:, 1:2]
+        projector(C) = C * C'
+
+        function window_focks(backend, Lra, Cra, Rra, Lphi, Rphi, rho, rhoup, rhodn)
+            L = HFDMRG.vee_init_block(:left, Lra, (last(Lra) + 1):N, Lphi, backend)
+            R = HFDMRG.vee_init_block(:right, Rra, 1:(first(Rra) - 1), Rphi, backend)
+            win = HFDMRG.vee_window(L, R, Cra, backend)
+            w = size(rho, 1)
+            F, Fup, Fdn = zeros(w, w), zeros(w, w), zeros(w, w)
+            HFDMRG.vee_add_fock_r!(F, rho, win)
+            HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+            F, Fup, Fdn
+        end
+
+        for nblockcenter = 1:3
+            Lra = HFDMRG.orb_range(layout, 1)
+            Cra = HFDMRG.orb_range(layout, 2:(1 + nblockcenter))
+            Rra = HFDMRG.orb_range(layout, (2 + nblockcenter):ns)
+            Lphi = Matrix{Float64}(I, d, d)
+            Rphi = orthonormal_cols(rng, length(Rra), 2)
+            w = size(Lphi, 2) + length(Cra) + size(Rphi, 2)
+            rho = Matrix(Symmetric(randn(rng, w, w)))
+            rhoup = Matrix(Symmetric(randn(rng, w, w)))
+            rhodn = Matrix(Symmetric(randn(rng, w, w)))
+            focks = map(backend -> window_focks(
+                backend, Lra, Cra, Rra, Lphi, Rphi, rho, rhoup, rhodn),
+                (projection, cached))
+            @test maximum(norm(focks[2][i] - focks[1][i], Inf) /
+                max(1.0, norm(focks[1][i], Inf)) for i = 1:3) <= 1e-11
+            Er = [sum(rho .* f[1]) for f in focks]
+            Eu = [0.5 * sum(rhoup .* f[2]) + 0.5 * sum(rhodn .* f[3])
+                for f in focks]
+            @test maximum(abs.((Er[2] - Er[1], Eu[2] - Eu[1]))) <=
+                1e-11 * max(1.0, abs(Er[1]), abs(Eu[1]))
+
+            diagnostics = HFDMRG._RunDiagnostics(:detailed)
+            kw = (; maxiter = 1, blocksize = 0, block_partition = layout,
+                nblockcenter, cutoff = 0.0, scf_cutoff = Inf, verbose = false)
+            result_cached, routes = withenv("HFDMRG_BENCH_TIMING" => "1") do
+                HFDMRG._bench_timing_reset!()
+                result = solve_hfdmrg(
+                    H, cached, psi0; kw..., _diagnostics = diagnostics)
+                result, HFDMRG._bench_timing_snapshot()
+            end
+            result_projection = solve_hfdmrg(H, projection, psi0; kw...)
+            @test abs(result_cached[3] - result_projection[3]) <=
+                1e-10 * max(1.0, abs(result_projection[3]))
+            @test norm(projector(result_cached[1]) -
+                projector(result_projection[1])) <= 1e-9
+            @test result_cached[1] == result_cached[2]
+            @test norm(result_cached[1]' * result_cached[1] - I) <= 1e-10
+            expected_centers = vcat(
+                [HFDMRG.orb_range(layout, (b + 1):(b + nblockcenter))
+                 for b = 1:(ns - 1 - nblockcenter)],
+                [HFDMRG.orb_range(layout, (b + 1):(b + nblockcenter))
+                 for b = (ns - 2 - nblockcenter):-1:2])
+            @test getproperty.(diagnostics.windows, :center_range) == expected_centers
+            @test (routes[:window_local_calls], routes[:window_projection_calls],
+                routes[:cache_fallback_calls]) ==
+                (length(expected_centers), 0.0, 0.0)
+        end
     end
 
     @testset "Structured three-block center" begin
