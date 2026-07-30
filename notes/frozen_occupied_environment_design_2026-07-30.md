@@ -2,8 +2,9 @@
 
 Date: 2026-07-30
 
-Status: F0 design checkpoint for paper-manager review. This does not authorize
-source/test edits, an API addition, threshold freezing, H100, merge, or push.
+Status: amended F0 design checkpoint for paper-manager review. F1 is not
+authorized. This does not authorize source/test edits, an API addition,
+threshold freezing, H100, merge, or push.
 
 ## Outcome
 
@@ -20,6 +21,10 @@ Ordinary backend caches contain only the common spatial span of the remaining
 fractional occupied directions. This is one opt-in solver policy, not generic
 backend composition. F1 is roundoff-exact only. Occupation leakage is not an
 energy bound; threshold-controlled freezing is outside this design.
+
+The common spatial basis is not itself an allowed orbital space for either
+spin. Every local solve uses a spin-specific null space that excludes that
+spin's frozen columns while leaving the other spin free to share them.
 
 ## Baseline And Evidence
 
@@ -71,6 +76,17 @@ E_RHF = E_f + Tr[D_a(F_a+h_eff)].
 ```
 Adding the frozen field only to `F` would lose half the active-frozen cross
 energy.
+
+At each window form one effective one-body matrix per spin,
+```text
+H1B_eff,sigma = H1B_sigma + G_frozen,window,sigma.
+```
+That same matrix seeds every candidate Fock and occupies the second position
+of the energy trace. Frozen fields do not also enter the active interaction
+backend. Add the left and right frozen self energies and their cross scalar
+once. Even when the bare `H` is common, UHF frozen exchange generally makes
+`H1B_eff,alpha != H1B_eff,beta`; exact common-H UHF therefore takes the
+existing split-matrix local route internally without changing default mode.
 
 For disjoint left/right frozen densities, use
 ```text
@@ -133,6 +149,50 @@ candidate active instead of constructing a zero-rank block.
 Fixed edges perform no promotion and retain today's complete identities.
 Promotion begins only after an edge absorbs its first center chunk.
 
+## Spin-Specific Allowed Coordinates
+
+For the physical window basis `B` and frozen columns of spin `sigma`, compute
+an orthonormal null-space basis
+```text
+A_sigma = C_f,sigma' B
+Z_sigma = null(A_sigma)
+C_f,sigma' B Z_sigma = 0.
+```
+For `w=size(B,2)` and `f_sigma=size(C_f,sigma,2)`, take a full SVD of
+`A_sigma` and define
+```text
+tau_Z = 128 gamma(max(1,w,f_sigma)) max(1,norm(A_sigma,2)).
+```
+Singular directions strictly above `tau_Z` are constrained; the remaining
+right singular directions form `Z_sigma`. Certify
+`norm(A_sigma Z_sigma,2)<=tau_Z` and orthonormal `Z_sigma` at the corresponding
+fixed scale. This is not `environment_cutoff`; empty `C_f,sigma` gives `Z=I`.
+Require `n_a,sigma <= size(Z_sigma,2)`. The spin solve is
+```text
+F_allowed,sigma = Z_sigma' F_window,sigma Z_sigma,
+C_a,window,sigma = Z_sigma U_occ,sigma.
+```
+Thus alpha cannot duplicate an alpha-ledger orbital even when beta keeps that
+spatial direction in the common basis; beta is constrained only against its
+own frozen columns.
+
+All candidate and damped occupied projectors are formed in `Z_sigma`
+coordinates. Active densities use `B Z_sigma U_occ,sigma`; energy uses those
+same densities. After promotion, structural demotion, or thaw, recompute
+`Z_sigma`, reduce `D_sigma-D_f,sigma` into `B Z_sigma`, and reorthogonalize
+there before the next update. Reconstruction lifts through `B Z_sigma`.
+Post-update orthogonality is an invariant check, not the enforcement method.
+
+`n_a,sigma=0` is valid independently for either spin. Represent its occupied
+coefficients as `size(Z_sigma,2) x 0`, set its active density to zero, skip its
+eigensolve and damping, and retain its effective Fock for the other spin and
+the sweep audit. If both UHF spins, or all RHF pairs, are frozen, skip the
+local occupied solve and evaluate the frozen-only scalar; local convergence
+is vacuous but outer convergence still requires the energy and sweep audits.
+Structural demotion may restore a positive active count at the next cut.
+The rank-one environment fallback remains a spatial basis rule and never
+creates a rank-one occupied result.
+
 ## State And Cut Lifecycle
 
 The opt-in path adds private state:
@@ -164,10 +224,22 @@ move, promotion or structural demotion can change `n_a,sigma`; reconstruct
 the new window. This avoids stale column order and restores a column when a
 smaller saved block no longer classifies it as frozen.
 
-The block array still retains cuts for the opposite direction. Only two
-ledger generations are live: current left and current right. Starting a
-growth direction creates a new same-side generation; the old one is released
-as its cuts are overwritten. No cut refers to mutable aggregate density.
+Each immutable ledger generation belongs to one side and one growth pass.
+Cuts created by that pass reference prefixes of its append-only column list;
+fixed edge cuts have empty references. At the start of a left-growing pass,
+create a new left generation. Each newly written left cut drops its reference
+to the old left generation and takes a prefix reference to the new one; right
+cuts continue to reference the retained right generation. Release the old
+left generation only after its final cut and any in-flight window reference
+are gone. Apply the mirror rule at reversal for a new right generation.
+
+Consequently an old same-side, new same-side, and opposite-side generation
+may coexist during overwrite; the steady completed direction has two. No
+reference migrates without reconstructing that cut, and no cut refers to a
+mutable aggregate density. A thaw first materializes the full determinant
+while both old directional generations are valid, invalidates all their cuts,
+then releases them before fresh initialization. Observer data owns its
+expanded determinant and cannot extend a ledger lifetime.
 
 ## Promotion And Final Coordinates
 
@@ -203,7 +275,7 @@ Left/right differ only in physical concatenation and exterior range.
 
 After initial classification and every complete sweep, construct physical
 densities and Fock matrices through the backend's existing full contraction.
-For every frozen column,
+For every frozen column, audit stationarity:
 ```text
 r_f,sigma = (I-D_sigma)F_sigma c_f,sigma
            = F_sigma c_f,sigma
@@ -216,6 +288,24 @@ tau_thaw,sigma = 128 gamma_N max(1,norm(F_sigma,Inf)).
 ```
 Strictly thaw when `norm(r_f,sigma)>tau_thaw,sigma`. A triggered audit
 prevents convergence return and forces another sweep.
+
+Residual stationarity is insufficient for occupation ordering. Let
+`C_sigma` contain every occupied orbital and let `U_sigma` span its physical
+orthogonal complement. Define
+```text
+epsilon_occ,max = lambda_max(C_sigma' F_sigma C_sigma)
+epsilon_vir,min = lambda_min(U_sigma' F_sigma U_sigma)
+Delta_Aufbau = epsilon_occ,max-epsilon_vir,min
+tau_Aufbau = 128 gamma_N max(1,norm(F_sigma,Inf)).
+```
+The audit is vacuous when either the occupied or virtual space is empty.
+`Delta_Aufbau>tau_Aufbau` is a resolved occupied-virtual inversion even if
+the frozen residual is zero. It prevents convergence and deterministically
+thaws all frozen orbitals of that spin; those columns are protected from
+re-promotion for the rest of the solve. Values within the fixed tolerance
+are roundoff-degenerate and pass. If a resolved inversion remains after that
+spin has no frozen columns, exact mode reports unresolved non-Aufbau
+stationarity rather than claiming convergence or loosening the gate.
 
 Thaw rebuilds rather than mutating all saved cuts:
 
@@ -238,6 +328,16 @@ but production rebuilds so every cut agrees. Repeated rebuilds are a measured
 stop condition, not authority to loosen the threshold.
 
 ## Density-Density State
+
+On entry to exact mode, first reject any nonfinite `V`. Exhaustively certify
+all stored pairs with the maximum-entry norm:
+```text
+s_V = max(1,maximum(abs,V))
+delta_V = max(p,q) abs(V[p,q]-V[q,p])
+tau_sym = 128 eps(T) s_V.
+```
+Require `delta_V<=tau_sym`; do not symmetrize the input. This certification is
+specific to `:roundoff_exact` and leaves default density arithmetic unchanged.
 
 For block range `R`, store
 ```text
@@ -294,9 +394,18 @@ can rebuild exactly. Never merge `W` and `Wswap`.
 Aligned whole-slice windows add `J_f,L+J_f,R` per slice and both projected
 exchange blocks. Compute the frozen cross scalar in both ordered direct
 orientations. Exact mode requires `block_partition==layout`; split-slice
-fallback is rejected. Fixed scale-aware checks certify the physical pair
-symmetries required by the energy identity only when exact mode is requested.
-Default cached arithmetic continues to accept ordered unsymmetrized data.
+fallback is rejected. For every valid stored real entry, exact mode rejects
+nonfinite data and exhaustively checks
+```text
+V_nm[a,b,c,d] = V_nm[b,a,c,d]
+V_nm[a,b,c,d] = V_nm[a,b,d,c]
+V_nm[a,b,c,d] = V_mn[c,d,a,b].
+```
+With `s_6=max(1,maximum(abs,V6))`, let `delta_6` be the maximum-entry norm of
+all three difference tensors and require
+`delta_6<=128 eps(T)s_6`. Do not average or repair entries. Default cached
+arithmetic continues to accept ordered unsymmetrized data, and certification
+does not permit merging `W` with `Wswap`.
 
 ## Cost And Lifecycle
 
@@ -305,7 +414,7 @@ Let `S` be slices, `N=Sd`, `q` common fractional rank, `f` frozen count, and
 ```text
 O(CNq + Cq^4 + CSd^2q^2).
 ```
-Frozen additions are
+Frozen additions at steady completed directions are
 ```text
 ledgers                   O(Nf)
 all-cut direct fields     O(CSd^2)
@@ -326,6 +435,12 @@ steady local Fock addition must allocate zero.
 
 Density-density frozen storage is `O(CN+Cq^2+Nf)`, worst-case window
 projection `O(Nq^2)`, and audit `O(N^2)`.
+
+During a direction overwrite, three ledger generations can coexist, so
+physical frozen-column storage peaks at at most three directional
+generations, `O(3Nf)=O(Nf)`, rather than the steady two-generation constant.
+The all-cut field terms are unchanged. Thaw additionally holds one materialized
+`N x (N_alpha+N_beta)` determinant while old generations are released.
 
 H100 estimates must use measured cut-by-cut `q,f`. The preflight's
 leakage-`1e-6` rank near five per spin is not the roundoff-exact classifier
@@ -404,6 +519,19 @@ verifier outputs.
    spin diagnostics, and route parity before claiming compression.
 10. Only then recompute H20/H40/H80/H100 cut-based time/memory estimates. Do
     not run H100 before review.
+11. In UHF, let beta require a spatial direction frozen for alpha and prove
+    spin-specific allowed spaces prevent only alpha duplication.
+12. Give a frozen exact Fock eigenvector a resolved lower virtual; require
+    zero residual but an Aufbau-triggered thaw/rebuild.
+13. Exercise common-H UHF with unequal alpha/beta frozen exchange fields.
+14. Require one-spin-zero-active and both-spins-zero-active UHF plus
+    all-frozen RHF, including frozen-only energy and structural demotion.
+15. Hold old/new same-side and opposite-side ledger generations live through
+    reversal, then thaw and prove deterministic release and reconstruction.
+16. Accept symmetric and reject nonfinite or resolvably nonsymmetric density
+    and sliced inputs only in exact mode.
+17. Independently decompose energy and prove each frozen self scalar,
+    left-right cross scalar, and active-frozen field enters exactly once.
 
 ## Risks And Stop Conditions
 
@@ -416,15 +544,20 @@ verifier outputs.
   result, not authority for threshold mode.
 - Failed sliced physical symmetry rejects exact mode; it does not authorize
   merged orientations or changed default semantics.
+- A frozen residual pass with a resolved Aufbau inversion triggers thaw; it
+  cannot be accepted as stationary.
+- Spin-specific null-space failure or an active count exceeding its allowed
+  dimension stops exact mode.
 - Any default-off trajectory difference blocks the feature.
 - Exceeding a milestone hard cap requires new review.
 - H10 failure blocks long-chain calculations.
 
 ## F0 Decision
 
-This design needs neither a global four-index interaction nor a copied sweep
-engine. It is not approved for implementation. F1 requires paper-manager
-review of the certification, reversible lifecycle, energy convention, and
-bounded private seam.
+This amended design needs neither a global four-index interaction nor a copied
+sweep engine. It is not approved for implementation. F1 requires
+paper-manager review of the spin-specific allowed spaces, residual-plus-Aufbau
+audit, zero-active behavior, interaction certification, reversible lifecycle,
+energy convention, and bounded private seam.
 
 -- hfdmrg-manager@rh310l
