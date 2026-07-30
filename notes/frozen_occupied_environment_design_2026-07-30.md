@@ -85,8 +85,10 @@ That same matrix seeds every candidate Fock and occupies the second position
 of the energy trace. Frozen fields do not also enter the active interaction
 backend. Add the left and right frozen self energies and their cross scalar
 once. Even when the bare `H` is common, UHF frozen exchange generally makes
-`H1B_eff,alpha != H1B_eff,beta`; exact common-H UHF therefore takes the
-existing split-matrix local route internally without changing default mode.
+`H1B_eff,alpha != H1B_eff,beta`. Exact common-H UHF remains in the existing
+common sweep core, but its window update uses separate effective matrices and
+the split local Fock/energy formulas. It never dispatches the complete solve
+to the split core, rebuilds through that core, or copies the sweep engine.
 
 For disjoint left/right frozen densities, use
 ```text
@@ -176,12 +178,22 @@ Thus alpha cannot duplicate an alpha-ledger orbital even when beta keeps that
 spatial direction in the common basis; beta is constrained only against its
 own frozen columns.
 
-All candidate and damped occupied projectors are formed in `Z_sigma`
-coordinates. Active densities use `B Z_sigma U_occ,sigma`; energy uses those
-same densities. After promotion, structural demotion, or thaw, recompute
-`Z_sigma`, reduce `D_sigma-D_f,sigma` into `B Z_sigma`, and reorthogonalize
-there before the next update. Reconstruction lifts through `B Z_sigma`.
-Post-update orthogonality is an invariant check, not the enforcement method.
+The pure candidate projector and temporary damped SCF density are distinct:
+```text
+P_det,sigma^Z = U_occ,sigma U_occ,sigma'
+rho_mix,sigma^Z =
+    (1-lambda)rho_old,sigma^Z + lambda P_det,sigma^Z.
+```
+Local Fock construction and the existing local mixed-density energy use
+`Z_sigma rho_mix,sigma^Z Z_sigma'`. The object expanded physically, classified,
+promoted, stored, passed to the next window, returned, and sweep-audited is
+instead the pure determinant with columns `B Z_sigma U_occ,sigma`.
+
+After promotion, structural demotion, or thaw, recompute `Z_sigma`, transport
+and reduce the pure determinant, and initialize the next mixed density from
+its projector. Never subtract the frozen density from and reorthogonalize a
+generally non-idempotent mixed density. Post-update pure-determinant
+orthogonality is an invariant check, not the enforcement method.
 
 `n_a,sigma=0` is valid independently for either spin. Represent its occupied
 coefficients as `size(Z_sigma,2) x 0`, set its active density to zero, skip its
@@ -273,9 +285,10 @@ Left/right differ only in physical concatenation and exterior range.
 
 ## Thaw
 
-After initial classification and every complete sweep, construct physical
-densities and Fock matrices through the backend's existing full contraction.
-For every frozen column, audit stationarity:
+After initial classification and every complete sweep, materialize one pure
+physical determinant and construct its densities and Fock matrices through
+the backend's existing full contraction. On that unchanged state, evaluate
+every frozen-column stationarity residual:
 ```text
 r_f,sigma = (I-D_sigma)F_sigma c_f,sigma
            = F_sigma c_f,sigma
@@ -286,8 +299,8 @@ Use the fixed internal gate
 gamma_N = N eps(T)/(1-N eps(T))
 tau_thaw,sigma = 128 gamma_N max(1,norm(F_sigma,Inf)).
 ```
-Strictly thaw when `norm(r_f,sigma)>tau_thaw,sigma`. A triggered audit
-prevents convergence return and forces another sweep.
+`norm(r_f,sigma)>tau_thaw,sigma` records a residual trigger; it does not mutate
+state during the audit.
 
 Residual stationarity is insufficient for occupation ordering. Let
 `C_sigma` contain every occupied orbital and let `U_sigma` span its physical
@@ -298,22 +311,28 @@ epsilon_vir,min = lambda_min(U_sigma' F_sigma U_sigma)
 Delta_Aufbau = epsilon_occ,max-epsilon_vir,min
 tau_Aufbau = 128 gamma_N max(1,norm(F_sigma,Inf)).
 ```
-The audit is vacuous when either the occupied or virtual space is empty.
+The Aufbau audit is evaluated only when the ordinary outer energy test is a
+prospective convergence return, and is vacuous when either the occupied or
+virtual space is empty.
 `Delta_Aufbau>tau_Aufbau` is a resolved occupied-virtual inversion even if
-the frozen residual is zero. It prevents convergence and deterministically
-thaws all frozen orbitals of that spin; those columns are protected from
-re-promotion for the rest of the solve. Values within the fixed tolerance
-are roundoff-degenerate and pass. If a resolved inversion remains after that
-spin has no frozen columns, exact mode reports unresolved non-Aufbau
-stationarity rather than claiming convergence or loosening the gate.
+the frozen residual is zero. It records all frozen orbitals of that spin as
+triggers. Values within the fixed tolerance are roundoff-degenerate and pass.
 
-Thaw rebuilds rather than mutating all saved cuts:
+The sweep boundary performs one ordered transition:
 
-1. protect the triggered occupied continuation;
-2. reconstruct the same full determinant;
-3. discard both directional block families and contracted frozen fields;
-4. rebuild from that determinant; and
-5. continue with the column active.
+1. collect every residual-triggered column and every inversion-triggered spin
+   before changing state;
+2. thaw their union once and protect those directions from re-promotion;
+3. discard both block families and rebuild once from the unchanged pure
+   determinant; and
+4. suppress convergence and force at least one complete subsequent sweep.
+
+Without triggers, a noncandidate sweep continues normally and a prospective
+return may converge. Only at a later prospective audit after a rebuild may a
+resolved inversion with no frozen orbitals be reported through the existing
+nonconverged path. It never relaxes a tolerance or adds a public status; an
+exact-mode solve otherwise continues to `maxiter` and uses today's
+nonconverged return behavior.
 
 The ledger and original backend data make this reversible. The inverse scalar
 identity is
@@ -433,8 +452,12 @@ uses two `N x N` Fock temporaries already supported by density or sliced
 projection, never a global `N^4` interaction. Window scratch is `O(w^2)` and
 steady local Fock addition must allocate zero.
 
-Density-density frozen storage is `O(CN+Cq^2+Nf)`, worst-case window
-projection `O(Nq^2)`, and audit `O(N^2)`.
+Density-density frozen storage is `O(CN+Cq^2+Nf)` and worst-case window
+projection is `O(Nq^2)`. The explicit virtual complement and projected
+matrices require `O(N^2)` audit storage, but dense Aufbau diagonalization is
+`O(N^3)` work. F1 permits this only as a small density-density correctness
+implementation, and only on prospective convergence; it makes no long-chain
+efficiency claim.
 
 During a direction overwrite, three ledger generations can coexist, so
 physical frozen-column storage peaks at at most three directional
@@ -483,7 +506,12 @@ docs/backend_architecture.md
 ```
 Preferred additions: source 330, tests 150, docs/include 60, total 540. Hard
 stop: 650 total. Do not touch sliced cache arithmetic in F1.
-F2 starts only after F1 review and adds aligned cached-sliced exact mode in:
+F2 starts only after F1 review and a separate scalable Aufbau-audit review.
+It must use a validated matrix-free partial eigensolve, or an equally scalable
+ordering test, based on
+`x -> (I-D_sigma)F_sigma(I-D_sigma)x`, without constructing the full virtual
+complement. Its residual, convergence, degeneracy, and cost gates are part of
+that later design. Only then may F2 add aligned cached-sliced exact mode in:
 ```text
 src/backends/sliced_basis_cached.jl
 src/frozen_occupied.jl
@@ -510,7 +538,8 @@ verifier outputs.
 5. Require omission versus `:off` exact equality for RHF, common/split UHF,
    density, projection/cached sliced, and zero/nonzero target-residual routes.
 6. In moving sweeps require roundoff no-promotion, exact left/right promotion,
-   structural demotion, and forced thaw/rebuild with invariant determinant.
+   structural demotion, pure-versus-mixed separation, and one batched
+   thaw/rebuild with invariant determinant.
 7. Compare density and cached left/right/rank-changing recurrences with fresh
    physical contractions, including post-reorth maps, fixed/ragged slices,
    and zero steady Fock allocation.
@@ -555,9 +584,9 @@ verifier outputs.
 ## F0 Decision
 
 This amended design needs neither a global four-index interaction nor a copied
-sweep engine. It is not approved for implementation. F1 requires
-paper-manager review of the spin-specific allowed spaces, residual-plus-Aufbau
-audit, zero-active behavior, interaction certification, reversible lifecycle,
-energy convention, and bounded private seam.
+sweep engine. It is not approved for implementation. F1 requires final
+paper-manager acceptance of this density-only correctness seam. F2 and
+long-chain production remain blocked on a separately reviewed scalable
+matrix-free Aufbau audit.
 
 -- hfdmrg-manager@rh310l
