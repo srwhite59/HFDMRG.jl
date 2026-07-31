@@ -87,6 +87,32 @@ function _active_from_det(C, Cf)
     r = count(>(tol), F.S)
     C * F.V[:, r + 1:end]
 end
+function _frozen_valid(C, CL, CR)
+    T, N = eltype(C), size(C, 1)
+    g = N * eps(T) / (1 - N * eps(T))
+    Cf = hcat(CL, CR)
+    scale = 128g * max(1, size(Cf, 2), norm(C, Inf))
+    norm(Cf' * Cf - I) <= scale &&
+        norm(Cf - C * (C' * Cf)) <= scale &&
+        norm(CL' * CR) <= scale
+end
+function _all_frozen(p, spin)
+    cols = [_ledger_columns(p.cuts[i], size(p.V, 1), spin)
+        for i = eachindex(p.cuts) if isassigned(p.cuts, i)]
+    _orthcols(hcat(cols...))
+end
+function _live_generations(p, in_flight = nothing)
+    ids = Set(p.cuts[i].ledger.generation for i = eachindex(p.cuts)
+        if isassigned(p.cuts, i) && p.cuts[i].ledger !== nothing)
+    in_flight === nothing || push!(ids, in_flight.generation)
+    length(ids)
+end
+function _protect_stale!(p, up, dn, diagnostics)
+    p.protectedup = _orthcols(hcat(p.protectedup, p.psiup * (p.psiup' * up)))
+    p.protecteddn = _orthcols(hcat(p.protecteddn, p.psidn * (p.psidn' * dn)))
+    p.rebuilt = true
+    diagnostics === nothing || (diagnostics.frozen_rebuilds += 1)
+end
 function _classify_frozen(C, ra, protected)
     N, n = size(C)
     n == 0 && return C, similar(C, N, 0)
@@ -136,10 +162,6 @@ function _frozen_growth!(p, side, oldblock, cra, oldidx, environment_cutoff)
     else
         p.activedn, Cdn = _classify_frozen(p.activedn, ra, p.protecteddn)
     end
-    p.currentup = hcat(p.currentup, Cup)
-    p.currentdn = hcat(p.currentdn, Cdn)
-    p.psiup = hcat(p.currentup, p.activeup)
-    p.psidn = p.restricted ? p.psiup : hcat(p.currentdn, p.activedn)
     X = hcat(p.activeup[ra, :], p.activedn[ra, :])
     B = side === :left ?
         cat(oldblock.phi, Matrix{eltype(X)}(I, length(cra), length(cra)); dims = (1, 2)) :
@@ -148,14 +170,36 @@ function _frozen_growth!(p, side, oldblock, cra, oldidx, environment_cutoff)
     F = svd(Y)
     k = findlast(>(environment_cutoff), F.S)
     if k === nothing
-        Cf = hcat(p.currentup[ra, :], p.currentdn[ra, :])
+        Cf = hcat(p.currentup[ra, :], Cup[ra, :],
+            p.currentdn[ra, :], Cdn[ra, :])
         FC = svd(Cf' * B; full = true)
         tol = 128eps(eltype(B)) * max(size(B)...) * max(1, isempty(FC.S) ? 1 : FC.S[1])
         r = count(>(tol), FC.S)
-        O = FC.V[:, r + 1:r + 1]
+        if r == size(B, 2)
+            if p.restricted
+                c = Cup[:, end:end]
+                Cup, Cdn = Cup[:, 1:end - 1], Cdn[:, 1:end - 1]
+                p.activeup = hcat(p.activeup, c)
+                p.activedn = p.activeup
+            elseif size(Cup, 2) > 0
+                p.activeup = hcat(p.activeup, Cup[:, end:end])
+                Cup = Cup[:, 1:end - 1]
+            else
+                p.activedn = hcat(p.activedn, Cdn[:, end:end])
+                Cdn = Cdn[:, 1:end - 1]
+            end
+            X = hcat(p.activeup[ra, :], p.activedn[ra, :])
+            O = svd(B' * X).U[:, 1:1]
+        else
+            O = FC.V[:, r + 1:r + 1]
+        end
     else
         O = F.U[:, 1:k]
     end
+    p.currentup = hcat(p.currentup, Cup)
+    p.currentdn = hcat(p.currentdn, Cdn)
+    p.psiup = hcat(p.currentup, p.activeup)
+    p.psidn = p.restricted ? p.psiup : hcat(p.currentdn, p.activedn)
     (; O, Cup, Cdn)
 end
 function _frozen_fields(p, Cup, Cdn)
@@ -165,7 +209,7 @@ function _frozen_fields(p, Cup, Cdn)
 end
 
 function _frozen_store_growth!(p::_FrozenPolicy{T}, idx, oldidx, side, oldblock,
-        newblock, growth) where T
+        newblock, growth, diagnostics) where T
     old = p.cuts[oldidx]
     firstnode = old.ledger === nothing
     firstnode && (p.generation += 1)
@@ -188,15 +232,24 @@ function _frozen_store_growth!(p::_FrozenPolicy{T}, idx, oldidx, side, oldblock,
         newblock.phi' * (p.V[ra, ra] .* Pup[ra, ra]) * newblock.phi
     kdn = A' * old.kdn * A +
         newblock.phi' * (p.V[ra, ra] .* Pdn[ra, ra]) * newblock.phi
-    ids = Set{Int}()
-    for i = eachindex(p.cuts)
-        isassigned(p.cuts, i) && p.cuts[i].ledger !== nothing &&
-            push!(ids, p.cuts[i].ledger.generation)
-    end
-    ledger !== nothing && push!(ids, ledger.generation)
-    p.max_live = max(p.max_live, length(ids))
-    p.cuts[idx] = _FrozenCut(ledger, old.nup + size(growth.Cup, 2),
+    p.max_live = max(p.max_live, _live_generations(p, ledger))
+    cut = _FrozenCut(ledger, old.nup + size(growth.Cup, 2),
         old.ndn + size(growth.Cdn, 2), old.j + jP, kup, kdn, e)
+    p.cuts[idx] = cut
+    if _detailed(diagnostics)
+        Cu, Cd = _ledger_columns(cut, size(p.V, 1), :up),
+            _ledger_columns(cut, size(p.V, 1), :dn)
+        Du, Dd = Cu * Cu', Cd * Cd'
+        jf = p.V * (diag(Du) + diag(Dd))
+        ef = tr(Du * p.Hup) + tr(Dd * p.Hdn) +
+            0.5dot(diag(Du) + diag(Dd), jf) -
+            0.5sum(p.V .* (Du .* Du + Dd .* Dd))
+        diagnostics.frozen_recurrence_error = max(diagnostics.frozen_recurrence_error,
+            norm(cut.j - jf), norm(cut.kup - newblock.phi' *
+                (p.V[ra, ra] .* Du[ra, ra]) * newblock.phi),
+            norm(cut.kdn - newblock.phi' *
+                (p.V[ra, ra] .* Dd[ra, ra]) * newblock.phi), abs(cut.energy - ef))
+    end
 end
 
 function _window_basis(N, left, cra, right)
@@ -245,11 +298,25 @@ function _frozen_local!(p, li, ri, left, cra, right, Hup, Hdn, win, lambda,
         scf_cutoff, relative, diagnostics)
     B = _window_basis(size(p.V, 1), left, cra, right)
     Gup, Gdn, ef, Cfu, Cfd = _frozen_effective(p, li, ri, B)
+    Lu, Ld = _ledger_columns(p.cuts[li], size(B, 1), :up),
+        _ledger_columns(p.cuts[li], size(B, 1), :dn)
+    Ru, Rd = _ledger_columns(p.cuts[ri], size(B, 1), :up),
+        _ledger_columns(p.cuts[ri], size(B, 1), :dn)
+    staleup = !_frozen_valid(p.psiup, Lu, Ru)
+    staledn = !p.restricted && !_frozen_valid(p.psidn, Ld, Rd)
+    (staleup || staledn) &&
+        return (; stale = true, up = staleup ? Cfu : Cfu[:, 1:0],
+            dn = staledn ? Cfd : Cfd[:, 1:0])
     Heffup, Heffdn = Hup + Gup, Hdn + Gdn
     Zup, Zdn = _allowed_basis(Cfu, B), _allowed_basis(Cfd, B)
     Aup = _active_from_det(p.psiup, Cfu)
     Adn = p.restricted ? Aup : _active_from_det(p.psidn, Cfd)
     nup, ndn = size(Aup, 2), size(Adn, 2)
+    if diagnostics !== nothing
+        diagnostics.frozen_zero_up_windows += nup == 0
+        diagnostics.frozen_zero_dn_windows += ndn == 0
+        diagnostics.frozen_zero_both_windows += nup == 0 && ndn == 0
+    end
     nup <= size(Zup, 2) && ndn <= size(Zdn, 2) ||
         error("active occupation exceeds its spin-specific allowed space")
     Uup, Udn = Zup' * (B' * Aup), Zdn' * (B' * Adn)
@@ -299,13 +366,22 @@ function _frozen_local!(p, li, ri, left, cra, right, Hup, Hdn, win, lambda,
     p.activeup, p.activedn = B * psiup, p.restricted ? B * psiup : B * psidn
     p.psiup = hcat(Cfu, p.activeup)
     p.psidn = p.restricted ? p.psiup : hcat(Cfd, p.activedn)
-    (; psiup, psidn, energy, nit, converged, lambda, rises, energies)
+    _frozen_valid(p.psiup, Cfu, Cfu[:, 1:0]) ||
+        error("reassembled alpha determinant failed frozen containment")
+    p.restricted || _frozen_valid(p.psidn, Cfd, Cfd[:, 1:0]) ||
+        error("reassembled beta determinant failed frozen containment")
+    (; stale = false, psiup, psidn, energy, nit, converged, lambda, rises, energies)
 end
 
 function _full_focks(p)
     Dup, Ddn = p.psiup * p.psiup', p.psidn * p.psidn'
     j = p.V * (diag(Dup) + diag(Ddn))
     p.Hup + Diagonal(j) - p.V .* Dup, p.Hdn + Diagonal(j) - p.V .* Ddn
+end
+function _frozen_full_energy(p)
+    Fup, Fdn = _full_focks(p)
+    Dup, Ddn = p.psiup * p.psiup', p.psidn * p.psidn'
+    0.5tr(Dup * (Fup + p.Hup)) + 0.5tr(Ddn * (Fdn + p.Hdn))
 end
 
 function _aufbau_inverted(F, C)
@@ -322,7 +398,14 @@ function _frozen_audit!(p, prospective, diagnostics)
     Fup, Fdn = _full_focks(p)
     N, T = size(p.V, 1), eltype(p.V)
     g = N * eps(T) / (1 - N * eps(T))
-    Cfu, Cfd = p.currentup, p.currentdn
+    Cfu, Cfd = _all_frozen(p, :up), _all_frozen(p, :dn)
+    staleup = !_frozen_valid(p.psiup, Cfu, Cfu[:, 1:0])
+    staledn = !p.restricted && !_frozen_valid(p.psidn, Cfd, Cfd[:, 1:0])
+    if staleup || staledn
+        _protect_stale!(p, staleup ? Cfu : Cfu[:, 1:0],
+            staledn ? Cfd : Cfd[:, 1:0], diagnostics)
+        return true, false
+    end
     rup, rdn = zeros(T, N, 0), zeros(T, N, 0)
     for (F, C, Cf, spin) in ((Fup, p.psiup, Cfu, :up),
             (Fdn, p.psidn, Cfd, :dn))
@@ -356,7 +439,8 @@ function _frozen_audit!(p, prospective, diagnostics)
         diagnostics === nothing || (diagnostics.frozen_rebuilds += 1)
     end
     diagnostics === nothing ||
-        (diagnostics.frozen_max_generations = p.max_live)
+        (diagnostics.frozen_max_generations = p.max_live;
+         diagnostics.frozen_live_generations = _live_generations(p))
     unresolved = prospective && p.rebuilt &&
         ((invup && size(Cfu, 2) == 0) || (invdn && size(Cfd, 2) == 0))
     rebuild, prospective && !rebuild && !unresolved

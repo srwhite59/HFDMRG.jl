@@ -53,12 +53,18 @@ mutable struct _RunDiagnostics
     aufbau_calls::Int
     frozen_rebuilds::Int
     frozen_max_generations::Int
+    frozen_live_generations::Int
+    frozen_recurrence_error::Float64
+    frozen_zero_up_windows::Int
+    frozen_zero_dn_windows::Int
+    frozen_zero_both_windows::Int
 end
 
 function _RunDiagnostics(mode::Symbol = :detailed)
     mode in (:detailed, :timing) ||
         error("_RunDiagnostics mode must be :detailed or :timing")
-    _RunDiagnostics(mode, NamedTuple[], NamedTuple[], 0.0, 0, 0.0, 0, 0, 0, 0)
+    _RunDiagnostics(mode, NamedTuple[], NamedTuple[], 0.0, 0, 0.0, 0, 0,
+        0, 0, 0, 0.0, 0, 0, 0)
 end
 
 _detailed(diagnostics) =
@@ -470,7 +476,7 @@ function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
         block[b] = addblockright(cra, O, block[b + 1], N, H, Vee, firstindsH)
         _frozen === nothing ||
             _frozen_store_growth!(_frozen, b, b + 1, :right,
-                block[b + 1], block[b], growth)
+                block[b + 1], block[b], growth, _diagnostics)
     end
     _frozen === nothing || (_frozen.initializing = false)
     block
@@ -514,7 +520,7 @@ function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee
             firstindsH)
         _frozen === nothing ||
             _frozen_store_growth!(_frozen, b, b + 1, :right,
-                block[b + 1], block[b], growth)
+                block[b + 1], block[b], growth, _diagnostics)
     end
     _frozen === nothing || (_frozen.initializing = false)
     block
@@ -692,6 +698,7 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
 
     for iter = 1:maxiter
         energy = 0.0
+        restart_frozen = false
         verbose && println()
         verbose && @show iter
         for (b, dir, transdir) in fullsweep
@@ -755,6 +762,11 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                 result = _frozen_local!(frozen, b, b + 1 + nblockcenter, block[b],
                     Cra, block[b + 1 + nblockcenter], H1B, H1B, win, lambda[b],
                     scf_cutoff, false, _diagnostics)
+                if result.stale
+                    _protect_stale!(frozen, result.up, result.dn, _diagnostics)
+                    restart_frozen = true
+                    break
+                end
                 psiup, psidn, energy = result.psiup, result.psidn, result.energy
                 local_iterations, locally_converged = result.nit, result.converged
                 lambda[b] = result.lambda
@@ -784,7 +796,7 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                     block[b + 1] = addblockleft(
                         Cranges[b + 1], growth.O, block[b], N, H, Vee, finalindsH)
                     _frozen_store_growth!(frozen, b + 1, b, :left,
-                        block[b], block[b + 1], growth)
+                        block[b], block[b + 1], growth, _diagnostics)
                 else
                     d = nblockcenter
                     growth = _frozen_growth!(frozen, :right, block[b + 1 + d],
@@ -792,7 +804,7 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                     block[b + d] = addblockright(Cranges[b + d], growth.O,
                         block[b + 1 + d], N, H, Vee, firstindsH)
                     _frozen_store_growth!(frozen, b + d, b + 1 + d, :right,
-                        block[b + 1 + d], block[b + d], growth)
+                        block[b + 1 + d], block[b + d], growth, _diagnostics)
                 end
             elseif nblockcenter < 1
                 Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
@@ -854,6 +866,18 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                     end
                 end
             end
+        end
+        if restart_frozen
+            energyiter = _frozen_full_energy(frozen)
+            block = getinitialblocks(nblocks, blocksizes, Cranges,
+                restricted ? frozen.psiup : hcat(frozen.psiup, frozen.psidn),
+                H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
+                environment_cutoff, _frozen = frozen)
+            psiallup, psialldn = frozen.psiup, frozen.psidn
+            stop_requested = _notify_observer(observer, SweepInfo(iter, energyiter,
+                psiallup, restricted ? psiallup : psialldn, false))
+            stop_requested && break
+            continue
         end
         verbose && @show iter, energy, energyiter
         converged = abs(energyiter - energy) < cutoff
@@ -937,6 +961,7 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
 
     for iter = 1:maxiter
         energy = 0.0
+        restart_frozen = false
         verbose && println()
         verbose && @show iter
         verbose && flush(stdout)
@@ -988,6 +1013,11 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
                 result = _frozen_local!(frozen, b, b + 1 + nblockcenter, block[b],
                     Cra, block[b + 1 + nblockcenter], H1Bup, H1Bdn, win, lambda[b],
                     scf_cutoff, true, _diagnostics)
+                if result.stale
+                    _protect_stale!(frozen, result.up, result.dn, _diagnostics)
+                    restart_frozen = true
+                    break
+                end
                 psiup, psidn, energy = result.psiup, result.psidn, result.energy
                 local_iterations, locally_converged = result.nit, result.converged
                 lambda[b] = result.lambda
@@ -1016,7 +1046,7 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
                     block[b + 1] = addblockleft_split(Cranges[b + 1], growth.O,
                         block[b], N, Hup, Hdn, Vee, finalindsH)
                     _frozen_store_growth!(frozen, b + 1, b, :left,
-                        block[b], block[b + 1], growth)
+                        block[b], block[b + 1], growth, _diagnostics)
                 else
                     d = nblockcenter
                     growth = _frozen_growth!(frozen, :right, block[b + 1 + d],
@@ -1024,7 +1054,7 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
                     block[b + d] = addblockright_split(Cranges[b + d], growth.O,
                         block[b + 1 + d], N, Hup, Hdn, Vee, firstindsH)
                     _frozen_store_growth!(frozen, b + d, b + 1 + d, :right,
-                        block[b + 1 + d], block[b + d], growth)
+                        block[b + 1 + d], block[b + d], growth, _diagnostics)
                 end
             elseif nblockcenter < 1
                 Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
@@ -1088,6 +1118,18 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
                     psidn = transrangeleft(psiLL, 1, block[b - 1].phi')
                 end
             end
+        end
+        if restart_frozen
+            energyiter = _frozen_full_energy(frozen)
+            block = getinitialblocks_split(nblocks, blocksizes, Cranges,
+                hcat(frozen.psiup, frozen.psidn), Hup, Hdn, Vee,
+                firstindsH, finalindsH; verbose, _diagnostics,
+                environment_cutoff, _frozen = frozen)
+            psiallup, psialldn = frozen.psiup, frozen.psidn
+            stop_requested = _notify_observer(observer,
+                SweepInfo(iter, energyiter, psiallup, psialldn, false))
+            stop_requested && break
+            continue
         end
         verbose && @show iter, energy, energyiter
         verbose && flush(stdout)

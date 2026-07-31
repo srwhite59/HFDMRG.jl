@@ -320,15 +320,72 @@ try
                 2e-13
             @test norm(result[1]' * result[1] - I) < 2e-13
             @test norm(result[2]' * result[2] - I) < 2e-13
-            @test diagnostics.frozen_max_generations >= 3
+            @test diagnostics.frozen_max_generations == 3
+            @test diagnostics.frozen_live_generations == 2
+            @test diagnostics.frozen_recurrence_error < 2e-13
         end
 
         H = Matrix(Diagonal([1.0:N - 1; 0.0]))
         up = zeros(N, 1); up[end] = 1
         dn = zeros(N, 1); dn[end] = inv(sqrt(2)); dn[5] = inv(sqrt(2))
         result = solve_hfdmrg(H, zeros(N, N), up, dn; exactkw...)
-        @test sum(abs2, result[1][end, :]) <= 1 + 2e-13
+        @test sum(abs2, result[1][end, :]) > 1 - 2e-13
+        @test sum(abs2, result[2][end, :]) > 1 - 2e-13
         @test norm((result[1] * result[1]')^2 - result[1] * result[1]') < 2e-13
+
+        N = 12; H = Matrix(Diagonal(1.0:N)); V = zeros(N, N)
+        layout = HFDMRG.SliceLayout(fill(1, N))
+        for nocc = 4:6
+            up = Matrix{Float64}(I, N, N)[:, 1:nocc]
+            dn = Matrix{Float64}(I, N, N)[:, N - nocc + 1:N]
+            diagnostics = HFDMRG._RunDiagnostics()
+            result = solve_hfdmrg(H, V, up, dn; maxiter = 1,
+                block_partition = layout, nblockcenter = 1, cutoff = 0.0,
+                scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+                _diagnostics = diagnostics, verbose = false)
+            @test abs(result[3] - physical_energy(H, H, V, result[1], result[2])) < 2e-13
+            @test diagnostics.frozen_zero_up_windows > 0
+            @test diagnostics.frozen_zero_dn_windows > 0
+            @test (diagnostics.frozen_zero_both_windows > 0) == (nocc == 4)
+        end
+
+        rng = MersenneTwister(9); N = 12
+        A = randn(rng, N, N); H = 0.2 * (A + A')
+        A = randn(rng, N, N); V = 0.05 * (A + A')
+        Q = Matrix(qr(randn(rng, N, 4)).Q); diagnostics = HFDMRG._RunDiagnostics()
+        result = solve_hfdmrg(H, V, Q[:, 1:2], Q[:, 3:4]; maxiter = 2,
+            blocksize = 2, cutoff = 0.0, scf_cutoff = 0.0,
+            frozen_occupied = :roundoff_exact, _diagnostics = diagnostics,
+            verbose = false)
+        @test any(w -> w.damping_after < 1, diagnostics.windows)
+        @test norm((result[1] * result[1]')^2 - result[1] * result[1]') < 2e-13
+        @test abs(result[3] - physical_energy(H, H, V, result[1], result[2])) < 2e-13
+
+        N = 16; h = collect(1.0:N); h[2] = 0; h[14] = 0.1
+        H = Matrix(Diagonal(h)); V = zeros(N, N)
+        up = zeros(N, 2); up[2, 1] = 1; up[14, 2] = 1
+        saved = Ref{Matrix{Float64}}(); deviations = Float64[]
+        observer = info -> begin
+            if info.sweep == 1
+                info.psiup[:, 1] .= 0; info.psiup[[2, 8], 1] = [sqrt(0.75), 0.5]
+                info.psiup[:, 2] .= 0; info.psiup[[10, 14], 2] = [0.5, sqrt(0.75)]
+                saved[] = copy(info.psiup)
+            else
+                push!(deviations, norm(info.psiup * info.psiup' - saved[] * saved[]'))
+            end
+            false
+        end
+        diagnostics = HFDMRG._RunDiagnostics()
+        solve_hfdmrg(H, V, up; maxiter = 3, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+            _diagnostics = diagnostics, observer, verbose = false)
+        @test diagnostics.frozen_rebuilds == 1
+        @test deviations[1] < 2e-13
+
+        Hinv = Matrix(Diagonal(1.0:N)); policy = HFDMRG._frozen_policy(
+            Hinv, Hinv, HFDMRG.DensityDensityBackend(V), up, up, true)
+        HFDMRG._frozen_begin_blocks!(policy, 2, 1, 1); policy.rebuilt = true
+        @test HFDMRG._frozen_audit!(policy, true, nothing) == (false, false)
 
         h = collect(1.0:N); h[2] = 0; h[5] = -2
         H = Matrix(Diagonal(h)); up = zeros(N, 1); up[2] = 1
