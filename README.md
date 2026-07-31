@@ -156,6 +156,7 @@ All `solve_hfdmrg` entry points accept the same solver keywords:
 | `cutoff` | `1e-11` | Sweep-energy convergence tolerance. Common-H routes use `abs(Eold - Enew) < cutoff`; genuinely split-H routes use `abs(Eold - Enew) < cutoff * max(1, abs(Enew))`. |
 | `scf_cutoff` | `nothing` | Local SCF energy tolerance, using the same absolute common-H or scale-aware split-H comparison as `cutoff`. `nothing` means `cutoff` on common-H routes and `cutoff / 10` on genuinely split-H routes. Each window performs at most four SCF micro-iterations. |
 | `environment_cutoff` | `1e-10` | Absolute cutoff for singular values of the restricted occupied-orbital coefficient matrix used to build grown environments. Vectors with `sigma > environment_cutoff` are retained; at least one is always kept. Must be finite and nonnegative. |
+| `frozen_occupied` | `:off` | `:roundoff_exact` removes only roundoff-certified completed occupied modes from density-density environments while retaining recoverable fields and energy. |
 | `observer` | `nothing` | Callable notified after every complete sweep. Return `true` to stop, or `false`/`nothing` to continue. See below. |
 | `verbose` | `false` | Print block decomposition and sweep-energy progress. |
 
@@ -163,6 +164,9 @@ All `solve_hfdmrg` entry points accept the same solver keywords:
 `Hup === Hdn`; those calls use the common-H fast path. Passing distinct `Hup`
 and `Hdn` objects selects the split-H convergence rules, even if their entries
 are numerically equal.
+
+F1 `:roundoff_exact` supports density-density RHF/UHF and zero target residuals;
+sliced routes reject it, and its dense Aufbau audit is not a long-chain method.
 
 ### Convergence and troubleshooting
 

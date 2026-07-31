@@ -83,6 +83,10 @@ The core then follows this lifecycle:
 Backends do not own this schedule. They must not copy the sweep engine to gain
 an interaction feature.
 
+Density-density `frozen_occupied=:roundoff_exact` is a core policy on this same
+schedule. Recoverable occupied columns and fields accompany ordinary blocks;
+local SCF uses each spin's complement, and F1's dense audit excludes sliced data.
+
 ## Required backend operations
 
 Use these names and argument positions exactly:

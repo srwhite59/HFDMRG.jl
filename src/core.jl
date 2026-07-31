@@ -48,12 +48,17 @@ mutable struct _RunDiagnostics
     windows::Vector{NamedTuple}
     eigsym_seconds::Float64
     eigsym_calls::Int
+    aufbau_seconds::Float64
+    aufbau_bytes::Int
+    aufbau_calls::Int
+    frozen_rebuilds::Int
+    frozen_max_generations::Int
 end
 
 function _RunDiagnostics(mode::Symbol = :detailed)
     mode in (:detailed, :timing) ||
         error("_RunDiagnostics mode must be :detailed or :timing")
-    _RunDiagnostics(mode, NamedTuple[], NamedTuple[], 0.0, 0)
+    _RunDiagnostics(mode, NamedTuple[], NamedTuple[], 0.0, 0, 0.0, 0, 0, 0, 0)
 end
 
 _detailed(diagnostics) =
@@ -430,7 +435,7 @@ end
 
 function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
         finalindsH; verbose = false, _diagnostics = nothing,
-        environment_cutoff = 1e-10)
+        environment_cutoff = 1e-10, _frozen = nothing)
     N = size(H, 1)
     left = 1:blocksizes[1]
     right = N - blocksizes[nblocks] + 1:N
@@ -443,6 +448,8 @@ function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
     block = Vector{typeof(block1)}(undef, nblocks)
     block[1] = block1
     block[nblocks] = blockn
+    _frozen === nothing ||
+        _frozen_begin_blocks!(_frozen, nblocks, block1.m, blockn.m)
     _record_fixed_edge!(_diagnostics, :left, left)
     _record_fixed_edge!(_diagnostics, :right, right)
     verbose && @show block[1].ra
@@ -450,18 +457,28 @@ function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
         cra = Cranges[b]
         lc = length(cra)
         crra = cra[1]:N
-        phi, m = getphi(psi[crra, :], _diagnostics, 0, :initialization,
-            nblocks - b, :right, crra, environment_cutoff)
-        phi1 = block[b + 1].phi
-        O = vcat(phi[1:lc, :], phi1' * phi[lc + 1:end, :])
+        if _frozen === nothing
+            phi, m = getphi(psi[crra, :], _diagnostics, 0, :initialization,
+                nblocks - b, :right, crra, environment_cutoff)
+            phi1 = block[b + 1].phi
+            O = vcat(phi[1:lc, :], phi1' * phi[lc + 1:end, :])
+        else
+            growth = _frozen_growth!(
+                _frozen, :right, block[b + 1], cra, b + 1, environment_cutoff)
+            O = growth.O
+        end
         block[b] = addblockright(cra, O, block[b + 1], N, H, Vee, firstindsH)
+        _frozen === nothing ||
+            _frozen_store_growth!(_frozen, b, b + 1, :right,
+                block[b + 1], block[b], growth)
     end
+    _frozen === nothing || (_frozen.initializing = false)
     block
 end
 
 function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee,
     firstindsH, finalindsH; verbose = false, _diagnostics = nothing,
-    environment_cutoff = 1e-10)
+    environment_cutoff = 1e-10, _frozen = nothing)
     N = size(Hup, 1)
     left = 1:blocksizes[1]
     right = N - blocksizes[nblocks] + 1:N
@@ -474,6 +491,8 @@ function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee
     block = Vector{typeof(block1)}(undef, nblocks)
     block[1] = block1
     block[nblocks] = blockn
+    _frozen === nothing ||
+        _frozen_begin_blocks!(_frozen, nblocks, block1.m, blockn.m)
     _record_fixed_edge!(_diagnostics, :left, left)
     _record_fixed_edge!(_diagnostics, :right, right)
     verbose && @show block[1].ra
@@ -481,13 +500,23 @@ function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee
         cra = Cranges[b]
         lc = length(cra)
         crra = cra[1]:N
-        phi, m = getphi(psi[crra, :], _diagnostics, 0, :initialization,
-            nblocks - b, :right, crra, environment_cutoff)
-        phi1 = block[b + 1].phi
-        O = vcat(phi[1:lc, :], phi1' * phi[lc + 1:end, :])
+        if _frozen === nothing
+            phi, m = getphi(psi[crra, :], _diagnostics, 0, :initialization,
+                nblocks - b, :right, crra, environment_cutoff)
+            phi1 = block[b + 1].phi
+            O = vcat(phi[1:lc, :], phi1' * phi[lc + 1:end, :])
+        else
+            growth = _frozen_growth!(
+                _frozen, :right, block[b + 1], cra, b + 1, environment_cutoff)
+            O = growth.O
+        end
         block[b] = addblockright_split(cra, O, block[b + 1], N, Hup, Hdn, Vee,
             firstindsH)
+        _frozen === nothing ||
+            _frozen_store_growth!(_frozen, b, b + 1, :right,
+                block[b + 1], block[b], growth)
     end
+    _frozen === nothing || (_frozen.initializing = false)
     block
 end
 
@@ -611,7 +640,13 @@ function _rel_converged(energy_old, energy_new, cutoff)
     abs(energy_old - energy_new) < cutoff * scale
 end
 
-function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
+function solve_hfdmrg_core(H, Vee, psiup0, psidn0; frozen_occupied = :off, kwargs...)
+    frozen_occupied in (:off, :roundoff_exact) ||
+        error("frozen_occupied must be :off or :roundoff_exact")
+    _solve_hfdmrg_core(Val(frozen_occupied), H, Vee, psiup0, psidn0; kwargs...)
+end
+
+function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
     restricted = false,
     nblockcenter = 1,
     blocksize = 200,
@@ -622,17 +657,20 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
     environment_cutoff = 1e-10,
     observer = nothing,
     _diagnostics = nothing,
-    verbose = false)
+    verbose = false) where {frozen_mode}
 
     environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(H, 1)
+    frozen = frozen_mode === :off ? nothing :
+        _frozen_policy(H, H, Vee, psiup0, psidn0, restricted)
     finalindsH, firstindsH = getfinal(H, N)
     m = restricted ? Nup : Nup + Ndn
     psiall = restricted ? psiup0 : hcat(psiup0, psidn0)
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
     block = getinitialblocks(nblocks, blocksizes, Cranges, psiall, H, Vee,
-        firstindsH, finalindsH; verbose, _diagnostics, environment_cutoff)
+        firstindsH, finalindsH; verbose, _diagnostics, environment_cutoff,
+        _frozen = frozen)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -670,6 +708,7 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
             damping_before = detailed ? lambda[b] : 0.0
             eigsym_before = _diagnostics === nothing ? 0.0 : _diagnostics.eigsym_seconds
             local_iterations, locally_converged = 0, false
+            if frozen === nothing
             psiup_occ = @view psiup[:, 1:Nup]
             rhoup = psiup_occ * psiup_occ'
             if !restricted
@@ -712,6 +751,15 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 (locally_converged || s == 4) && break
                 energylast = energy
             end
+            else
+                result = _frozen_local!(frozen, b, b + 1 + nblockcenter, block[b],
+                    Cra, block[b + 1 + nblockcenter], H1B, H1B, win, lambda[b],
+                    scf_cutoff, false, _diagnostics)
+                psiup, psidn, energy = result.psiup, result.psidn, result.energy
+                local_iterations, locally_converged = result.nit, result.converged
+                lambda[b] = result.lambda
+                detailed && (local_energies = result.energies; rise_updates = result.rises)
+            end
 
             _record_window!(_diagnostics, iter, direction, window_ordinal, block[b],
                 Cra, block[b + 1 + nblockcenter], local_iterations,
@@ -719,14 +767,34 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
                 local_energies, energy, eigsym_before)
 
             rbl = block[b + 1 + nblockcenter]
-            psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
-                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
-            if !restricted
-                psialldn = getpsiexpanded(psidn, block[b].ra, block[b].phi,
+            if frozen === nothing
+                psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
                     block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
+                !restricted && (psialldn = getpsiexpanded(psidn, block[b].ra,
+                    block[b].phi, block[b].ra[end] + 1:rbl.ra[1] - 1,
+                    rbl.ra, rbl.phi))
+                psi = restricted ? psiup : hcat(psiup, psidn)
+            else
+                psiallup, psialldn = frozen.psiup, frozen.psidn
             end
-            psi = restricted ? psiup : hcat(psiup, psidn)
-            if nblockcenter < 1
+            if frozen !== nothing
+                if transdir == 1
+                    growth = _frozen_growth!(frozen, :left, block[b],
+                        Cranges[b + 1], b, environment_cutoff)
+                    block[b + 1] = addblockleft(
+                        Cranges[b + 1], growth.O, block[b], N, H, Vee, finalindsH)
+                    _frozen_store_growth!(frozen, b + 1, b, :left,
+                        block[b], block[b + 1], growth)
+                else
+                    d = nblockcenter
+                    growth = _frozen_growth!(frozen, :right, block[b + 1 + d],
+                        Cranges[b + d], b + 1 + d, environment_cutoff)
+                    block[b + d] = addblockright(Cranges[b + d], growth.O,
+                        block[b + 1 + d], N, H, Vee, firstindsH)
+                    _frozen_store_growth!(frozen, b + d, b + 1 + d, :right,
+                        block[b + 1 + d], block[b + d], growth)
+                end
+            elseif nblockcenter < 1
                 Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
                 oldlc = length(Cra)
                 if transdir == 1
@@ -790,6 +858,16 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
         verbose && @show iter, energy, energyiter
         converged = abs(energyiter - energy) < cutoff
         energyiter = energy
+        if frozen !== nothing
+            rebuild, converged = _frozen_audit!(frozen, converged, _diagnostics)
+            if rebuild
+                block = getinitialblocks(nblocks, blocksizes, Cranges,
+                    restricted ? frozen.psiup : hcat(frozen.psiup, frozen.psidn),
+                    H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
+                    environment_cutoff, _frozen = frozen)
+            end
+            psiallup, psialldn = frozen.psiup, frozen.psidn
+        end
         info = SweepInfo(iter, energyiter, psiallup,
             restricted ? psiallup : psialldn, converged)
         stop_requested = _notify_observer(observer, info)
@@ -801,6 +879,14 @@ function solve_hfdmrg_core(H, Vee, psiup0, psidn0;
 end
 
 function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
+        frozen_occupied = :off, kwargs...)
+    frozen_occupied in (:off, :roundoff_exact) ||
+        error("frozen_occupied must be :off or :roundoff_exact")
+    _solve_hfdmrg_core_split(
+        Val(frozen_occupied), Hup, Hdn, Vee, psiup0, psidn0; kwargs...)
+end
+
+function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psidn0;
     nblockcenter = 1,
     blocksize = 200,
     block_partition = nothing,
@@ -810,10 +896,12 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     environment_cutoff = 1e-10,
     observer = nothing,
     _diagnostics = nothing,
-    verbose = false)
+    verbose = false) where {frozen_mode}
 
     environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(Hup, 1)
+    frozen = frozen_mode === :off ? nothing :
+        _frozen_policy(Hup, Hdn, Vee, psiup0, psidn0, false)
     size(Hup, 2) == N || error("Hup must be square")
     size(Hdn) == (N, N) || error("Hdn must have the same size as Hup")
     size(psiup0, 1) == N || error("psiup0 has wrong row dimension")
@@ -825,7 +913,8 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
     block = getinitialblocks_split(nblocks, blocksizes, Cranges, psiall, Hup, Hdn,
-        Vee, firstindsH, finalindsH; verbose, _diagnostics, environment_cutoff)
+        Vee, firstindsH, finalindsH; verbose, _diagnostics, environment_cutoff,
+        _frozen = frozen)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -866,6 +955,7 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
             damping_before = detailed ? lambda[b] : 0.0
             eigsym_before = _diagnostics === nothing ? 0.0 : _diagnostics.eigsym_seconds
             local_iterations, locally_converged = 0, false
+            if frozen === nothing
             psiup_occ = @view psiup[:, 1:Nup]
             psidn_occ = @view psidn[:, 1:Ndn]
             rhoup = psiup_occ * psiup_occ'
@@ -894,6 +984,15 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 (locally_converged || s == 4) && break
                 energylast = energy
             end
+            else
+                result = _frozen_local!(frozen, b, b + 1 + nblockcenter, block[b],
+                    Cra, block[b + 1 + nblockcenter], H1Bup, H1Bdn, win, lambda[b],
+                    scf_cutoff, true, _diagnostics)
+                psiup, psidn, energy = result.psiup, result.psidn, result.energy
+                local_iterations, locally_converged = result.nit, result.converged
+                lambda[b] = result.lambda
+                detailed && (local_energies = result.energies; rise_updates = result.rises)
+            end
 
             _record_window!(_diagnostics, iter, direction, window_ordinal, block[b],
                 Cra, block[b + 1 + nblockcenter], local_iterations,
@@ -901,12 +1000,33 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
                 local_energies, energy, eigsym_before)
 
             rbl = block[b + 1 + nblockcenter]
-            psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
-                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
-            psialldn = getpsiexpanded(psidn, block[b].ra, block[b].phi,
-                block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
-            psi = hcat(psiup, psidn)
-            if nblockcenter < 1
+            if frozen === nothing
+                psiallup = getpsiexpanded(psiup, block[b].ra, block[b].phi,
+                    block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
+                psialldn = getpsiexpanded(psidn, block[b].ra, block[b].phi,
+                    block[b].ra[end] + 1:rbl.ra[1] - 1, rbl.ra, rbl.phi)
+                psi = hcat(psiup, psidn)
+            else
+                psiallup, psialldn = frozen.psiup, frozen.psidn
+            end
+            if frozen !== nothing
+                if transdir == 1
+                    growth = _frozen_growth!(frozen, :left, block[b],
+                        Cranges[b + 1], b, environment_cutoff)
+                    block[b + 1] = addblockleft_split(Cranges[b + 1], growth.O,
+                        block[b], N, Hup, Hdn, Vee, finalindsH)
+                    _frozen_store_growth!(frozen, b + 1, b, :left,
+                        block[b], block[b + 1], growth)
+                else
+                    d = nblockcenter
+                    growth = _frozen_growth!(frozen, :right, block[b + 1 + d],
+                        Cranges[b + d], b + 1 + d, environment_cutoff)
+                    block[b + d] = addblockright_split(Cranges[b + d], growth.O,
+                        block[b + 1 + d], N, Hup, Hdn, Vee, firstindsH)
+                    _frozen_store_growth!(frozen, b + d, b + 1 + d, :right,
+                        block[b + 1 + d], block[b + d], growth)
+                end
+            elseif nblockcenter < 1
                 Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
                 oldlc = length(Cra)
                 if transdir == 1
@@ -973,6 +1093,16 @@ function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
         verbose && flush(stdout)
         converged = _rel_converged(energyiter, energy, cutoff)
         energyiter = energy
+        if frozen !== nothing
+            rebuild, converged = _frozen_audit!(frozen, converged, _diagnostics)
+            if rebuild
+                block = getinitialblocks_split(nblocks, blocksizes, Cranges,
+                    hcat(frozen.psiup, frozen.psidn), Hup, Hdn, Vee,
+                    firstindsH, finalindsH; verbose, _diagnostics,
+                    environment_cutoff, _frozen = frozen)
+            end
+            psiallup, psialldn = frozen.psiup, frozen.psidn
+        end
         info = SweepInfo(iter, energyiter, psiallup, psialldn, converged)
         stop_requested = _notify_observer(observer, info)
         (converged || stop_requested) && break
@@ -991,7 +1121,9 @@ energy. For RHF, psidn == psiup.
 """
 function solve_hfdmrg(H, V, psiup0; kwargs...)
     backend = DensityDensityBackend(V)
-    solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
+    haskey(kwargs, :frozen_occupied) &&
+        return solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
+    _solve_hfdmrg_core(Val(:off), H, backend, psiup0, psiup0; restricted = true, kwargs...)
 end
 
 """
@@ -1004,7 +1136,9 @@ the final energy.
 """
 function solve_hfdmrg(H, V, psiup0, psidn0; kwargs...)
     backend = DensityDensityBackend(V)
-    solve_hfdmrg_core(H, backend, psiup0, psidn0; restricted = false, kwargs...)
+    haskey(kwargs, :frozen_occupied) &&
+        return solve_hfdmrg_core(H, backend, psiup0, psidn0; restricted = false, kwargs...)
+    _solve_hfdmrg_core(Val(:off), H, backend, psiup0, psidn0; restricted = false, kwargs...)
 end
 
 """
@@ -1017,5 +1151,7 @@ Hdn are the same matrix object, this routes to the common-H fast path.
 function solve_hfdmrg(Hup, Hdn, V, psiup0, psidn0; kwargs...)
     Hup === Hdn && return solve_hfdmrg(Hup, V, psiup0, psidn0; kwargs...)
     backend = DensityDensityBackend(V)
-    solve_hfdmrg_core_split(Hup, Hdn, backend, psiup0, psidn0; kwargs...)
+    haskey(kwargs, :frozen_occupied) &&
+        return solve_hfdmrg_core_split(Hup, Hdn, backend, psiup0, psidn0; kwargs...)
+    _solve_hfdmrg_core_split(Val(:off), Hup, Hdn, backend, psiup0, psidn0; kwargs...)
 end

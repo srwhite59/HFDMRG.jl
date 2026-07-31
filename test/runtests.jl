@@ -250,6 +250,117 @@ try
         end
     end
 
+    @testset "Roundoff-exact frozen occupied environments" begin
+        N = 12
+        Q = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1))
+             for i = 1:N, j = 1:N]
+        H = Matrix(Symmetric(Q * Diagonal(0.0:N - 1) * Q'))
+        Hdn = H + Matrix(Diagonal(range(-0.03, 0.04; length = N)))
+        V = [0.02 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
+        up, dn = Q[:, 1:2], Q[:, 3:4]
+        layout = HFDMRG.SliceLayout(fill(2, 6))
+        V6 = 0.002 * reshape(sin.(1:(2^4 * 6^2)), 2, 2, 2, 2, 6, 6)
+        projection = HFDMRG.SlicedBasisBackend(layout, V6)
+        cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+        zero_target = HFDMRG.DensityDensityTargetResidualBackend(V, up, zeros(3, 3))
+        target = HFDMRG.DensityDensityTargetResidualBackend(
+            V, up, Matrix(Diagonal([1e-4, -2e-4, 3e-4])))
+        kw = (; maxiter = 1, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = 0.0, verbose = false)
+        routes = (
+            x -> solve_hfdmrg(H, V, up; kw..., x...),
+            x -> solve_hfdmrg(H, V, up, dn; kw..., x...),
+            x -> solve_hfdmrg(H, Hdn, V, up, dn; kw..., x...),
+            x -> solve_hfdmrg(H, projection, up, dn;
+                kw..., block_partition = layout, x...),
+            x -> solve_hfdmrg(H, cached, up, dn;
+                kw..., block_partition = layout, x...),
+            x -> solve_hfdmrg(H, zero_target, up, dn; kw..., x...),
+            x -> solve_hfdmrg(H, target, up, dn; kw..., x...),
+        )
+        for run in routes
+            @test run((;)) == run((; frozen_occupied = :off))
+        end
+        @test solve_hfdmrg(H, zero_target, up, dn;
+            kw..., frozen_occupied = :roundoff_exact) ==
+            solve_hfdmrg(H, V, up, dn; kw..., frozen_occupied = :roundoff_exact)
+        for backend in (projection, cached, target)
+            @test_throws ErrorException solve_hfdmrg(
+                H, backend, up, dn; kw..., frozen_occupied = :roundoff_exact)
+        end
+        @test_throws ErrorException solve_hfdmrg(H, V, up; kw..., frozen_occupied = :bad)
+        Vbad = copy(V); Vbad[1, 2] += 1e-4
+        @test_throws ErrorException solve_hfdmrg(
+            H, Vbad, up; kw..., frozen_occupied = :roundoff_exact)
+        Vbad[1, 2] = NaN
+        @test_throws ErrorException solve_hfdmrg(
+            H, Vbad, up; kw..., frozen_occupied = :roundoff_exact)
+
+        function physical_energy(Hu, Hd, V, Cu, Cd)
+            Du, Dd = Cu * Cu', Cd * Cd'
+            q = diag(Du) + diag(Dd)
+            sum(Hu .* Du) + sum(Hd .* Dd) + 0.5dot(q, V * q) -
+                0.5sum(V .* (Du .* Du + Dd .* Dd))
+        end
+        N = 16
+        V = [0.03 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
+        h = collect(2.0:N + 1); h[[2, 5, 12, 15]] = [-4, -3, -2, -1]
+        H = Matrix(Diagonal(h))
+        Hdn = H + Matrix(Diagonal(range(-0.02, 0.02; length = N)))
+        up = Matrix{Float64}(I, N, N)[:, [2, 15]]
+        dn = Matrix{Float64}(I, N, N)[:, [5, 12]]
+        exactkw = (; maxiter = 2, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = Inf, frozen_occupied = :roundoff_exact, verbose = false)
+        for (Hu, Hd) in ((H, H), (H, Hdn))
+            diagnostics = HFDMRG._RunDiagnostics()
+            result = Hu === Hd ? solve_hfdmrg(Hu, V, up, dn;
+                exactkw..., _diagnostics = diagnostics) :
+                solve_hfdmrg(Hu, Hd, V, up, dn; exactkw..., _diagnostics = diagnostics)
+            @test abs(result[3] - physical_energy(Hu, Hd, V, result[1], result[2])) <
+                2e-13
+            @test norm(result[1]' * result[1] - I) < 2e-13
+            @test norm(result[2]' * result[2] - I) < 2e-13
+            @test diagnostics.frozen_max_generations >= 3
+        end
+
+        H = Matrix(Diagonal([1.0:N - 1; 0.0]))
+        up = zeros(N, 1); up[end] = 1
+        dn = zeros(N, 1); dn[end] = inv(sqrt(2)); dn[5] = inv(sqrt(2))
+        result = solve_hfdmrg(H, zeros(N, N), up, dn; exactkw...)
+        @test sum(abs2, result[1][end, :]) <= 1 + 2e-13
+        @test norm((result[1] * result[1]')^2 - result[1] * result[1]') < 2e-13
+
+        h = collect(1.0:N); h[2] = 0; h[5] = -2
+        H = Matrix(Diagonal(h)); up = zeros(N, 1); up[2] = 1
+        diagnostics = HFDMRG._RunDiagnostics()
+        seen = Bool[]
+        result = solve_hfdmrg(H, zeros(N, N), up; maxiter = 2, blocksize = 2,
+            cutoff = Inf, scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+            _diagnostics = diagnostics, observer = x -> (push!(seen, x.converged); false),
+            verbose = false)
+        @test diagnostics.frozen_rebuilds == 1
+        @test diagnostics.aufbau_calls == 2 && diagnostics.aufbau_bytes > 0
+        @test seen == [false, true]
+        @test abs2(result[1][5]) > 1 - 2e-13
+
+        h[2], h[5] = -2, 0
+        H = Matrix(Diagonal(h)); H[2, 5] = H[5, 2] = 0.1
+        diagnostics = HFDMRG._RunDiagnostics()
+        solve_hfdmrg(H, zeros(N, N), up; maxiter = 1, blocksize = 2,
+            cutoff = 0.0, scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+            _diagnostics = diagnostics, verbose = false)
+        @test diagnostics.frozen_rebuilds == 1
+        @test diagnostics.aufbau_calls == 0
+
+        H = Matrix(Diagonal([1.0:N - 1; -2.0]))
+        up = zeros(N, 1); up[end] = 1
+        diagnostics = HFDMRG._RunDiagnostics()
+        solve_hfdmrg(H, zeros(N, N), up; maxiter = 1, blocksize = 2,
+            cutoff = 0.0, scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+            _diagnostics = diagnostics, verbose = false)
+        @test any(w -> w.local_iterations == 0, diagnostics.windows)
+    end
+
     @testset "Split one-body UHF API" begin
         rng = MersenneTwister(301)
         N = 12
