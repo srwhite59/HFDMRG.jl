@@ -333,18 +333,23 @@ try
         @test sum(abs2, result[2][end, :]) > 1 - 2e-13
         @test norm((result[1] * result[1]')^2 - result[1] * result[1]') < 2e-13
 
-        N = 12; H = Matrix(Diagonal(1.0:N)); V = zeros(N, N)
+        N = 12; H = Matrix(Diagonal(1.0:N)); Hdn = Matrix(Diagonal(N:-1.0:1)); V = zeros(N, N)
         layout = HFDMRG.SliceLayout(fill(1, N))
         for nocc = 4:6
             up = Matrix{Float64}(I, N, N)[:, 1:nocc]
             dn = Matrix{Float64}(I, N, N)[:, N - nocc + 1:N]
             diagnostics = HFDMRG._RunDiagnostics()
-            result = solve_hfdmrg(H, V, up, dn; maxiter = 1,
+            result = solve_hfdmrg(H, Hdn, V, up, dn; maxiter = 1,
                 block_partition = layout, nblockcenter = 1, cutoff = 0.0,
                 scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
                 _diagnostics = diagnostics, verbose = false)
-            @test abs(result[3] - physical_energy(H, H, V, result[1], result[2])) < 2e-13
-            @test diagnostics.frozen_zero_up_windows > 0
+            @test size(result[1], 2) == size(result[2], 2) == nocc
+            @test norm(result[1] * result[1]' - up * up') < 2e-13
+            @test norm(result[2] * result[2]' - dn * dn') < 2e-13
+            @test norm(result[1]' * result[1] - I) < 2e-13
+            @test norm(result[2]' * result[2] - I) < 2e-13
+            @test abs(result[3] - physical_energy(H, Hdn, V, result[1], result[2])) < 2e-13
+            @test (diagnostics.frozen_zero_up_windows > 0) == (nocc < 6)
             @test diagnostics.frozen_zero_dn_windows > 0
             @test (diagnostics.frozen_zero_both_windows > 0) == (nocc == 4)
         end
@@ -364,23 +369,42 @@ try
         N = 16; h = collect(1.0:N); h[2] = 0; h[14] = 0.1
         H = Matrix(Diagonal(h)); V = zeros(N, N)
         up = zeros(N, 2); up[2, 1] = 1; up[14, 2] = 1
-        saved = Ref{Matrix{Float64}}(); deviations = Float64[]
+        callbacks = Tuple{Int,Bool}[]
+        # Test-only fault injection: observer orbitals remain read-only to users.
         observer = info -> begin
+            push!(callbacks, (info.sweep, info.converged))
             if info.sweep == 1
                 info.psiup[:, 1] .= 0; info.psiup[[2, 8], 1] = [sqrt(0.75), 0.5]
                 info.psiup[:, 2] .= 0; info.psiup[[10, 14], 2] = [0.5, sqrt(0.75)]
-                saved[] = copy(info.psiup)
-            else
-                push!(deviations, norm(info.psiup * info.psiup' - saved[] * saved[]'))
             end
-            false
+            info.sweep == 2
         end
         diagnostics = HFDMRG._RunDiagnostics()
-        solve_hfdmrg(H, V, up; maxiter = 3, blocksize = 2, cutoff = 0.0,
+        result = solve_hfdmrg(H, V, up; maxiter = 3, blocksize = 2, cutoff = 0.0,
             scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
             _diagnostics = diagnostics, observer, verbose = false)
         @test diagnostics.frozen_rebuilds == 1
-        @test deviations[1] < 2e-13
+        @test diagnostics.frozen_rebuild_projector_error < 2e-13
+        @test callbacks == [(1, false), (2, false)]
+        @test size(result[1], 2) == 2
+        @test norm(result[1]' * result[1] - I) < 2e-13
+        @test result[1] == result[2]
+
+        C = Matrix{Float64}(I, 4, 4)[:, 1:2]
+        F = zeros(4, 4); F[3, 1] = F[1, 3] = 1e-5; F[3, 2] = F[2, 3] = 2e-5
+        U = [1.0 1.0; -1.0 1.0] / sqrt(2)
+        r1 = HFDMRG._frozen_residual_norm(F, C, C)
+        r2 = HFDMRG._frozen_residual_norm(F, C, C * U)
+        @test isapprox(r1, hypot(1e-5, 2e-5); atol = 1e-20)
+        @test isapprox(r1, r2; atol = 1e-20)
+        residual_policy = HFDMRG._frozen_policy(
+            F, F, HFDMRG.DensityDensityBackend(zeros(4, 4)), C, C, true)
+        HFDMRG._frozen_begin_blocks!(residual_policy, 2, 1, 1)
+        ledger = HFDMRG._FrozenLedger(1, nothing, C, C)
+        residual_policy.cuts[1] = HFDMRG._FrozenCut(
+            ledger, 2, 2, zeros(4), zeros(1, 1), zeros(1, 1), 0.0)
+        @test HFDMRG._frozen_audit!(residual_policy, false, nothing) == (true, false)
+        @test size(residual_policy.protectedup, 2) == 2
 
         Hinv = Matrix(Diagonal(1.0:N)); policy = HFDMRG._frozen_policy(
             Hinv, Hinv, HFDMRG.DensityDensityBackend(V), up, up, true)

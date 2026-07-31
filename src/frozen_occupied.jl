@@ -113,6 +113,12 @@ function _protect_stale!(p, up, dn, diagnostics)
     p.rebuilt = true
     diagnostics === nothing || (diagnostics.frozen_rebuilds += 1)
 end
+function _record_frozen_rebuild_error!(diagnostics, p, Dup, Ddn)
+    diagnostics === nothing && return
+    diagnostics.frozen_rebuild_projector_error = max(
+        diagnostics.frozen_rebuild_projector_error,
+        norm(p.psiup * p.psiup' - Dup), norm(p.psidn * p.psidn' - Ddn))
+end
 function _classify_frozen(C, ra, protected)
     N, n = size(C)
     n == 0 && return C, similar(C, N, 0)
@@ -176,6 +182,8 @@ function _frozen_growth!(p, side, oldblock, cra, oldidx, environment_cutoff)
         tol = 128eps(eltype(B)) * max(size(B)...) * max(1, isempty(FC.S) ? 1 : FC.S[1])
         r = count(>(tol), FC.S)
         if r == size(B, 2)
+            size(Cup, 2) + size(Cdn, 2) > 0 ||
+                error("structural demotion requires a newly certified candidate")
             if p.restricted
                 c = Cup[:, end:end]
                 Cup, Cdn = Cup[:, 1:end - 1], Cdn[:, 1:end - 1]
@@ -378,11 +386,7 @@ function _full_focks(p)
     j = p.V * (diag(Dup) + diag(Ddn))
     p.Hup + Diagonal(j) - p.V .* Dup, p.Hdn + Diagonal(j) - p.V .* Ddn
 end
-function _frozen_full_energy(p)
-    Fup, Fdn = _full_focks(p)
-    Dup, Ddn = p.psiup * p.psiup', p.psidn * p.psidn'
-    0.5tr(Dup * (Fup + p.Hup)) + 0.5tr(Ddn * (Fdn + p.Hdn))
-end
+_frozen_residual_norm(F, C, Cf) = opnorm(F * Cf - C * (C' * (F * Cf)))
 
 function _aufbau_inverted(F, C)
     n, N = size(C, 2), size(C, 1)
@@ -410,11 +414,8 @@ function _frozen_audit!(p, prospective, diagnostics)
     for (F, C, Cf, spin) in ((Fup, p.psiup, Cfu, :up),
             (Fdn, p.psidn, Cfd, :dn))
         tau = 128g * max(1, norm(F, Inf))
-        for c in eachcol(Cf)
-            r = F * c - C * (C' * (F * c))
-            if norm(r) > tau
-                spin === :up ? (rup = hcat(rup, c)) : (rdn = hcat(rdn, c))
-            end
+        if _frozen_residual_norm(F, C, Cf) > tau
+            spin === :up ? (rup = Cf) : (rdn = Cf)
         end
     end
     invup = invdn = false

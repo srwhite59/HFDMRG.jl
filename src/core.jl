@@ -58,13 +58,14 @@ mutable struct _RunDiagnostics
     frozen_zero_up_windows::Int
     frozen_zero_dn_windows::Int
     frozen_zero_both_windows::Int
+    frozen_rebuild_projector_error::Float64
 end
 
 function _RunDiagnostics(mode::Symbol = :detailed)
     mode in (:detailed, :timing) ||
         error("_RunDiagnostics mode must be :detailed or :timing")
     _RunDiagnostics(mode, NamedTuple[], NamedTuple[], 0.0, 0, 0.0, 0, 0,
-        0, 0, 0, 0.0, 0, 0, 0)
+        0, 0, 0, 0.0, 0, 0, 0, 0.0)
 end
 
 _detailed(diagnostics) =
@@ -696,7 +697,9 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
     lambda = [1.0 for _ = 1:nblocks]
     scf_cutoff === nothing && (scf_cutoff = cutoff)
 
-    for iter = 1:maxiter
+    iter = 0
+    while iter < maxiter
+        iter += 1
         energy = 0.0
         restart_frozen = false
         verbose && println()
@@ -868,15 +871,14 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
             end
         end
         if restart_frozen
-            energyiter = _frozen_full_energy(frozen)
+            Dup, Ddn = frozen.psiup * frozen.psiup', frozen.psidn * frozen.psidn'
             block = getinitialblocks(nblocks, blocksizes, Cranges,
                 restricted ? frozen.psiup : hcat(frozen.psiup, frozen.psidn),
                 H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
                 environment_cutoff, _frozen = frozen)
             psiallup, psialldn = frozen.psiup, frozen.psidn
-            stop_requested = _notify_observer(observer, SweepInfo(iter, energyiter,
-                psiallup, restricted ? psiallup : psialldn, false))
-            stop_requested && break
+            _record_frozen_rebuild_error!(_diagnostics, frozen, Dup, Ddn)
+            iter -= 1
             continue
         end
         verbose && @show iter, energy, energyiter
@@ -959,7 +961,9 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
     lambda = [1.0 for _ = 1:nblocks]
     scf_cutoff === nothing && (scf_cutoff = cutoff / 10)
 
-    for iter = 1:maxiter
+    iter = 0
+    while iter < maxiter
+        iter += 1
         energy = 0.0
         restart_frozen = false
         verbose && println()
@@ -1120,15 +1124,14 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
             end
         end
         if restart_frozen
-            energyiter = _frozen_full_energy(frozen)
+            Dup, Ddn = frozen.psiup * frozen.psiup', frozen.psidn * frozen.psidn'
             block = getinitialblocks_split(nblocks, blocksizes, Cranges,
                 hcat(frozen.psiup, frozen.psidn), Hup, Hdn, Vee,
                 firstindsH, finalindsH; verbose, _diagnostics,
                 environment_cutoff, _frozen = frozen)
             psiallup, psialldn = frozen.psiup, frozen.psidn
-            stop_requested = _notify_observer(observer,
-                SweepInfo(iter, energyiter, psiallup, psialldn, false))
-            stop_requested && break
+            _record_frozen_rebuild_error!(_diagnostics, frozen, Dup, Ddn)
+            iter -= 1
             continue
         end
         verbose && @show iter, energy, energyiter
