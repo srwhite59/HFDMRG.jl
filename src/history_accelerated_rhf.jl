@@ -48,6 +48,17 @@ function _history_physical(H, V, C)
        residual = norm(R), gram = norm(C' * C - I))
 end
 
+function _history_acceptable(before, C, candidate, audit, status, minimum_overlap)
+    finite = all(isfinite, candidate) &&
+        all(isfinite, (audit.energy, audit.residual, audit.gram))
+    overlap = finite ? minimum(svdvals(C' * candidate)) : -Inf
+    tau = 128eps(Float64) * max(1, abs(before.energy), abs(audit.energy))
+    valid = finite && status ∉ (:pulay_failure, :numerical_failure) &&
+        audit.gram <= 32eps(Float64) * sqrt(length(C)) &&
+        audit.energy <= before.energy + tau && overlap >= minimum_overlap
+    valid, overlap
+end
+
 function _history_basis(queue)
     C, h = queue[end], length(queue) - 1
     Z = hcat(queue[1:end-1]...) / sqrt(h)
@@ -139,27 +150,32 @@ function _history_diis(model, c0, policy)
     first = _history_model_metrics(model, c)
     best_c, best_energy, best_k = copy(c), first.energy, first.kresidual
     focks, errors = Matrix{Float64}[], Matrix{Float64}[]
-    consecutive_failures = 0
+    consecutive_failures = pulay_rank = 0
     for iteration = 1:policy.diis_iterations
         metrics = _history_model_metrics(model, c)
+        finite = all(isfinite, (metrics.energy, metrics.kresidual)) && all(isfinite, metrics.F)
+        finite || return (; c = best_c, status = :numerical_failure,
+            iterations = iteration, failures = consecutive_failures, pulay_rank)
         tau = 128eps(Float64) * max(1, abs(best_energy), abs(metrics.energy))
         if metrics.energy < best_energy - tau ||
                 (abs(metrics.energy - best_energy) <= tau && metrics.kresidual < best_k)
             best_c, best_energy, best_k = copy(c), metrics.energy, metrics.kresidual
         end
         metrics.kresidual <= 1e-10 * max(1, norm(metrics.F)) &&
-            return (; c = best_c, status = :converged, iterations = iteration,
-                failures = 0)
+            return (; c = best_c, status = :converged_best, iterations = iteration,
+                failures = 0, pulay_rank)
         push!(focks, metrics.F); push!(errors, metrics.commutator)
         length(focks) > policy.diis_memory && (popfirst!(focks); popfirst!(errors))
-        F, status, _, _, _ = _history_pulay(focks, errors)
+        F, status, pulay_rank, _, _ = _history_pulay(focks, errors)
         consecutive_failures = status === :failed ? consecutive_failures + 1 : 0
         consecutive_failures == 2 && return (; c = best_c,
-            status = :pulay_failure, iterations = iteration, failures = 2)
+            status = :pulay_failure, iterations = iteration, failures = 2, pulay_rank)
+        all(isfinite, F) || return (; c = best_c, status = :numerical_failure,
+            iterations = iteration, failures = consecutive_failures, pulay_rank)
         c = eigen(Symmetric(F)).vectors[:, 1:size(c0, 2)]
     end
     (; c = best_c, status = :cap, iterations = policy.diis_iterations,
-       failures = consecutive_failures)
+       failures = consecutive_failures, pulay_rank)
 end
 
 function _history_segment(H, V, C, sweeps, captures; solver...)
@@ -194,10 +210,13 @@ function _solve_history_rhf(H, V, C0; _policy = _HistoryRHFPolicy(),
     cycles = 0
     while audit.value.residual > _policy.target && cycles < _policy.max_cycles
         cycles += 1
+        incoming_energy = audit.value.energy
         basis_timed = @timed _history_basis(queue)
         basis = basis_timed.value
         basis_time += basis_timed.time; basis_bytes += basis_timed.bytes
         status, diis_status, trial = :no_op, :not_run, C
+        proposal = (; energy = NaN, residual = NaN, gram = NaN)
+        overlap = NaN; diis_iterations = diis_failures = diis_rank = 0
         if basis.extra == 0
             noops += 1
         elseif !basis.valid
@@ -211,18 +230,16 @@ function _solve_history_rhf(H, V, C0; _policy = _HistoryRHFPolicy(),
                 diis_timed = @timed _history_diis(
                     setup_timed.value, basis.Q' * C, _policy)
                 diis_time += diis_timed.time; diis_bytes += diis_timed.bytes
-                diis_status = diis_timed.value.status
-                candidate = basis.Q * diis_timed.value.c
+                diis = diis_timed.value
+                diis_status, diis_iterations, diis_failures, diis_rank =
+                    diis.status, diis.iterations, diis.failures, diis.pulay_rank
+                candidate = basis.Q * diis.c
                 candidate_audit = @timed _history_physical(H, V, candidate)
                 audit_time += candidate_audit.time; audit_bytes += candidate_audit.bytes
                 before = audit.value
-                tau = 128eps(Float64) * max(1, abs(before.energy),
-                    abs(candidate_audit.value.energy))
-                overlap = minimum(svdvals(C' * candidate))
-                valid = diis_status !== :pulay_failure &&
-                    candidate_audit.value.gram <= 32eps(Float64) * sqrt(length(C)) &&
-                    candidate_audit.value.energy <= before.energy + tau &&
-                    overlap >= _policy.minimum_overlap
+                proposal = candidate_audit.value
+                valid, overlap = _history_acceptable(
+                    before, C, candidate, proposal, diis_status, _policy.minimum_overlap)
                 if valid
                     status = :accepted; accepted += 1; trial = candidate
                 else
@@ -237,8 +254,10 @@ function _solve_history_rhf(H, V, C0; _policy = _HistoryRHFPolicy(),
         audit = @timed _history_physical(H, V, C)
         audit_time += audit.time; audit_bytes += audit.bytes
         push!(events, (; cycle = cycles, status, rank = basis.rank,
-            extra_rank = basis.extra, diis_status, energy = audit.value.energy,
-            residual = audit.value.residual,
+            extra_rank = basis.extra, tail = basis.tail, diis_status,
+            diis_iterations, diis_failures, diis_rank, proposal_energy = proposal.energy,
+            proposal_residual = proposal.residual, proposal_gram = proposal.gram,
+            overlap, incoming_energy, energy = audit.value.energy, residual = audit.value.residual,
             elapsed = (time_ns() - start_ns) * 1e-9))
     end
     (; C, energy = audit.value.energy, residual = audit.value.residual,

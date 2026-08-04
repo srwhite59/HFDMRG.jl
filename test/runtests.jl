@@ -1646,12 +1646,11 @@ try
         contracted = HFDMRG._history_model_metrics(model, c)
         D = C * C'
         F = H + 2Diagonal(V * diag(D)) - V .* D
-        direct_energy = 2dot(D, H) + 2dot(diag(D), V * diag(D)) -
-            sum(V .* D .* D)
+        direct_energy = 2dot(D, H) + 2dot(diag(D), V * diag(D)) - sum(V .* D .* D)
         @test norm(contracted.F - Q' * F * Q) <= 2e-12
         @test abs(contracted.energy - direct_energy) <= 2e-12
-        @test isapprox(contracted.kresidual, sqrt(2) * contracted.residual;
-            atol = 2e-12, rtol = 0)
+        @test abs(direct_energy - dot(D, F + H)) <= 2e-12
+        @test isapprox(contracted.kresidual, sqrt(2) * contracted.residual; atol = 2e-12)
         @test HFDMRG._history_workspace(2551, 32)
         @test !HFDMRG._history_workspace(2551, 33)
         @test HFDMRG._history_model(H, V, orthonormal_cols(rng, N, 5)) === nothing
@@ -1661,48 +1660,78 @@ try
         old2 = Matrix(qr(current - 0.02response).Q)[:, 1:2]
         rotation = [0.8 -0.6; 0.6 0.8]
         basis = HFDMRG._history_basis([old1, old2, current])
-        rotated = HFDMRG._history_basis(
-            [old1 * rotation, -old2, current * rotation])
+        rotated = HFDMRG._history_basis([old1 * rotation, -old2, current * rotation])
         @test basis.extra == rotated.extra == 2
         @test norm(basis.Q * basis.Q' - rotated.Q * rotated.Q') <= 2e-12
+        scaled = response * Diagonal([1e-2, 2e-6])
+        cuts = [Matrix(qr(current + sign * scaled).Q)[:, 1:2] for sign in (-1, 1)]
+        cutoff_bases = [HFDMRG._history_basis(
+            [[cuts[mod1(j, 2)] for j = 1:h - 1]..., current]) for h in (3, 4, 6)]
+        @test all(b -> (b.kabs, b.ktail, b.extra) == (1, 2, 2), cutoff_bases)
+        proposal_policy = HFDMRG._HistoryRHFPolicy(diis_iterations = 10)
+        proposals = [b.Q * HFDMRG._history_diis(HFDMRG._history_model(H, V, b.Q),
+            b.Q' * current, proposal_policy).c for b in (basis, rotated)]
+        @test norm(proposals[1] * proposals[1]' - proposals[2] * proposals[2]') <= 2e-12
+        energies = [HFDMRG._history_physical(H, V, p).energy for p in proposals]
+        @test abs(energies[1] - energies[2]) <= 2e-12
+        @test basis.valid && rotated.valid
         @test HFDMRG._history_basis([current, current, current]).extra == 0
 
         focks = [Matrix(Symmetric(randn(rng, 4, 4))) for _ = 1:3]
         errors = [randn(rng, 4, 4) for _ = 1:3]
-        _, pulay_status, _, _, coefficient_sum =
-            HFDMRG._history_pulay(focks, errors)
+        _, pulay_status, _, _, coefficient_sum = HFDMRG._history_pulay(focks, errors)
         @test pulay_status === :used
         @test abs(coefficient_sum - 1) <= 32eps(Float64)
-        @test_throws ErrorException HFDMRG._solve_history_rhf(
-            Float32.(H), Float32.(V), Float32.(C))
-        @test_throws ErrorException HFDMRG._solve_history_rhf(
-            round.(Int, H), round.(Int, V), round.(Int, C))
+        _, deficient_status, _, _, deficient_sum = HFDMRG._history_pulay(focks, fill(errors[1], 3))
+        @test deficient_status === :used && abs(deficient_sum - 1) <= 32eps(Float64)
+        @test HFDMRG._history_pulay(focks, fill(fill(NaN, 4, 4), 3))[2] === :failed
+        before = HFDMRG._history_physical(H, V, C)
+        bad_audit = (; energy = NaN, residual = NaN, gram = NaN)
+        @test !first(HFDMRG._history_acceptable(before, C, fill(Inf, size(C)), bad_audit, :cap, 0.0))
+        overflow_model = HFDMRG._HistoryRHFModel(fill(1e308, 2, 2), fill(1e308, 2, 2, 2, 2))
+        @test HFDMRG._history_diis(overflow_model, [1.0; 0.0;;], proposal_policy).status ===
+            :numerical_failure
+        @test_throws ErrorException HFDMRG._solve_history_rhf(Float32.(H), Float32.(V), Float32.(C))
+        @test_throws ErrorException HFDMRG._solve_history_rhf(round.(Int, H), round.(Int, V), round.(Int, C))
 
         N = 90
         A = randn(rng, N, N); H = Matrix(Symmetric(A))
         B = randn(rng, N, N); V = 0.003 * Matrix(Symmetric(B))
         C0 = orthonormal_cols(rng, N, 2)
         solver = (; blocksize = 10, scf_cutoff = 1e-10)
-        accepted_policy = HFDMRG._HistoryRHFPolicy(
-            max_cycles = 2, target = 0.0, diis_iterations = 20,
-            minimum_overlap = 0.0)
-        accelerated = HFDMRG._solve_history_rhf(
-            H, V, C0; _policy = accepted_policy, solver...)
+        public_baseline = solve_hfdmrg(H, V, C0; solver..., maxiter = 2, cutoff = 0.0)
+        accepted_policy = HFDMRG._HistoryRHFPolicy(max_cycles = 2, target = 0.0,
+            diis_iterations = 20, minimum_overlap = 0.0)
+        accelerated = HFDMRG._solve_history_rhf(H, V, C0; _policy = accepted_policy, solver...)
         @test accelerated.total_sweeps == 10
         @test accelerated.accepted >= 1
         @test accelerated.resource_fallbacks >= 1
         @test all(diff(getproperty.(accelerated.events, :energy)) .<= 1e-9)
         @test norm(accelerated.C' * accelerated.C - I) <= 1e-10
+        accepted_events = filter(x -> x.status === :accepted, accelerated.events)
+        @test all(x -> all(isfinite, (x.tail, x.proposal_energy, x.proposal_residual,
+            x.proposal_gram, x.overlap)), accepted_events)
+        @test HFDMRG._history_physical(H, V, accelerated.C).energy == accelerated.energy
+        @test solve_hfdmrg(H, V, C0; solver..., maxiter = 2, cutoff = 0.0) == public_baseline
+        guarded = orthonormal_cols(rng, N, 15)
+        HFDMRG._history_model(H, V, guarded)
+        @test @allocated(HFDMRG._history_model(H, V, guarded)) < 1_000
+        Nzero = 20; Qzero = orthonormal_cols(rng, Nzero, Nzero)
+        Hzero = Matrix(Symmetric(Qzero * Diagonal(1.0:Nzero) * Qzero'))
+        zero_policy = HFDMRG._HistoryRHFPolicy(max_cycles = 1, target = 0.0)
+        zero_run = HFDMRG._solve_history_rhf(Hzero, zeros(Nzero, Nzero), Qzero[:, 1:2];
+            _policy = zero_policy, blocksize = 2, scf_cutoff = 1e-10)
+        @test zero_run.noops == 1 && only(zero_run.events).status === :no_op
+        zero_rotated = HFDMRG._solve_history_rhf(Hzero, zeros(Nzero, Nzero),
+            Qzero[:, 1:2] * rotation; _policy = zero_policy, blocksize = 2)
+        @test abs(zero_rotated.energy - zero_run.energy) <= 2e-12
+        @test norm(zero_rotated.C * zero_rotated.C' - zero_run.C * zero_run.C') <= 2e-12
 
-        rejected_policy = HFDMRG._HistoryRHFPolicy(
-            max_cycles = 1, target = 0.0, diis_iterations = 20,
-            minimum_overlap = 1.0)
-        rejected = HFDMRG._solve_history_rhf(
-            H, V, C0; _policy = rejected_policy, solver...)
-        bootstrap = solve_hfdmrg(H, V, C0; solver..., maxiter = 6,
-            cutoff = 0.0)
-        ordinary = solve_hfdmrg(H, V, bootstrap[1]; solver..., maxiter = 2,
-            cutoff = 0.0)
+        rejected_policy = HFDMRG._HistoryRHFPolicy(max_cycles = 1, target = 0.0,
+            diis_iterations = 20, minimum_overlap = 1.0)
+        rejected = HFDMRG._solve_history_rhf(H, V, C0; _policy = rejected_policy, solver...)
+        bootstrap = solve_hfdmrg(H, V, C0; solver..., maxiter = 6, cutoff = 0.0)
+        ordinary = solve_hfdmrg(H, V, bootstrap[1]; solver..., maxiter = 2, cutoff = 0.0)
         @test rejected.rejected == 1
         @test isapprox(rejected.energy, ordinary[3]; atol = 1e-12, rtol = 0)
         @test rejected.C == ordinary[1]
