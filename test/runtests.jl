@@ -1633,6 +1633,82 @@ try
                 norm(projector(split[2]) - projector(orbital(9)))) <= 1e-12
         end
     end
+
+    @testset "History-accelerated density RHF" begin
+        rng = MersenneTwister(804)
+        N, nocc, r = 40, 2, 4
+        Q = orthonormal_cols(rng, N, r)
+        c = orthonormal_cols(rng, r, nocc)
+        C = Q * c
+        A = randn(rng, N, N); H = Matrix(Symmetric(A))
+        B = randn(rng, N, N); V = 0.01 * Matrix(Symmetric(B))
+        model = HFDMRG._history_model(H, V, Q)
+        contracted = HFDMRG._history_model_metrics(model, c)
+        D = C * C'
+        F = H + 2Diagonal(V * diag(D)) - V .* D
+        direct_energy = 2dot(D, H) + 2dot(diag(D), V * diag(D)) -
+            sum(V .* D .* D)
+        @test norm(contracted.F - Q' * F * Q) <= 2e-12
+        @test abs(contracted.energy - direct_energy) <= 2e-12
+        @test isapprox(contracted.kresidual, sqrt(2) * contracted.residual;
+            atol = 2e-12, rtol = 0)
+        @test HFDMRG._history_workspace(2551, 32)
+        @test !HFDMRG._history_workspace(2551, 33)
+        @test HFDMRG._history_model(H, V, orthonormal_cols(rng, N, 5)) === nothing
+
+        current, response = Q[:, 1:2], Q[:, 3:4]
+        old1 = Matrix(qr(current + 0.01response).Q)[:, 1:2]
+        old2 = Matrix(qr(current - 0.02response).Q)[:, 1:2]
+        rotation = [0.8 -0.6; 0.6 0.8]
+        basis = HFDMRG._history_basis([old1, old2, current])
+        rotated = HFDMRG._history_basis(
+            [old1 * rotation, -old2, current * rotation])
+        @test basis.extra == rotated.extra == 2
+        @test norm(basis.Q * basis.Q' - rotated.Q * rotated.Q') <= 2e-12
+        @test HFDMRG._history_basis([current, current, current]).extra == 0
+
+        focks = [Matrix(Symmetric(randn(rng, 4, 4))) for _ = 1:3]
+        errors = [randn(rng, 4, 4) for _ = 1:3]
+        _, pulay_status, _, _, coefficient_sum =
+            HFDMRG._history_pulay(focks, errors)
+        @test pulay_status === :used
+        @test abs(coefficient_sum - 1) <= 32eps(Float64)
+        @test_throws ErrorException HFDMRG._solve_history_rhf(
+            Float32.(H), Float32.(V), Float32.(C))
+        @test_throws ErrorException HFDMRG._solve_history_rhf(
+            round.(Int, H), round.(Int, V), round.(Int, C))
+
+        N = 90
+        A = randn(rng, N, N); H = Matrix(Symmetric(A))
+        B = randn(rng, N, N); V = 0.003 * Matrix(Symmetric(B))
+        C0 = orthonormal_cols(rng, N, 2)
+        solver = (; blocksize = 10, scf_cutoff = 1e-10)
+        accepted_policy = HFDMRG._HistoryRHFPolicy(
+            max_cycles = 2, target = 0.0, diis_iterations = 20,
+            minimum_overlap = 0.0)
+        accelerated = HFDMRG._solve_history_rhf(
+            H, V, C0; _policy = accepted_policy, solver...)
+        @test accelerated.total_sweeps == 10
+        @test accelerated.accepted >= 1
+        @test accelerated.resource_fallbacks >= 1
+        @test all(diff(getproperty.(accelerated.events, :energy)) .<= 1e-9)
+        @test norm(accelerated.C' * accelerated.C - I) <= 1e-10
+
+        rejected_policy = HFDMRG._HistoryRHFPolicy(
+            max_cycles = 1, target = 0.0, diis_iterations = 20,
+            minimum_overlap = 1.0)
+        rejected = HFDMRG._solve_history_rhf(
+            H, V, C0; _policy = rejected_policy, solver...)
+        bootstrap = solve_hfdmrg(H, V, C0; solver..., maxiter = 6,
+            cutoff = 0.0)
+        ordinary = solve_hfdmrg(H, V, bootstrap[1]; solver..., maxiter = 2,
+            cutoff = 0.0)
+        @test rejected.rejected == 1
+        @test isapprox(rejected.energy, ordinary[3]; atol = 1e-12, rtol = 0)
+        @test rejected.C == ordinary[1]
+        @test rejected.C !== C0
+        @test :_solve_history_rhf ∉ names(HFDMRG, all = false)
+    end
 finally
     empty!(LOAD_PATH)
     append!(LOAD_PATH, old_load_path)
