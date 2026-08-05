@@ -1817,6 +1817,131 @@ try
         @test rejected.C !== C0
         @test :_solve_history_rhf ∉ names(HFDMRG, all = false)
     end
+    @testset "History-accelerated density UHF" begin
+        rng = MersenneTwister(80504)
+        N, r = 80, 5
+        Q = orthonormal_cols(rng, N, r)
+        Cup, Cdn = Q[:, 1:2], Q[:, 3:3]
+        A = randn(rng, N, N); Hup = Matrix(Symmetric(A))
+        Hdn = Hup + Matrix(Diagonal(range(-0.03, 0.04; length = N)))
+        B = randn(rng, N, N); V = 0.002 * Matrix(Symmetric(B))
+        Dup, Ddn = Cup * Cup', Cdn * Cdn'
+        direct = V * (diag(Dup) + diag(Ddn))
+        for (Hu, Hd) in ((Hup, Hup), (Hup, Hdn))
+            metrics = HFDMRG._history_uhf_model_metrics(
+                HFDMRG._history_uhf_model(Hu, Hd, V, Q), Q' * Cup, Q' * Cdn)
+            Fu, Fd = Hu + Diagonal(direct) - V .* Dup, Hd + Diagonal(direct) - V .* Ddn
+            energy = 0.5dot(Dup, Fu + Hu) + 0.5dot(Ddn, Fd + Hd)
+            @test max(norm(metrics.Fup - Q' * Fu * Q), norm(metrics.Fdn - Q' * Fd * Q),
+                abs(metrics.energy - energy)) <= 2e-12
+        end
+        old1 = (Matrix(qr(Cup + 0.01Q[:, 4:5]).Q)[:, 1:2],
+            Matrix(qr(Cdn + 0.02Q[:, 4:4]).Q)[:, 1:1])
+        old2 = (Matrix(qr(Cup - 0.02Q[:, 4:5]).Q)[:, 1:2],
+            Matrix(qr(Cdn - 0.01Q[:, 5:5]).Q)[:, 1:1])
+        rotation = [0.8 -0.6; 0.6 0.8]
+        basis = HFDMRG._history_uhf_basis([old1, old2, (Cup, Cdn)])
+        rotated = HFDMRG._history_uhf_basis([(up * rotation, -dn)
+            for (up, dn) in (old1, old2, (Cup, Cdn))])
+        @test basis.valid && rotated.valid && basis.extra == rotated.extra
+        @test norm(basis.Q * basis.Q' - rotated.Q * rotated.Q') <= 2e-12
+        proposal_policy = HFDMRG._HistoryRHFPolicy(diis_iterations = 10)
+        proposals = [(b.Q * d.cup, b.Q * d.cdn) for b in (basis, rotated)
+            for d in (HFDMRG._history_uhf_diis(HFDMRG._history_uhf_model(
+                Hup, Hdn, V, b.Q), b.Q' * Cup, b.Q' * Cdn, proposal_policy),)]
+        @test max(norm(proposals[1][1] * proposals[1][1]' - proposals[2][1] * proposals[2][1]'),
+            norm(proposals[1][2] * proposals[1][2]' - proposals[2][2] * proposals[2][2]')) <= 2e-12
+        cut = Matrix(qr(Cup + Q[:, 4:5] * Diagonal([1e-2, 2e-6])).Q)[:, 1:2]
+        scaled_bases = [HFDMRG._history_uhf_basis(
+            [[(cut, cut) for _ = 1:h - 1]..., (Cup, Cup)]) for h in (3, 4, 6)]
+        @test all(b -> (b.kabs, b.ktail, b.extra) == (1, 2, 2), scaled_bases)
+        Cr = Cup
+        rhf_basis = HFDMRG._history_basis([old1[1], old2[1], Cr])
+        uhf_limit = HFDMRG._history_uhf_basis([(old1[1], old1[1]),
+            (old2[1], old2[1]), (Cr, Cr)])
+        @test rhf_basis.extra == uhf_limit.extra
+        @test norm(rhf_basis.Q * rhf_basis.Q' -
+            uhf_limit.Q * uhf_limit.Q') <= 2e-12
+        rhf_metrics = HFDMRG._history_model_metrics(HFDMRG._history_model(Hup, V, Q), Q' * Cr)
+        limit_metrics = HFDMRG._history_uhf_model_metrics(
+            HFDMRG._history_uhf_model(Hup, Hup, V, Q), Q' * Cr, Q' * Cr)
+        @test norm(rhf_metrics.F - limit_metrics.Fup) <= 2e-12 &&
+            abs(rhf_metrics.energy - limit_metrics.energy) <= 2e-12 &&
+            abs(rhf_metrics.residual - limit_metrics.residual_up) <= 2e-12
+        rtrial = rhf_basis.Q * HFDMRG._history_diis(HFDMRG._history_model(Hup, V, rhf_basis.Q), rhf_basis.Q' * Cr, proposal_policy).c
+        utrial = uhf_limit.Q * HFDMRG._history_uhf_diis(HFDMRG._history_uhf_model(
+            Hup, Hup, V, uhf_limit.Q), uhf_limit.Q' * Cr, uhf_limit.Q' * Cr, proposal_policy).cup
+        @test norm(rtrial * rtrial' - utrial * utrial') <= 2e-12
+        paired_focks = [hcat(Matrix(Symmetric(randn(rng, 4, 4))),
+            Matrix(Symmetric(randn(rng, 4, 4)))) for _ = 1:3]
+        paired_errors = [hcat(randn(rng, 4, 4), randn(rng, 4, 4)) for _ = 1:3]
+        _, status, _, _, coefficient_sum = HFDMRG._history_pulay(
+            paired_focks, paired_errors)
+        @test status === :used && abs(coefficient_sum - 1) <= 32eps(Float64)
+        _, deficient, _, _, deficient_sum = HFDMRG._history_pulay(
+            paired_focks, fill(paired_errors[1], 3))
+        @test deficient === :used && abs(deficient_sum - 1) <= 32eps(Float64)
+        N = 90; rngw = MersenneTwister(9004)
+        A = randn(rngw, N, N); Hup = Matrix(Symmetric(A))
+        Hdn = Hup + Matrix(Diagonal(range(-0.02, 0.03; length = N)))
+        B = randn(rngw, N, N); V = 0.001 * Matrix(Symmetric(B))
+        up0, dn0 = orthonormal_cols(rngw, N, 1), orthonormal_cols(rngw, N, 1)
+        compact_policy(; sweeps = 2, captures = Tuple(1:sweeps), fifo = length(captures), cleanup = 1, cycles = 1, overlap = 0.0) =
+            HFDMRG._HistoryRHFPolicy(bootstrap_sweeps = sweeps, captures = captures,
+            fifo_length = fifo, cleanup_sweeps = cleanup,
+            max_cycles = cycles, target = 0.0, diis_iterations = 12,
+            minimum_overlap = overlap)
+        policy = compact_policy(sweeps = 6, captures = (2, 4, 6), cleanup = 2, cycles = 2)
+        solver = (; blocksize = 9, scf_cutoff = 1e-9)
+        common = HFDMRG._solve_history_uhf(Hup, V, up0, dn0;
+            _policy = policy, solver...)
+        split = HFDMRG._solve_history_uhf(Hup, Hdn, V, up0, dn0;
+            _policy = policy, solver...)
+        @test common.total_sweeps == split.total_sweeps == 10
+        @test common.cycles == split.cycles == common.accepted == split.accepted == 2
+        @test max(common.gram_up, common.gram_dn, split.gram_up, split.gram_dn) <= 1e-10 && all(e -> all(isfinite, (e.proposal_gram_up, e.proposal_gram_dn, e.proposal_s2)), vcat(common.events, split.events))
+        @test HFDMRG._history_uhf_physical(Hup, Hup, V, common.Cup, common.Cdn).energy ==
+            common.energy
+        @test HFDMRG._history_uhf_physical(Hup, Hdn, V, split.Cup, split.Cdn).energy ==
+            split.energy
+        for result in (HFDMRG._solve_history_uhf(Hup, V, up0, zeros(N, 0);
+                _policy = policy, solver...),
+                HFDMRG._solve_history_uhf(Hup, Hdn, V, up0, zeros(N, 0);
+                _policy = policy, solver...))
+            @test size(result.Cdn) == (N, 0) && result.residual_dn == result.gram_dn == 0
+        end
+        atomic_policy = compact_policy(overlap = 0.98836)
+        rejected = HFDMRG._solve_history_uhf(Hdn, Hup, V, dn0, up0;
+            _policy = atomic_policy, solver...)
+        boot = solve_hfdmrg(Hdn, Hup, V, dn0, up0; solver..., maxiter = 2, cutoff = 0.0)
+        ordinary = solve_hfdmrg(Hdn, Hup, V, boot[1], boot[2]; solver...,
+            maxiter = 1, cutoff = 0.0)
+        event = only(rejected.events)
+        @test rejected.rejected == 1 && event.overlap_up >= 0.98836 > event.overlap_dn
+        @test rejected.Cup == ordinary[1] && rejected.Cdn == ordinary[2] &&
+            rejected.energy == HFDMRG._history_uhf_physical(
+                Hdn, Hup, V, ordinary[1], ordinary[2]).energy
+        resource_policy = compact_policy(sweeps = 4)
+        resource = HFDMRG._solve_history_uhf(Hup, Hdn, V, up0, dn0;
+            _policy = resource_policy, solver...)
+        boot = solve_hfdmrg(Hup, Hdn, V, up0, dn0; solver..., maxiter = 4, cutoff = 0.0)
+        ordinary = solve_hfdmrg(Hup, Hdn, V, boot[1], boot[2]; solver...,
+            maxiter = 1, cutoff = 0.0)
+        @test resource.resource_fallbacks == 1 && resource.Cup == ordinary[1] &&
+            resource.Cdn == ordinary[2]
+        Nzero = 20; Qzero = orthonormal_cols(rng, Nzero, Nzero)
+        Hzero = Matrix(Symmetric(Qzero * Diagonal(1.0:Nzero) * Qzero'))
+        zero_policy = compact_policy()
+        zero = HFDMRG._solve_history_uhf(Hzero, zeros(Nzero, Nzero),
+            Qzero[:, 1:1], Qzero[:, 2:2]; _policy = zero_policy, blocksize = 2)
+        rotated_zero = HFDMRG._solve_history_uhf(Hzero, zeros(Nzero, Nzero),
+            -Qzero[:, 1:1], -Qzero[:, 2:2]; _policy = zero_policy, blocksize = 2)
+        @test zero.noops == 1 && only(zero.events).status === :no_op
+        @test zero.energy == rotated_zero.energy && zero.Cup * zero.Cup' ≈
+            rotated_zero.Cup * rotated_zero.Cup' && zero.Cdn * zero.Cdn' ≈
+            rotated_zero.Cdn * rotated_zero.Cdn'
+        @test :_solve_history_uhf ∉ names(HFDMRG, all = false)
+    end
 finally
     empty!(LOAD_PATH)
     append!(LOAD_PATH, old_load_path)
