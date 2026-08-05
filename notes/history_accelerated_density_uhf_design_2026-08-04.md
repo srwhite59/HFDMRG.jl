@@ -369,11 +369,14 @@ The private result contains:
 - `Cup` and `Cdn` from the last complete sweep segment;
 - the independently recomputed physical determinant energy;
 - alpha, beta, maximum, and RMS orbital residuals;
-- Gram, `S2`, and overlap diagnostics; and
-- terminal-only Aufbau/gap diagnostics, timed separately from acceleration;
+- Gram, `S2`, and overlap diagnostics;
 - target/terminal status, sweep/cycle counts, and atomic event counts;
 - paired-history ranks and DIIS status; and
 - phase timing and allocated-byte summaries.
+
+The private driver does not diagonalize either full physical Fock for Aufbau
+diagnostics.  Aufbau ordering and gaps belong to the external stationary-
+closure audit and are timed separately from acceleration.
 
 The returned energy is never a damped local-SCF scalar or a contracted model
 surrogate.  No public `solve_hfdmrg` return convention changes.
@@ -392,7 +395,7 @@ older history pairs, and `r` the common history rank.
 | Shared pair map/model | `O(N^2*r^2+N*r^4)` | `O(N*r^2+r^4)` retained |
 | Coupled DIIS iteration | `O(r^4+r^3)` | `O(r^4+2m*r^2)` |
 | Full paired proposal audit | `O(N^2*(na+nb))` | several `O(N^2)` temporaries |
-| Terminal Aufbau audit | `O(N^3)` once, outside acceleration timing | `O(N^2)` temporary |
+| External Aufbau audit | `O(N^3)` once, outside the driver and acceleration timing | `O(N^2)` temporary |
 
 UHF does not duplicate the dominant `P` or `G`.  Relative to RHF at the same
 `N` and `r`, its contracted iterations approximately double small Fock,
