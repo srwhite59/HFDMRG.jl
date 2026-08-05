@@ -70,3 +70,18 @@ matrices are identical. In UHF their column counts independently fix
 
 See [Solvers and controls](@ref) for signatures and [Interaction backends](@ref)
 for conventions and costs.
+
+## Next: unrestricted HF
+
+Run `examples/basic_uhf.jl` for the introductory common-H density-density UHF
+workflow:
+
+```sh
+julia --project=. examples/basic_uhf.jl
+```
+
+It uses independent alpha and beta occupations and a deliberately asymmetric
+seed. After the solve, it reconstructs both full-physical-basis density and
+Fock matrices, independently evaluates the electronic energy, and checks
+separate Gram errors, occupied--virtual residuals, positive gaps, and Aufbau
+projectors. The example uses only the public `solve_hfdmrg` route.

@@ -150,14 +150,15 @@ The recommended sequence is:
 
 ```sh
 julia --project=. examples/quickstart.jl
+julia --project=. examples/basic_uhf.jl
 julia --project=. examples/observer_checkpoint.jl
 julia --project=. examples/target_residual.jl
 julia --project=. examples/cached_sliced.jl
 ```
 
 The [Examples](docs/src/examples/index.md) page explains what each workflow
-demonstrates and records the remaining need for a basic introductory UHF
-example.
+demonstrates. The basic UHF example independently reconstructs the physical
+Focks, energy, residuals, gaps, and Aufbau projectors.
 
 ## Tests and developer checks
 
