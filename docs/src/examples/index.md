@@ -51,6 +51,6 @@ without introducing a paper-specific physical result.
 
 ## Scope
 
-These examples demonstrate package mechanics, not benchmark claims. PQS data,
-unpublished paper-result timing tables, private history policy, and heavy
-consumer checkpoints are intentionally excluded from the public manual.
+These examples demonstrate package mechanics rather than benchmark claims.
+They use small self-contained fixtures and omit private research controls,
+heavyweight consumer artifacts, and production datasets.

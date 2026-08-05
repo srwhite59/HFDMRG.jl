@@ -9,7 +9,7 @@ makedocs(
     source = "src",
     build = "build",
     doctest = true,
-    checkdocs = :none,
+    checkdocs = :exports,
     warnonly = false,
     remotes = nothing,
     format = Documenter.HTML(

@@ -12,3 +12,9 @@ not expose every internal helper or state type.
 
 `solve_hfdmrg` is the only exported name. Supported types such as
 `HFDMRG.SliceLayout` are intentionally qualified.
+
+## Module
+
+```@docs
+HFDMRG
+```
