@@ -1,4 +1,4 @@
-# HFDMRG Backend Architecture
+# Backend architecture
 
 HFDMRG has one sweep engine and several interaction backends. The sweep engine
 decides where the moving window is, transforms occupied orbitals, runs the
@@ -7,7 +7,7 @@ one particular interaction representation into the block and window objects
 needed by that engine.
 
 This is the in-repository extension contract. `solve_hfdmrg` is the only
-exported name; the functions in [`src/backend_api.jl`](../src/backend_api.jl)
+exported name; the functions in `src/backend_api.jl`
 are an architectural seam for HFDMRG development, not a promise that private
 state types or helper names are stable public API.
 
@@ -209,9 +209,8 @@ a demonstrated user requirement.
 Every new tensor convention needs an explicit four-index RHF and UHF oracle.
 Index names that look familiar are not proof that direct, exchange, pair
 weights, and factors of two agree with the core convention. The public
-[numerical conventions](../README.md#numerical-conventions) and the
-[target-residual formulas](../notes/target_space_interaction_residual_design_2026-07-17.md#fock-and-energy-formulas)
-show the existing contracts.
+[Numerical conventions](@ref) and [Interaction backends](@ref) pages show the
+existing contracts.
 
 ## Solver overloads and routing
 
@@ -297,8 +296,8 @@ still outside the block, as separate `k² × S2ext` packed matrices with
 range-local ragged offsets and no padding. Absorption updates all four
 old/new sectors exactly before discarding the newly internal channels.
 
-The accepted cached-sliced design and frozen-Be evidence are preserved in the
-[final performance account](../notes/cached_sliced_performance_final_2026-07-20.md).
+The accepted cached-sliced design and frozen-Be evidence are preserved in
+`notes/cached_sliced_performance_final_2026-07-20.md`.
 
 A design proposal for a new backend must state:
 

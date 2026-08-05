@@ -1,0 +1,9 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+HFDMRG = "47a4102e-5223-4fb2-9ef6-33cce25f1843"
+
+[sources]
+HFDMRG = {path = ".."}
+
+[compat]
+Documenter = "1"
