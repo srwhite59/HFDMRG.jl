@@ -182,6 +182,85 @@ try
         @test_throws ErrorException HFDMRG._RunDiagnostics(:invalid)
     end
 
+    @testset "Occupied subset eigensolve" begin
+        rng = MersenneTwister(805)
+        w, nocc = 32, 4
+        Q = orthonormal_cols(rng, w, w)
+        levels = collect(1.0:w)
+        A = Matrix(Symmetric(Q * Diagonal(levels) * Q'))
+        full = HFDMRG.eigsym(A)
+        diagnostics = HFDMRG._RunDiagnostics(:timing)
+        subset = HFDMRG._eigsym_occupied(A, nocc, diagnostics)
+        @test size(subset[2]) == (w, nocc)
+        @test isapprox(subset[1], full[1][1:nocc]; atol = 2e-13, rtol = 2e-13)
+        @test norm(A * subset[2] - subset[2] * Diagonal(subset[1])) <= 2e-12
+        @test norm(subset[2] * subset[2]' -
+                   full[2][:, 1:nocc] * full[2][:, 1:nocc]') <= 2e-11
+        @test diagnostics.eigsym_calls == 1 && diagnostics.eigsym_seconds > 0
+        @test HFDMRG._eigsym_occupied(A, nocc + 1) == full
+        A32 = Float32.(A)
+        @test HFDMRG._eigsym_occupied(A32, 1) == HFDMRG.eigsym(A32)
+
+        clustered = copy(levels); clustered[nocc + 1] = nocc + 1e-8
+        Acluster = Matrix(Symmetric(Q * Diagonal(clustered) * Q'))
+        cvalues, cvectors = HFDMRG._eigsym_occupied(Acluster, nocc)
+        @test norm(Acluster * cvectors - cvectors * Diagonal(cvalues)) <= 2e-12
+        @test norm(cvectors * cvectors' -
+                   Q[:, 1:nocc] * Q[:, 1:nocc]') <= 1e-6
+
+        degenerate = [1.0, 2.0, 3.0, 3.0, 3.0, collect(4.0:w - 2)...]
+        Adeg = Matrix(Symmetric(Q * Diagonal(degenerate) * Q'))
+        values, vectors = HFDMRG._eigsym_occupied(Adeg, nocc)
+        P, allowed = vectors * vectors', Q[:, 1:5] * Q[:, 1:5]'
+        @test isapprox(values, degenerate[1:nocc]; atol = 2e-13, rtol = 0)
+        @test norm((I - P) * Q[:, 1:2]) <= 2e-12
+        @test norm((I - allowed) * P) <= 2e-12
+
+        N = 40
+        U = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1))
+             for i = 1:N, j = 1:N]
+        H = Matrix(Symmetric(U * Diagonal(0.0:N - 1) * U'))
+        Hdn = Matrix(Symmetric(U * Diagonal(N - 1.0:-1:0.0) * U'))
+        V = zeros(N, N)
+        up0 = orthonormal_cols(rng, N, 1)
+        dn0 = orthonormal_cols(rng, N, 1)
+        layout = HFDMRG.SliceLayout(fill(8, 5))
+        V6 = zeros(8, 8, 8, 8, 5, 5)
+        projection = HFDMRG.SlicedBasisBackend(layout, V6)
+        cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+        kw = (; maxiter = 2, block_partition = layout, cutoff = 0.0,
+            scf_cutoff = Inf, verbose = false)
+        histories = Vector{Float64}[]
+        run(backend) = begin
+            history = Float64[]
+            result = solve_hfdmrg(H, backend, up0; kw...,
+                observer = info -> (push!(history, info.energy); false))
+            push!(histories, history)
+            result
+        end
+        density, projected, cache = run(V), run(projection), run(cached)
+        @test maximum(abs, histories[1] - histories[2]) <= 2e-12
+        @test maximum(abs, histories[1] - histories[3]) <= 2e-12
+        @test maximum((norm(density[1]' * density[1] - I),
+                       norm(projected[1] * projected[1]' - density[1] * density[1]'),
+                       norm(cache[1] * cache[1]' - density[1] * density[1]'))) <= 2e-12
+        rhf_residual(C) = norm(H * C - C * (C' * H * C))
+        @test rhf_residual(density[1]) < rhf_residual(up0)
+        @test abs(density[3] - 2dot(density[1] * density[1]', H)) <= 2e-12
+        common = solve_hfdmrg(H, V, up0, dn0; kw...)
+        split = solve_hfdmrg(H, Hdn, V, up0, dn0; kw...)
+        @test max(norm(common[1]' * common[1] - I),
+                  norm(common[2]' * common[2] - I)) <= 2e-12
+        @test max(rhf_residual(common[1]), rhf_residual(common[2])) <
+            max(rhf_residual(up0), rhf_residual(dn0))
+        @test abs(common[3] - dot(common[1] * common[1]' +
+            common[2] * common[2]', H)) <= 2e-12
+        @test max(norm(split[1]' * split[1] - I),
+                  norm(split[2]' * split[2] - I)) <= 2e-12
+        @test abs(split[3] - dot(split[1] * split[1]', H) -
+            dot(split[2] * split[2]', Hdn)) <= 2e-12
+    end
+
     @testset "Environment cutoff control" begin
         spectrum = [1.0, 1e-7, 1e-9, 1e-11, 1e-13]
         for (cutoff, expected) in ((0.0, 5), (1e-12, 4), (1e-10, 3), (1e-6, 1))

@@ -642,6 +642,18 @@ function eigsym(A, diagnostics = nothing)
     E.values, E.vectors
 end
 
+function _eigsym_occupied(A, nocc, diagnostics = nothing)
+    if !(A isa Matrix{Float64} && 0 < nocc <= fld(size(A, 1), 8))
+        return eigsym(A, diagnostics)
+    end
+    start_ns = diagnostics === nothing ? 0 : time_ns()
+    E = eigen(Symmetric(A), 1:nocc)
+    diagnostics === nothing || (diagnostics.eigsym_calls += 1)
+    diagnostics === nothing ||
+        (diagnostics.eigsym_seconds += (time_ns() - start_ns) * 1.0e-9)
+    E.values, E.vectors
+end
+
 function _rel_converged(energy_old, energy_new, cutoff)
     scale = max(1.0, abs(energy_new))
     abs(energy_old - energy_new) < cutoff * scale
@@ -734,17 +746,17 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
             end
             for s = 1:4
                 if restricted
-                    evals, evecs = eigsym(Fup, _diagnostics)
+                    evals, evecs = _eigsym_occupied(Fup, Nup, _diagnostics)
                     psiup = evecs[:, 1:Nup]
                     rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
                     Fup = copy(H1B)
                     vee_add_fock_r!(Fup, rhoup, win)
                     energy = tr(rhoup * (Fup + H1B))
                 else
-                    evals, evecs = eigsym(Fup, _diagnostics)
+                    evals, evecs = _eigsym_occupied(Fup, Nup, _diagnostics)
                     psiup = evecs[:, 1:Nup]
                     rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
-                    evals, evecs = eigsym(Fdn, _diagnostics)
+                    evals, evecs = _eigsym_occupied(Fdn, Ndn, _diagnostics)
                     psidn = evecs[:, 1:Ndn]
                     rhodn = (1 - lambda[b]) * rhodn + lambda[b] * psidn * psidn'
                     Fup, Fdn = copy(H1B), copy(H1B)
@@ -992,10 +1004,10 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
             Fup, Fdn = copy(H1Bup), copy(H1Bdn)
             vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
             for s = 1:4
-                evals, evecs = eigsym(Fup, _diagnostics)
+                evals, evecs = _eigsym_occupied(Fup, Nup, _diagnostics)
                 psiup = evecs[:, 1:Nup]
                 rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
-                evals, evecs = eigsym(Fdn, _diagnostics)
+                evals, evecs = _eigsym_occupied(Fdn, Ndn, _diagnostics)
                 psidn = evecs[:, 1:Ndn]
                 rhodn = (1 - lambda[b]) * rhodn + lambda[b] * psidn * psidn'
                 Fup, Fdn = copy(H1Bup), copy(H1Bdn)
