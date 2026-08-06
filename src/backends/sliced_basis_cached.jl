@@ -21,6 +21,14 @@ struct SlicedCachedBlockState
     Wswap::Matrix{Float64}
 end
 
+struct SlicedCachedCrossScratch
+    density::Matrix{Float64}
+    physical_work::Matrix{Float64}
+    mixed::Matrix{Float64}
+    exchange::Matrix{Float64}
+    pair_field::Vector{Float64}
+end
+
 struct SlicedBasisCachedWindow{T}
     V::T
     layout::SliceLayout
@@ -30,8 +38,7 @@ struct SlicedBasisCachedWindow{T}
     center_slices::UnitRange{Int}
     L::SlicedCachedBlockState
     R::SlicedCachedBlockState
-    VLR::Array{Float64,4}
-    VRL::Array{Float64,4}
+    scratch::SlicedCachedCrossScratch
 end
 
 const _bench_timing = Dict{Symbol, Float64}(
@@ -180,6 +187,74 @@ end
 
 _slice_phi(layout, ra, phi, s) = view(phi, (layout.offs[s] - first(ra) + 2):(layout.offs[s + 1] - first(ra) + 1), :)
 
+function _two_sided!(Y, X, A, work, beta = 0.0)
+    tmp = view(work, 1:size(A, 1), 1:size(A, 2))
+    mul!(tmp, X, A)
+    mul!(Y, transpose(A), tmp, 1.0, beta)
+end
+
+function _transform_channels!(dest, source, A, source_cols, work)
+    mold, mnew = size(A)
+    for (j, oldj) in enumerate(source_cols)
+        _two_sided!(reshape(view(dest, :, j), mnew, mnew),
+            reshape(view(source, :, oldj), mold, mold), A, work)
+    end
+end
+
+function _add_tensor_transform!(G, X, L, R, stage, work, input, output;
+        pairtranspose = false)
+    p, r = size(L); q = size(R, 1)
+    size(R, 2) == r || error("tensor transforms must have the same output rank")
+    S = view(stage, 1:r^2, 1:q^2)
+    for col = 1:q^2
+        _two_sided!(reshape(view(S, :, col), r, r),
+            reshape(view(X, :, col), p, p), L, work)
+    end
+    Xin, Yout = view(input, 1:q, 1:q), view(output, 1:r, 1:r)
+    for row = 1:r^2
+        for b = 1:q, a = 1:q
+            Xin[a, b] = S[row, a + (b - 1) * q]
+        end
+        _two_sided!(Yout, Xin, R, work)
+        if pairtranspose
+            for col = 1:r^2
+                G[col, row] += Yout[col]
+            end
+        else
+            for col = 1:r^2
+                G[row, col] += Yout[col]
+            end
+        end
+    end
+    nothing
+end
+
+function _add_absorbed_channels!(W, Wswap, pair_offs, absorbed, exterior, newra,
+        phi, backend, work, input)
+    dims = backend.layout.dims
+    for n in absorbed
+        Cn = _slice_phi(backend.layout, newra, phi, n)
+        dn = dims[n]; X = view(input, 1:dn, 1:dn)
+        for (j, s) in enumerate(exterior)
+            ds = dims[s]; Vns = _slice_vee(backend.V, n, s)
+            Vsn = _slice_vee(backend.V, s, n)
+            for b = 1:ds, a = 1:ds
+                col = first(_pair_range(pair_offs, j)) + a + (b - 1) * ds - 1
+                for d = 1:dn, c = 1:dn
+                    X[c, d] = Vns[c, d, a, b]
+                end
+                _two_sided!(reshape(view(W, :, col), size(phi, 2), size(phi, 2)),
+                    X, Cn, work, 1.0)
+                for d = 1:dn, c = 1:dn
+                    X[c, d] = Vsn[a, b, c, d]
+                end
+                _two_sided!(reshape(view(Wswap, :, col), size(phi, 2), size(phi, 2)),
+                    X, Cn, work, 1.0)
+            end
+        end
+    end
+end
+
 function _incremental_cached_state(side, old::SlicedCachedBlockState, cra, phi_in, A,
     raV, backend::SlicedBasisBackendCached)
     phi = Float64.(phi_in); layout, dims = backend.layout, backend.layout.dims
@@ -189,33 +264,29 @@ function _incremental_cached_state(side, old::SlicedCachedBlockState, cra, phi_i
     old.exterior_slices == expected || error("cached exterior span is inconsistent")
     mnew, mold = size(phi, 2), size(old.phi, 2); pair_offs = _pair_offs(layout, exterior)
     W, Wswap = zeros(Float64, mnew^2, pair_offs[end]), zeros(Float64, mnew^2, pair_offs[end])
-    RA = _pair_map_mat(A)
     oldcols = first(_state_pair_range(old, first(exterior))):last(_state_pair_range(old, last(exterior)))
-    mul!(W, RA', view(old.W, :, oldcols))
-    mul!(Wswap, RA', view(old.Wswap, :, oldcols))
-    Rnew = [_pair_map_mat(_slice_phi(layout, newra, phi, n)) for n in absorbed]
-    for (i, n) in enumerate(absorbed)
-        dn = dims[n]
-        for (j, s) in enumerate(exterior)
-            ds = dims[s]
-            mul!(view(W, :, _pair_range(pair_offs, j)), Rnew[i]',
-                reshape(_slice_vee(backend.V, n, s), dn * dn, ds * ds), 1.0, 1.0)
-            mul!(view(Wswap, :, _pair_range(pair_offs, j)), Rnew[i]',
-                transpose(reshape(_slice_vee(backend.V, s, n), ds * ds, dn * dn)),
-                1.0, 1.0)
-        end
-    end
+    maxdim = max(mold, maximum(dims[absorbed]))
+    work = zeros(Float64, maxdim, mnew)
+    input = zeros(Float64, maxdim, maxdim)
+    _transform_channels!(W, old.W, A, oldcols, work)
+    _transform_channels!(Wswap, old.Wswap, A, oldcols, work)
+    _add_absorbed_channels!(W, Wswap, pair_offs, absorbed, exterior, newra, phi,
+        backend, work, input)
+
     G = zeros(Float64, mnew^2, mnew^2)
-    tmp = zeros(Float64, mnew^2, max(mold^2, maximum(abs2.(dims[absorbed]))))
-    _add_grouped!(G, RA, old.G, RA, tmp)
-    for (i, n) in enumerate(absorbed)
-        Rn = Rnew[i]; _add_grouped!(
-            G, RA, view(old.W, :, _state_pair_range(old, n)), Rn, tmp)
-        _add_grouped!(G, Rn,
-            transpose(view(old.Wswap, :, _state_pair_range(old, n))), RA, tmp)
-        for (j, s) in enumerate(absorbed)
+    stage = zeros(Float64, mnew^2, max(mold^2, maximum(abs2.(dims[absorbed]))))
+    output = zeros(Float64, mnew, mnew)
+    _add_tensor_transform!(G, old.G, A, A, stage, work, input, output)
+    for n in absorbed
+        Cn = _slice_phi(layout, newra, phi, n)
+        _add_tensor_transform!(G, view(old.W, :, _state_pair_range(old, n)),
+            A, Cn, stage, work, input, output)
+        _add_tensor_transform!(G, view(old.Wswap, :, _state_pair_range(old, n)),
+            A, Cn, stage, work, input, output; pairtranspose = true)
+        for s in absorbed
+            Cs = _slice_phi(layout, newra, phi, s)
             M = reshape(_slice_vee(backend.V, n, s), dims[n]^2, dims[s]^2)
-            _add_grouped!(G, Rn, M, Rnew[j], tmp)
+            _add_tensor_transform!(G, M, Cn, Cs, stage, work, input, output)
         end
     end
     SlicedCachedBlockState(newra, phi, G, exterior, pair_offs, W, Wswap)
@@ -280,30 +351,13 @@ function vee_window(Lvee::SlicedCachedBlockState, Rvee::SlicedCachedBlockState,
     center_slices = (first(_slice_local(backend.layout, first(Cra))):
         first(_slice_local(backend.layout, last(Cra))))
 
-    VLR = zeros(Float64, ml, ml, mr, mr)
-    VRL = zeros(Float64, mr, mr, ml, ml)
-    VLR_mat = reshape(VLR, ml * ml, mr * mr)
-    VRL_mat = reshape(VRL, mr * mr, ml * ml)
     maxd = maximum(dims)
-    Utmp_R = zeros(Float64, maxd * maxd, mr * mr)
-    Utmp_L = zeros(Float64, maxd * maxd, ml * ml)
-    for s in _active_slices(backend.layout, Rra)
-        ds = dims[s]
-        Uview = view(Utmp_R, 1:(ds * ds), :)
-        _pair_map_mat!(Uview, _slice_phi(backend.layout, Rra, Rvee.phi, s))
-        mul!(VLR_mat, view(Lvee.W, :, _state_pair_range(Lvee, s)),
-            Uview, 1.0, 1.0)
-    end
-    for s in _active_slices(backend.layout, Lra)
-        ds = dims[s]
-        Uview = view(Utmp_L, 1:(ds * ds), :)
-        _pair_map_mat!(Uview, _slice_phi(backend.layout, Lra, Lvee.phi, s))
-        mul!(VRL_mat, view(Rvee.W, :, _state_pair_range(Rvee, s)),
-            Uview, 1.0, 1.0)
-    end
+    maxk = max(ml, mr)
+    scratch = SlicedCachedCrossScratch(zeros(maxd, maxd), zeros(maxd, maxk),
+        zeros(maxk, maxd), zeros(maxk, maxd), zeros(maxk^2))
 
     SlicedBasisCachedWindow(backend.V, backend.layout, ml, lc, mr, center_slices,
-        Lvee, Rvee, VLR, VRL)
+        Lvee, Rvee, scratch)
 end
 
 # Pair-grouped tensors store T[x,z;y,w]; Wswap reverses the grouped region pairs.
@@ -331,6 +385,69 @@ function _add_cached_sector!(Fup, Fdn, rhoup, rhodn, V, xoff, yoff, nx, ny,
     nothing
 end
 
+function _add_cross_direct!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
+        layout, scratch, ::Val{restricted}) where {restricted}
+    kx, ky = size(X.phi, 2), size(Y.phi, 2)
+    yrange = yoff + 1:yoff + ky
+    for s in _active_slices(layout, Y.ra)
+        P = _slice_phi(layout, Y.ra, Y.phi, s); d = size(P, 1)
+        density = view(scratch.density, 1:d, 1:d)
+        work = view(scratch.physical_work, 1:d, 1:ky)
+        mul!(work, P, view(rhoup, yrange, yrange))
+        mul!(density, work, transpose(P))
+        if !restricted
+            mul!(work, P, view(rhodn, yrange, yrange))
+            mul!(density, work, transpose(P), 1.0, 1.0)
+        end
+        W = _packed_tensor(X.W, X, s, kx, d)
+        pair = view(scratch.pair_field, 1:kx^2)
+        for z = 1:kx, x = 1:kx
+            value = 0.0
+            for b = 1:d, a = 1:d
+                value = muladd(W[x, z, a, b], density[a, b], value)
+            end
+            pair[x + (z - 1) * kx] = value
+        end
+        factor = restricted ? 2.0 : 1.0
+        for z = 1:kx, x = 1:kx
+            value = factor * pair[x + (z - 1) * kx]
+            Fup[xoff + x, xoff + z] += value
+            restricted || (Fdn[xoff + x, xoff + z] += value)
+        end
+    end
+    nothing
+end
+
+function _add_cross_exchange!(F, rho, X, Y, xoff, yoff, layout, scratch)
+    kx, ky = size(X.phi, 2), size(Y.phi, 2)
+    xrange, yrange = xoff + 1:xoff + kx, yoff + 1:yoff + ky
+    for s in _active_slices(layout, Y.ra)
+        P = _slice_phi(layout, Y.ra, Y.phi, s); d = size(P, 1)
+        mixed = view(scratch.mixed, 1:kx, 1:d)
+        field = view(scratch.exchange, 1:kx, 1:d)
+        mul!(mixed, view(rho, xrange, yrange), transpose(P))
+        W = _packed_tensor(X.W, X, s, kx, d)
+        for b = 1:d, i = 1:kx
+            value = 0.0
+            for a = 1:d, k = 1:kx
+                value = muladd(W[i, k, a, b], mixed[k, a], value)
+            end
+            field[i, b] = value
+        end
+        mul!(view(F, xrange, yrange), field, P, -1.0, 1.0)
+    end
+    nothing
+end
+
+function _add_cross!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff, layout,
+        scratch, restricted::Val{r}) where r
+    _add_cross_direct!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff, layout,
+        scratch, restricted)
+    _add_cross_exchange!(Fup, rhoup, X, Y, xoff, yoff, layout, scratch)
+    r ||
+        _add_cross_exchange!(Fdn, rhodn, X, Y, xoff, yoff, layout, scratch)
+end
+
 function _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
     ml, lc, mr = win.ml, win.lc, win.mr
     roff = ml + lc
@@ -349,8 +466,8 @@ function _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
             grouped, restricted)
         coff += ds
     end
-    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.VLR, 0, roff, ml, mr,
-        grouped, restricted)
+    _add_cross!(Fup, Fdn, rhoup, rhodn, win.L, win.R, 0, roff, win.layout,
+        win.scratch, restricted)
 
     coff = ml
     for s in win.center_slices
@@ -379,8 +496,8 @@ function _add_cached_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
         coff += ds
     end
 
-    _add_cached_sector!(Fup, Fdn, rhoup, rhodn, win.VRL, roff, 0, mr, ml,
-        grouped, restricted)
+    _add_cross!(Fup, Fdn, rhoup, rhodn, win.R, win.L, roff, 0, win.layout,
+        win.scratch, restricted)
     coff = ml
     for s in win.center_slices
         ds = dims[s]

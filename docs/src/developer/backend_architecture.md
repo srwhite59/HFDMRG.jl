@@ -276,7 +276,7 @@ The leading storage terms are:
 | Density-density | `O(N^2)` | `O(length(ra)*k^2 + length(raV)*k^2 + k^4)` | Dense retained-block and cross-block tensors; no global `N^4` object. |
 | Density plus target residual | Base plus `O(N*t + P^2)` | Base plus `O(k*t)` | Projection/lift `O(w^2*t + w*t^2)` and exact pair contraction `O(t^4)`. |
 | Sliced projection | Fixed `O(ns^2*nj^4)` or ragged `O(S2^2)` | Primarily the block basis | Builds full-`N` density and Fock intermediates, requiring `O(N^2 + N*w)` temporary storage per Fock route. |
-| Cached sliced | Same sliced input | About `O(length(ra)*k + k^4 + k^2*S2ext)` | Whole-slice windows retain `O(kL^2*kR^2)` cross tensors and reference block caches. Their local Fock work is independent of `ns` at fixed ranks and center; split windows delegate entirely to projection. |
+| Cached sliced | Same sliced input | About `O(length(ra)*k + k^4 + k^2*S2ext)` | Whole-slice windows reference block caches and retain only `O(kmax^2 + kmax*dmax + dmax^2)` scratch. Left--right fields contract lazily from exterior channels in about `O(S2R*kL^2 + S2L*kR^2)` work per Fock; split windows delegate entirely to projection. |
 
 These terms describe interaction-specific storage, not the complete solver.
 Actual time depends on block ranks, center placement, slice sizes, BLAS shape,
@@ -295,6 +295,14 @@ pair-grouped order. Its two ordered channel orientations cover only slices
 still outside the block, as separate `k² × S2ext` packed matrices with
 range-local ragged offsets and no padding. Absorption updates all four
 old/new sectors exactly before discarding the newly internal channels.
+
+Successor construction applies each retained basis map as staged two-sided
+matrix transformations. It does not materialize `A kron A`: exterior-channel
+work is cubic rather than quartic in equal old/new rank, and transforming the
+old four-index block interaction is quintic rather than sextic. Aligned
+windows likewise do not form eager `VLR` or `VRL` tensors. Each Fock call
+projects the current opposite-region density onto its physical slices and
+contracts direct and exchange fields from the retained ordered channels.
 
 The accepted cached-sliced design and frozen-Be evidence are preserved in
 `notes/cached_sliced_performance_final_2026-07-20.md`.

@@ -3,7 +3,7 @@
 Date: 2026-08-05
 Base: `main@bfebe9a21b40e0e96ee41b356b85e7adfdc675dd`
 Branch: `perf/cached-sliced-tensor-kernels-20260805`
-Status: approved bounded implementation design; no chain calculation authorized
+Status: bounded implementation complete; awaiting review; no chain calculation run
 
 ## Outcome And Boundary
 
@@ -254,6 +254,37 @@ use approximately 600 slices, `d=4`, and rank 20. It compares old formulas kept
 only in scratch with the new operations for numerical parity, construction
 time, allocation, and temporary memory. It is not a solver run or publication
 benchmark. No full H20 replay occurs until separate review.
+
+## Implementation Evidence
+
+The generic unsymmetrized backend now uses the staged transformations and lazy
+cross fields above. `VLR` and `VRL` are absent from aligned window state;
+distinct ordered `W` and `Wswap` channels remain. No sweep, backend-API, cache
+representation, symmetry, or solver-policy surface changed.
+
+All 633 package tests pass. The independent fixed/ragged cached-versus-
+projection verifier reports maximum window Fock error
+`5.10702591327572e-15 Ha` and maximum sweep-energy difference
+`1.0658141036401503e-14 Ha`. Aligned fixed and ragged RHF/UHF Fock additions
+allocate zero bytes in steady execution. The Documenter build, doctests, export
+checks, and cross-references pass.
+
+A one-thread synthetic check used `S=600`, `d=4`, `k=20`, random ordered
+unsymmetrized channels, and formulas from the removed implementation kept only
+in disposable scratch. It was not an HFDMRG solve:
+
+| Kernel | Relative error | Old time | New time | Old allocation | New allocation |
+|---|---:|---:|---:|---:|---:|
+| Exterior-channel transform | `5.24e-16` | `0.06369 s` | `0.01079 s` | `32.0 MB` | `30.7 MB` |
+| Internal-block transform | `7.40e-16` | `0.00504 s` | `0.000955 s` | `3.88 MB` | `2.60 MB` |
+| Cross-window setup plus five Fock calls | `2.39e-15` | `0.06321 s` | `0.02736 s` | `1.40 MB` | `20.4 kB` |
+
+The staged channel and block transformations were `5.90x` and `5.27x` faster;
+the lazy cross route was `2.31x` faster and removed the retained pair-space
+window tensor. Staged channel and lazy cross kernels allocated zero after their
+outputs and reusable scratch were supplied. These are bounded engineering
+measurements, not H20 or publication timings. Persistent two-orientation
+channel storage remains the next ordinary-path limitation.
 
 ## Closed File Set And Budget
 

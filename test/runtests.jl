@@ -1135,6 +1135,10 @@ try
                 relerr(Eu[1], Eu[2]), relerr(Eu[1], Eu[3])))
         end
 
+        fock_alloc(F, rho, win) = @allocated HFDMRG.vee_add_fock_r!(F, rho, win)
+        fock_alloc(Fup, Fdn, rhoup, rhodn, win) =
+            @allocated HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+
         withenv("HFDMRG_BENCH_TIMING" => "1") do
             HFDMRG._bench_timing_reset!()
             for dims in ([2, 2, 2, 2, 2, 2, 2, 2, 2],
@@ -1276,6 +1280,15 @@ try
         Rproj = HFDMRG.vee_init_block(:right, R.ra, 1:(first(R.ra) - 1), R.phi, projection)
         @test fock_error((win, HFDMRG.vee_window(L, Rdirect, Cra, cached),
             HFDMRG.vee_window(Lproj, Rproj, Cra, projection)), 2 + length(Cra) + 3) <= 1e-11
+        w = 2 + length(Cra) + 3
+        rho = Matrix(Symmetric(randn(rng, w, w)))
+        rhodn = Matrix(Symmetric(randn(rng, w, w)))
+        F, Fup, Fdn = zeros(w, w), zeros(w, w), zeros(w, w)
+        HFDMRG.vee_add_fock_r!(F, rho, win)
+        HFDMRG.vee_add_fock!(Fup, Fdn, rho, rhodn, win)
+        fill!(F, 0); fill!(Fup, 0); fill!(Fdn, 0)
+        @test fock_alloc(F, rho, win) == 0
+        @test fock_alloc(Fup, Fdn, rho, rhodn, win) == 0
         @test (routes[:cache_incremental_calls], routes[:cache_fallback_calls],
             routes[:window_local_calls], routes[:window_projection_calls]) == (1.0, 0.0, 1.0, 0.0)
 
