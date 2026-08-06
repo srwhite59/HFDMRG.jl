@@ -10,6 +10,10 @@ H = Matrix(Diagonal(onsite) + hopping)
 V = [0.28 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
 
 one_body_orbitals = eigen(Symmetric(H)).vectors
+for orbital in eachcol(one_body_orbitals)
+    pivot = argmax(abs.(orbital))
+    orbital[pivot] < 0 && (orbital .*= -1)
+end
 psiup0 = hcat(one_body_orbitals[:, 1], one_body_orbitals[:, 2],
     cos(0.38) * one_body_orbitals[:, 3] +
     sin(0.38) * one_body_orbitals[:, 7])
