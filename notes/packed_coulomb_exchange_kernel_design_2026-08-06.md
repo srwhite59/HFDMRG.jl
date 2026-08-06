@@ -183,7 +183,16 @@ adding a generic pair framework or persistent lookup tables.
    middle-window audit at one Julia and one BLAS thread. Require exact finite
    output, roundoff symmetry/composition parity, and no exchange timing
    regression. A reduction of at least 25% from the accepted 3.546315625 ms
-   two-spin exchange baseline is the useful-performance gate.
+   two-spin exchange baseline is the useful-performance gate. Also require at
+   least a 20% reduction of the complete cross kernel from 4.4458948 ms to at
+   most 3.55671584 ms, so fusion overhead cannot erase the exchange saving.
+9. **Thread-setting record.** Repeat the saved-window measurement with the
+   current host production/default BLAS-thread setting and record that setting
+   explicitly. The one-thread measurement remains the formal acceptance gate.
+10. **Small-rank guard.** Run warmed synthetic compact windows at `d=4` and
+    ranks near 6 and 10, including an H10-shaped unequal-rank case. Require
+    exchange and complete-cross times no worse than the ordered-loop oracle
+    beyond 5% timing noise, identical routing, and zero steady allocation.
 
 The saved-window input SHA-256 is
 `2a64d04123330b4e4420ba2e59434ff3842c04c305d7ab44997ab3565141fd20`.
@@ -192,6 +201,11 @@ The accepted audit runner and log SHA-256 values are respectively
 and `b978c862c8182a576d9f9ab7586322dab718683075a62910e6042cc27383fbda`.
 
 ## Stop conditions and non-goals
+
+The implementation authorization is kernel-only: validation items that invoke
+`solve_hfdmrg` remain deferred until a later solver-run authorization. Focused
+backend algebra, routing, allocation, and saved-window gates above must pass
+before the implementation commit.
 
 Stop if correctness requires ordered persistent tensors, nonzero steady
 allocation, a generic cache framework, core/backend-API changes, or relaxed
