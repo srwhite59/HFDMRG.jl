@@ -19,6 +19,7 @@ struct _SlicedCoulombScratch
     exchange_dn::Matrix{Float64}
     pair_density::Vector{Float64}
     pair_field::Vector{Float64}
+    exterior_pair::Vector{Float64}
 end
 struct _SlicedCoulombWindow{T}
     V::T
@@ -233,9 +234,13 @@ function vee_window(L::_SlicedCoulombBlockState, R::_SlicedCoulombBlockState, Cr
     end
     _bench_timing_enabled() && (_bench_timing[:window_local_calls] += 1)
     ml, mr, maxd = size(L.phi, 2), size(R.phi, 2), maximum(backend.layout.dims)
-    maxk = max(ml, mr); scratch = _SlicedCoulombScratch(zeros(maxd, maxd),
+    maxk = max(ml, mr)
+    exterior_pairs = ml < 12 ? 0 : sum(_npair(backend.layout.dims[s])
+        for s in _active_slices(backend.layout, R.ra))
+    scratch = _SlicedCoulombScratch(zeros(maxd, maxd),
         zeros(maxd, maxk), zeros(maxk, maxd), zeros(maxk, maxd),
-        zeros(maxk, maxd), zeros(maxk, maxd), zeros(maxk^2), zeros(maxk^2))
+        zeros(maxk, maxd), zeros(maxk, maxd), zeros(maxk^2), zeros(maxk^2),
+        zeros(exterior_pairs))
     centers = (first(_slice_local(backend.layout, first(Cra))):
         first(_slice_local(backend.layout, last(Cra))))
     _SlicedCoulombWindow(backend.V, backend.layout, ml, length(Cra), mr, centers,
@@ -259,8 +264,8 @@ function _pack_total_density!(v, up, dn, off, n, ::Val{restricted}) where restri
         v[_sym_pair(i, j)] = _sym_scale(i, j) * value
     end
 end
-function _add_coulomb_cross_direct!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
-        layout, scratch, ::Val{restricted}) where restricted
+function _add_coulomb_cross_direct_ordered!(Fup, Fdn, rhoup, rhodn, X, Y, xoff,
+        yoff, layout, scratch, ::Val{restricted}) where restricted
     kx, ky = size(X.phi, 2), size(Y.phi, 2); Kx = _npair(kx)
     _pack_total_density!(scratch.pair_density, rhoup, rhodn, xoff, kx,
         Val(restricted)); fill!(view(scratch.pair_field, 1:Kx), 0)
@@ -282,8 +287,7 @@ function _add_coulomb_cross_direct!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
             scratch.pair_field[I] += W[I, A] * _sym_scale(a, b) * density[a, b]
         end
         for b = 1:d, a = 1:b
-            A = _sym_pair(a, b)
-            value = 0.0
+            A = _sym_pair(a, b); value = 0.0
             for I = 1:Kx
                 value = muladd(W[I, A], scratch.pair_density[I], value)
             end
@@ -303,6 +307,60 @@ function _add_coulomb_cross_direct!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
             i != k && (Fdn[xoff + k, xoff + i] += value)
         end
     end
+end
+function _add_coulomb_cross_direct_mul!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
+        layout, scratch, ::Val{restricted}) where restricted
+    kx, ky = size(X.phi, 2), size(Y.phi, 2); Kx = _npair(kx)
+    _pack_total_density!(scratch.pair_density, rhoup, rhodn, xoff, kx,
+        Val(restricted))
+    yrange = yoff + 1:yoff + ky
+    slices = _active_slices(layout, Y.ra); qoff = 0
+    for s in slices
+        P = _slice_phi(layout, Y.ra, Y.phi, s); d = size(P, 1)
+        density = view(scratch.density, 1:d, 1:d)
+        work = view(scratch.physical_work, 1:d, 1:ky)
+        mul!(work, P, view(rhoup, yrange, yrange)); mul!(density, work, transpose(P))
+        if restricted
+            density .*= 2
+        else
+            mul!(work, P, view(rhodn, yrange, yrange))
+            mul!(density, work, transpose(P), 1.0, 1.0)
+        end
+        qrange = qoff + 1:qoff + _npair(d)
+        _pack_sym!(view(scratch.exterior_pair, qrange), density); qoff = last(qrange)
+    end
+    cols = first(_sym_state_range(X, first(slices))):last(
+        _sym_state_range(X, last(slices)))
+    W = view(X.W, :, cols); q = view(scratch.exterior_pair, 1:qoff)
+    mul!(view(scratch.pair_field, 1:Kx), W, q)
+    mul!(q, transpose(W), view(scratch.pair_density, 1:Kx))
+    qoff = 0
+    for s in slices
+        P = _slice_phi(layout, Y.ra, Y.phi, s); d = size(P, 1)
+        density = view(scratch.density, 1:d, 1:d)
+        work = view(scratch.physical_work, 1:d, 1:ky)
+        qrange = qoff + 1:qoff + _npair(d)
+        _unpack_sym!(density, view(q, qrange)); qoff = last(qrange)
+        mul!(work, density, P)
+        mul!(view(Fup, yrange, yrange), transpose(P), work, 1.0, 1.0)
+        restricted || mul!(view(Fdn, yrange, yrange), transpose(P), work, 1.0, 1.0)
+    end
+    for k = 1:kx, i = 1:k
+        I = _sym_pair(i, k); value = scratch.pair_field[I] / _sym_scale(i, k)
+        Fup[xoff + i, xoff + k] += value
+        i != k && (Fup[xoff + k, xoff + i] += value)
+        if !restricted
+            Fdn[xoff + i, xoff + k] += value
+            i != k && (Fdn[xoff + k, xoff + i] += value)
+        end
+    end
+end
+function _add_coulomb_cross_direct!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
+        layout, scratch, restricted)
+    size(X.phi, 2) < 12 && return _add_coulomb_cross_direct_ordered!(Fup, Fdn,
+        rhoup, rhodn, X, Y, xoff, yoff, layout, scratch, restricted)
+    _add_coulomb_cross_direct_mul!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
+        layout, scratch, restricted)
 end
 @inline function _exchange_scatter!(fup, fdn, mup, mdn, i, k, a, b, value,
         ::Val{restricted}) where restricted

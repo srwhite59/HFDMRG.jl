@@ -1479,6 +1479,23 @@ try
             wrho, wrhodn)
         wref = focks(widewin(wide_projection), wrho, wrhodn)
         @test maximum(norm(wnew[i] - wref[i], Inf) for i = 1:3) < 2e-10
+        @test isempty(HFDMRG.vee_window(wideL, wideR, 13:16,
+            wide_compact).scratch.exterior_pair)
+        wideLmul = grow_coulomb(L0, :left, 5:12, 12, wide_compact)
+        mulwin = HFDMRG.vee_window(wideLmul, wideR, 13:16, wide_compact)
+        @test length(mulwin.scratch.exterior_pair) == 30
+        mulrho, mulrhodn = (Matrix(Symmetric(randn(rng, 25, 25))) for _ = 1:2)
+        mullp = HFDMRG.vee_init_block(:left, wideLmul.ra, 13:28,
+            wideLmul.phi, wide_projection)
+        mulrp = HFDMRG.vee_init_block(:right, wideR.ra, 1:16,
+            wideR.phi, wide_projection)
+        mulref = focks(HFDMRG.vee_window(mullp, mulrp, 13:16,
+            wide_projection), mulrho, mulrhodn)
+        mulgot = focks(mulwin, mulrho, mulrhodn)
+        @test maximum(norm(mulgot[i] - mulref[i], Inf) for i = 1:3) < 2e-10
+        mulF, mulFu, mulFd = zeros(25, 25), zeros(25, 25), zeros(25, 25)
+        @test alloc_r(mulF, mulrho, mulwin) == 0
+        @test alloc_u(mulFu, mulFd, mulrho, mulrhodn, mulwin) == 0
         H = Matrix(Diagonal(range(-2.0, 2.0; length = 14))) + 0.01 * Matrix(Symmetric(randn(rng, 14, 14)))
         Hdn = H + Diagonal(range(-0.01, 0.01; length = 14))
         up, dn = orthonormal_cols(rng, 14, 1), orthonormal_cols(rng, 14, 1)

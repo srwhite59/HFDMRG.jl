@@ -2,8 +2,8 @@
 
 Date: 2026-08-06
 
-Status: scratch attribution accepted; no production implementation authorized
-or included.
+Status: scratch attribution accepted and implemented as a separately guarded
+kernel milestone after packed-exchange promotion.
 
 ## Outcome
 
@@ -80,6 +80,28 @@ regression.
 
 No H20/H12/H16 solve, direct-kernel source edit, public API change, or cache
 lifecycle change is part of this audit.
+
+## Implemented guard and validation
+
+The complete-cross measurement exposed a small-rank boundary that the isolated
+direct timing could not establish. The implementation therefore keeps the
+ordered direct kernel for left ranks below 12 and uses the two-`mul!` kernel at
+rank 12 and above. This is a kernel-level selection inside one compact backend;
+it does not construct two cache states or fall back per window. Guarded windows
+allocate no exterior-pair scratch.
+
+On the authenticated H20 middle window at one BLAS thread, the implemented
+kernel reduced direct time from 0.717 to 0.366 ms (49.0%) and complete cross
+time from 3.094 to 2.709 ms (12.4%). At the host's eight-thread BLAS setting,
+direct time fell from 0.837 to 0.301 ms (64.1%) and complete cross time from
+3.119 to 2.962 ms (5.0%). The maximum direct and complete-cross differences
+were `4.440892098500626e-16`, and all compared calls allocated zero bytes in
+steady state. The active H20 scratch is 24,000 bytes.
+
+Rank-10 and rank-6 controls take the unchanged ordered arithmetic and allocate
+no new window scratch. Package tests explicitly exercise both sides of the
+rank-12 guard, unequal left/right ranks, projection parity, and zero steady
+allocation. The complete package suite and cached/projection verifier passed.
 
 ## Scratch evidence
 
