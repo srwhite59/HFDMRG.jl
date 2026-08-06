@@ -2143,10 +2143,47 @@ try
             @test HFDMRG._history_uhf_model(H, Hdn, projection,
                 orthonormal_cols(rng, N, min(N - 1, 5))) === nothing
         end
+        for dims in (fill(2, 8), repeat([1, 2], 6))
+            layout, V = sliced_fixture(dims); N = sum(dims)
+            projection = HFDMRG.SlicedBasisBackend(layout, V)
+            compact_vee = V isa Array{Float64,6} ? V :
+                HFDMRG.SlicedVeeRagged(layout, V)
+            compact = HFDMRG._SlicedBasisBackendCachedCoulomb(layout, compact_vee)
+            Q = orthonormal_cols(rng, N, min(3, N - 1))
+            H = Matrix(Symmetric(randn(rng, N, N)))
+            Hdn = H + Matrix(Diagonal(range(-0.03, 0.02; length = N)))
+            Cup, Cdn = Q[:, 1:1], Q[:, 2:2]
+            ordered = HFDMRG._history_uhf_model(H, Hdn, projection, Q)
+            packed = HFDMRG._history_uhf_model(H, Hdn, compact, Q)
+            mo = HFDMRG._history_uhf_model_metrics(ordered, Q' * Cup, Q' * Cdn)
+            mp = HFDMRG._history_uhf_model_metrics(packed, Q' * Cup, Q' * Cdn)
+            Qr = @view Q[:, 1:2]
+            ro = HFDMRG._history_model_metrics(
+                HFDMRG._history_model(H, projection, Qr), Qr' * Cup)
+            rp = HFDMRG._history_model_metrics(
+                HFDMRG._history_model(H, compact, Qr), Qr' * Cup)
+            @test max(norm(mo.Fup - mp.Fup), norm(mo.Fdn - mp.Fdn),
+                abs(mo.energy - mp.energy), norm(ro.F - rp.F),
+                abs(ro.energy - rp.energy)) <= 2e-11
+            @test isapprox(mo.K, sqrt(2) * mo.pulay_error_norm;
+                atol = eps(Float64), rtol = 2eps(Float64))
+            @test isapprox(mp.K, sqrt(2) * mp.pulay_error_norm;
+                atol = eps(Float64), rtol = 2eps(Float64))
+            audits = [HFDMRG._history_uhf_physical(H, Hdn, b, Cup, Cdn)
+                for b in (projection, compact)]
+            @test audits[1] == audits[2]
+            @test all(a -> abs(a.K - sqrt(2) * hypot(
+                a.residual_up, a.residual_dn)) <= 2eps(Float64) * max(1, a.K),
+                audits)
+        end
         wide = HFDMRG.SliceLayout(fill(17, 100))
         @test HFDMRG._sliced_history_plan(wide, 1, 4) !== nothing
         @test HFDMRG._sliced_history_plan((; dims = [typemax(Int)], offs = [0, 1]),
             1, 4) === nothing
+        h20_layout = HFDMRG.SliceLayout(fill(4, 601))
+        @test HFDMRG._sliced_history_plan(h20_layout, 50, 4) === nothing
+        @test all(r -> HFDMRG._coulomb_history_plan(h20_layout, r, 4) !== nothing,
+            (50, 58))
 
         layout, V = sliced_fixture(fill(2, 10)); N = 20
         U = orthonormal_cols(rng, N, N)
@@ -2155,6 +2192,7 @@ try
         up0, dn0 = orthonormal_cols(rng, N, 1), orthonormal_cols(rng, N, 1)
         projection = HFDMRG.SlicedBasisBackend(layout, V)
         cached = HFDMRG.SlicedBasisBackendCached(layout, V)
+        compact = HFDMRG._SlicedBasisBackendCachedCoulomb(layout, V)
         policy = HFDMRG._HistoryRHFPolicy(bootstrap_sweeps = 2,
             captures = (1, 2), fifo_length = 2, cleanup_sweeps = 1,
             max_cycles = 1, target = 0.0, diis_iterations = 12,
@@ -2162,23 +2200,28 @@ try
         solver = (; _policy = policy, block_partition = layout,
             blocksize = 2, scf_cutoff = 1e-9)
         rhf = [HFDMRG._solve_history_rhf(H, b, up0; solver...)
-            for b in (projection, cached)]
+            for b in (projection, cached, compact)]
         common = [HFDMRG._solve_history_uhf(H, b, up0, up0; solver...)
-            for b in (projection, cached)]
+            for b in (projection, cached, compact)]
         split = [HFDMRG._solve_history_uhf(H, Hdn, b, up0, dn0; solver...)
-            for b in (projection, cached)]
+            for b in (projection, cached, compact)]
         projector(C) = C * C'
-        @test max(abs(rhf[1].energy - rhf[2].energy),
-            norm(projector(rhf[1].C) - projector(rhf[2].C)),
-            abs(common[1].energy - common[2].energy),
-            norm(projector(common[1].Cup) - projector(common[2].Cup)),
-            norm(projector(common[1].Cdn) - projector(common[2].Cdn)),
-            abs(split[1].energy - split[2].energy),
-            norm(projector(split[1].Cup) - projector(split[2].Cup)),
-            norm(projector(split[1].Cdn) - projector(split[2].Cdn))) <= 2e-11
-        empty = HFDMRG._solve_history_uhf(H, Hdn, cached, up0, zeros(N, 0);
-            solver...)
-        @test size(empty.Cdn) == (N, 0) && empty.residual_dn == empty.gram_dn == 0
+        @test maximum(max(abs(rhf[1].energy - rhf[i].energy),
+            norm(projector(rhf[1].C) - projector(rhf[i].C)),
+            abs(common[1].energy - common[i].energy),
+            norm(projector(common[1].Cup) - projector(common[i].Cup)),
+            norm(projector(common[1].Cdn) - projector(common[i].Cdn)),
+            abs(split[1].energy - split[i].energy),
+            norm(projector(split[1].Cup) - projector(split[i].Cup)),
+            norm(projector(split[1].Cdn) - projector(split[i].Cdn)))
+            for i = 2:3) <= 2e-11
+        for backend in (cached, compact)
+            empty = HFDMRG._solve_history_uhf(H, Hdn, backend, up0, zeros(N, 0);
+                solver...)
+            @test size(empty.Cdn) == (N, 0) && empty.residual_dn ==
+                empty.gram_dn == empty.K_beta == 0
+            @test empty.target_reached == (empty.residual <= policy.target)
+        end
         reject_policy = HFDMRG._HistoryRHFPolicy(bootstrap_sweeps = 2,
             captures = (1, 2), fifo_length = 2, cleanup_sweeps = 1,
             max_cycles = 1, target = 0.0, diis_iterations = 12,
@@ -2194,6 +2237,16 @@ try
             rejected.Cdn == ordinary[2]
         bu, bd, queue, _ = HFDMRG._history_uhf_segment(H, Hdn, cached, up0, dn0,
             2, (1, 2); block_partition = layout, blocksize = 2, scf_cutoff = 1e-9)
+        bootstrap_audit = HFDMRG._history_uhf_physical(H, Hdn, cached, bu, bd)
+        @test bootstrap_audit.K > bootstrap_audit.residual
+        target = (bootstrap_audit.residual + bootstrap_audit.K) / 2
+        stopping_policy = HFDMRG._HistoryRHFPolicy(bootstrap_sweeps = 2,
+            captures = (1, 2), fifo_length = 2, cleanup_sweeps = 1,
+            max_cycles = 1, target = target, diis_iterations = 12,
+            minimum_overlap = 0.0)
+        stopped = HFDMRG._solve_history_uhf(H, Hdn, cached, up0, dn0;
+            solver..., _policy = stopping_policy)
+        @test stopped.target_reached && stopped.cycles == 0 && stopped.K > target
         basis = HFDMRG._history_uhf_basis(queue)
         diis = HFDMRG._history_uhf_diis(
             HFDMRG._history_uhf_model(H, Hdn, cached, basis.Q),

@@ -37,10 +37,12 @@ function _history_uhf_physical(Hup, Hdn, V, Cup, Cdn)
     FupC, FdnC = Fup * Cup, Fdn * Cdn
     Rup, Rdn = FupC - Cup * (Cup' * FupC), FdnC - Cdn * (Cdn' * FdnC)
     rup, rdn = norm(Rup), norm(Rdn)
+    K_alpha, K_beta = sqrt(2) * rup, sqrt(2) * rdn
     sz = (size(Cup, 2) - size(Cdn, 2)) / 2
     (; energy = 0.5dot(Dup, Fup + Hup) + 0.5dot(Ddn, Fdn + Hdn),
        residual_up = rup, residual_dn = rdn, residual = max(rup, rdn),
-       residual_rms = hypot(rup, rdn) / sqrt(2), gram_up = _history_gram(Cup), gram_dn = _history_gram(Cdn),
+       residual_rms = hypot(rup, rdn) / sqrt(2), K_alpha, K_beta,
+       K = hypot(K_alpha, K_beta), gram_up = _history_gram(Cup), gram_dn = _history_gram(Cdn),
        s2 = sz^2 + (size(Cup, 2) + size(Cdn, 2)) / 2 - norm(Cup' * Cdn)^2)
 end
 function _history_uhf_basis(queue)
@@ -99,9 +101,10 @@ function _history_uhf_model_metrics(model, Cup, Cdn)
     FupC, FdnC = Fup * Cup, Fdn * Cdn
     Rup, Rdn = FupC - Cup * (Cup' * FupC), FdnC - Cdn * (Cdn' * FdnC)
     Kup, Kdn = Fup * Dup - Dup * Fup, Fdn * Ddn - Ddn * Fdn
+    K = hypot(norm(Kup), norm(Kdn))
     (; Fup, Fdn, energy = 0.5dot(Dup, Fup + model.Hup) + 0.5dot(Ddn, Fdn + model.Hdn),
-       residual_up = norm(Rup), residual_dn = norm(Rdn), Kup, Kdn,
-       kresidual = hypot(norm(Kup), norm(Kdn)) / sqrt(2))
+       residual_up = norm(Rup), residual_dn = norm(Rdn), Kup, Kdn, K,
+       pulay_error_norm = K / sqrt(2))
 end
 _history_uhf_converged(m) = norm(m.Kup) <= 1e-10 * max(1, norm(m.Fup)) &&
     norm(m.Kdn) <= 1e-10 * max(1, norm(m.Fdn))
@@ -109,20 +112,22 @@ _history_occupied(F, n) = n == 0 ? zeros(size(F, 1), 0) : eigen(Symmetric(F)).ve
 function _history_uhf_diis(model, cup0, cdn0, policy)
     cup, cdn = copy(cup0), copy(cdn0)
     first = _history_uhf_model_metrics(model, cup, cdn)
-    bestup, bestdn, best_energy, best_k = copy(cup), copy(cdn), first.energy, first.kresidual
+    bestup, bestdn, best_energy, best_error = copy(cup), copy(cdn),
+        first.energy, first.pulay_error_norm
     focks, errors = Matrix{Float64}[], Matrix{Float64}[]
     consecutive_failures = pulay_rank = 0
     for iteration = 1:policy.diis_iterations
         metrics = _history_uhf_model_metrics(model, cup, cdn)
-        finite = all(isfinite, (metrics.energy, metrics.kresidual)) &&
+        finite = all(isfinite, (metrics.energy, metrics.pulay_error_norm)) &&
             all(isfinite, metrics.Fup) && all(isfinite, metrics.Fdn)
         finite || return (; cup = bestup, cdn = bestdn, status = :numerical_failure,
             iterations = iteration, failures = consecutive_failures, pulay_rank)
         tau = 128eps(Float64) * max(1, abs(best_energy), abs(metrics.energy))
         if metrics.energy < best_energy - tau ||
-                (abs(metrics.energy - best_energy) <= tau && metrics.kresidual < best_k)
+                (abs(metrics.energy - best_energy) <= tau &&
+                    metrics.pulay_error_norm < best_error)
             bestup, bestdn = copy(cup), copy(cdn)
-            best_energy, best_k = metrics.energy, metrics.kresidual
+            best_energy, best_error = metrics.energy, metrics.pulay_error_norm
         end
         _history_uhf_converged(metrics) && return (; cup = bestup, cdn = bestdn,
             status = :converged_best, iterations = iteration, failures = 0, pulay_rank)
@@ -146,7 +151,7 @@ end
 function _history_uhf_acceptable(before, Cup, Cdn, trialup, trialdn, audit, status, overlap)
     finite = all(isfinite, trialup) && all(isfinite, trialdn) &&
         all(isfinite, (audit.energy, audit.residual_up, audit.residual_dn,
-            audit.gram_up, audit.gram_dn, audit.s2))
+            audit.K, audit.gram_up, audit.gram_dn, audit.s2))
     oup, odn = finite ? (_history_overlap(Cup, trialup),
         _history_overlap(Cdn, trialdn)) : (-Inf, -Inf)
     tau = 128eps(Float64) * max(1, abs(before.energy), abs(audit.energy))
@@ -194,7 +199,7 @@ function _solve_history_uhf(Hup, Hdn, V, Cup0, Cdn0;
         basis_time += basis_timed.time; basis_bytes += basis_timed.bytes
         status, diis_status, trialup, trialdn = :no_op, :not_run, Cup, Cdn
         proposal = (; energy = NaN, residual_up = NaN, residual_dn = NaN,
-            gram_up = NaN, gram_dn = NaN, s2 = NaN)
+            K = NaN, gram_up = NaN, gram_dn = NaN, s2 = NaN)
         overlap_up = overlap_dn = NaN
         diis_iterations = diis_failures = diis_rank = 0
         if basis.extra == 0
@@ -240,13 +245,16 @@ function _solve_history_uhf(Hup, Hdn, V, Cup0, Cdn0;
             diis_failures, diis_rank, proposal_energy = proposal.energy,
             proposal_residual_up = proposal.residual_up,
             proposal_residual_dn = proposal.residual_dn, proposal_gram_up = proposal.gram_up, proposal_gram_dn = proposal.gram_dn, proposal_s2 = proposal.s2, overlap_up, overlap_dn,
-            incoming_energy, energy = audit.value.energy, residual = audit.value.residual))
+            proposal_K = proposal.K, incoming_energy, energy = audit.value.energy,
+            residual = audit.value.residual, K = audit.value.K))
     end
     (; Cup, Cdn, energy = audit.value.energy, residual = audit.value.residual,
        residual_up = audit.value.residual_up, residual_dn = audit.value.residual_dn,
-       residual_rms = audit.value.residual_rms, gram_up = audit.value.gram_up,
+       residual_rms = audit.value.residual_rms, K_alpha = audit.value.K_alpha,
+       K_beta = audit.value.K_beta, K = audit.value.K, gram_up = audit.value.gram_up,
        gram_dn = audit.value.gram_dn, s2 = audit.value.s2,
-       target_reached = audit.value.residual <= _policy.target, terminal_reason = audit.value.residual <= _policy.target ? :target : :cycle_cap,
+       target_reached = audit.value.residual <= _policy.target,
+       terminal_reason = audit.value.residual <= _policy.target ? :target : :cycle_cap,
        total_sweeps = _policy.bootstrap_sweeps + cycles * _policy.cleanup_sweeps, cycles,
        accepted, rejected, noops, resource_fallbacks = resources, events,
        times = (; sweeps = sweep_time, basis = basis_time, setup = setup_time, diis = diis_time, audit = audit_time),
