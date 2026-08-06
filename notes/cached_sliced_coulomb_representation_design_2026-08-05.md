@@ -3,7 +3,7 @@
 Date: 2026-08-05
 Base: `main@422b0e3`
 Branch: `perf/cached-sliced-coulomb-symmetry-20260805`
-Status: bounded private implementation design; no chain calculation authorized
+Status: bounded private implementation complete; awaiting review; no chain run
 
 ## Outcome And Boundary
 
@@ -173,5 +173,34 @@ maximum is 500 implementation lines excluding this design checkpoint. If exact
 exchange, bidirectional recurrence, fixed/ragged support, or zero-allocation
 execution cannot fit, stop rather than weaken symmetry validation or modify the
 generic backend.
+
+## Implementation Evidence
+
+The private sibling backend is implemented in one new file and is not exported.
+The generic ordered cached backend file is unchanged. Constructor certification,
+weighted canonical storage, one-orientation recurrence, lazy bidirectional
+fields, projection fallback, and common-/split-H solve dispatch fit within the
+500-line implementation cap: 376 source lines, 118 test lines, one
+include line, and three developer-documentation lines.
+
+All 650 package tests pass, including 17 compact Coulomb tests. Fixed and
+ragged arbitrary damped-density RHF/UHF Focks agree with generic/projection
+oracles within `2e-11`; the explicit development probes gave maximum Fock error
+`8.89e-15` and repeated bidirectional recurrence error `2.66e-15`. Aligned
+RHF/UHF additions allocate zero bytes steadily, and the compact workflows cover
+RHF, common-H UHF, and split-H UHF. The existing cached/projection verifier is
+unchanged and passes with maximum Fock difference `5.10702591327572e-15` and
+maximum sweep-energy difference `1.0658141036401503e-14 Ha`. Documenter,
+doctests, export checks, and links pass.
+
+A disposable one-thread synthetic check at `S=600,d=4,k=20` expanded every
+compact coefficient into the generic ordered representation. Persistent
+interaction coefficients fell from `7,840,000` to `1,304,100`, an `83.366%`
+reduction. Transformed channel and internal-block coefficients agreed within
+`1.78e-15` and `1.55e-15`; both channel kernels allocated zero. Timings were
+`0.00956/0.00874 s` for generic/compact channels and `0.000961/0.000596 s` for
+generic/compact block transforms. These are bounded kernel checks, not H20 or
+publication performance. No H12, H16, H20, history, target-residual, frozen,
+or factorized-chain calculation was run.
 
 -- hfdmrg-manager@rh310l.ps.uci.edu

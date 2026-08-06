@@ -1354,6 +1354,124 @@ try
         @test isapprox(e_proj_r, e_cached_r; atol = 1e-9, rtol = 0)
     end
 
+    @testset "Physical-Coulomb cached sliced backend" begin
+        rng = MersenneTwister(805)
+        pair(i, j) = max(i, j) * (max(i, j) - 1) ÷ 2 + min(i, j)
+        function coulomb_blocks(dims)
+            ns = length(dims)
+            V = [[zeros(dims[n], dims[n], dims[m], dims[m]) for m = 1:ns]
+                 for n = 1:ns]
+            for n = 1:ns, m = n:ns
+                Kn, Km = pair(dims[n], dims[n]), pair(dims[m], dims[m])
+                X = randn(rng, Kn, Km)
+                n == m && (X = Matrix(Symmetric(X)))
+                for d = 1:dims[m], c = 1:dims[m], b = 1:dims[n], a = 1:dims[n]
+                    value = X[pair(a, b), pair(c, d)]
+                    V[n][m][a, b, c, d] = value
+                    V[m][n][c, d, a, b] = value
+                end
+            end
+            V
+        end
+        function grow_coulomb(state, side, cra, knew, backend)
+            mold = size(state.phi, 2); O = orthonormal_cols(rng, mold + length(cra), knew)
+            if side === :left
+                A, C = O[1:mold, :], O[mold + 1:end, :]
+                phi = vcat(state.phi * A, C); raV = last(cra) + 1:backend.layout.offs[end]
+            else
+                C, A = O[1:length(cra), :], O[length(cra) + 1:end, :]
+                phi = vcat(C, state.phi * A); raV = 1:first(cra) - 1
+            end
+            HFDMRG.vee_absorb_block(side, state, cra, A, C, phi, raV, backend)
+        end
+        function focks(win, rho, rhodn)
+            w = size(rho, 1)
+            F, Fup, Fdn = zeros(w, w), zeros(w, w), zeros(w, w)
+            HFDMRG.vee_add_fock_r!(F, rho, win)
+            HFDMRG.vee_add_fock!(Fup, Fdn, rho, rhodn, win)
+            (F, Fup, Fdn)
+        end
+        alloc_r(F, rho, win) = @allocated HFDMRG.vee_add_fock_r!(F, rho, win)
+        alloc_u(Fu, Fd, ru, rd, win) =
+            @allocated HFDMRG.vee_add_fock!(Fu, Fd, ru, rd, win)
+        layout = HFDMRG.SliceLayout(fill(2, 7)); blocks = coulomb_blocks(layout.dims)
+        V6 = zeros(2, 2, 2, 2, 7, 7)
+        for n = 1:7, m = 1:7
+            V6[:, :, :, :, n, m] = blocks[n][m]
+        end; V6 .*= 0.01
+        compact = HFDMRG._SlicedBasisBackendCachedCoulomb(layout, V6)
+        generic, projection = HFDMRG.SlicedBasisBackendCached(layout, V6),
+            HFDMRG.SlicedBasisBackend(layout, V6)
+        for indices in ((1, 2, 1, 1, 1, 1), (1, 1, 1, 2, 1, 1),
+                (1, 1, 1, 1, 1, 2))
+            bad = copy(V6); bad[indices...] += 1e-3
+            @test_throws ErrorException HFDMRG._SlicedBasisBackendCachedCoulomb(layout, bad)
+        end
+        L, R, localwin, routes = withenv("HFDMRG_BENCH_TIMING" => "1") do
+            HFDMRG._bench_timing_reset!()
+            L0 = HFDMRG.vee_init_block(:left, 1:2, 3:14,
+                orthonormal_cols(rng, 2, 2), compact)
+            R0 = HFDMRG.vee_init_block(:right, 13:14, 1:12,
+                orthonormal_cols(rng, 2, 2), compact)
+            l, r = grow_coulomb(L0, :left, 3:6, 3, compact),
+                grow_coulomb(R0, :right, 9:12, 3, compact)
+            (l, r, HFDMRG.vee_window(l, r, 7:8, compact),
+                HFDMRG._bench_timing_snapshot())
+        end
+        @test (routes[:cache_incremental_calls], routes[:cache_fallback_calls],
+            routes[:window_local_calls], routes[:window_projection_calls]) == (2, 0, 1, 0)
+        function direct_window(backend)
+            l = HFDMRG.vee_init_block(:left, L.ra, last(L.ra) + 1:14, L.phi, backend)
+            r = HFDMRG.vee_init_block(:right, R.ra, 1:first(R.ra) - 1, R.phi, backend)
+            HFDMRG.vee_window(l, r, 7:8, backend)
+        end
+        wins = (localwin, direct_window(compact),
+            direct_window(generic), direct_window(projection))
+        rho = Matrix(Symmetric(randn(rng, 8, 8)))
+        rhodn = Matrix(Symmetric(randn(rng, 8, 8)))
+        reference = focks(wins[1], rho, rhodn)
+        for win in wins[2:end]
+            got = focks(win, rho, rhodn)
+            @test maximum(norm(got[i] - reference[i], Inf) for i = 1:3) < 2e-11
+        end
+        F, Fu, Fd = zeros(8, 8), zeros(8, 8), zeros(8, 8)
+        HFDMRG.vee_add_fock_r!(F, rho, wins[1]); HFDMRG.vee_add_fock!(Fu, Fd,
+            rho, rhodn, wins[1]); fill!(F, 0); fill!(Fu, 0); fill!(Fd, 0)
+        @test alloc_r(F, rho, wins[1]) == 0
+        @test alloc_u(Fu, Fd, rho, rhodn, wins[1]) == 0
+        genericL = direct_window(generic).L
+        @test length(L.W) + length(L.G) < length(genericL.W) + length(genericL.Wswap) + length(genericL.G)
+        dims = [2, 1, 3, 2, 2]; raglayout = HFDMRG.SliceLayout(dims)
+        ragV = coulomb_blocks(dims)
+        ragcompact = HFDMRG._SlicedBasisBackendCachedCoulomb(
+            raglayout, HFDMRG.SlicedVeeRagged(raglayout, ragV))
+        ragprojection = HFDMRG.SlicedBasisBackend(raglayout, ragV)
+        function ragwin(backend)
+            l = HFDMRG.vee_init_block(:left, 1:2, 3:10,
+                Matrix{Float64}(I, 2, 2), backend)
+            r = HFDMRG.vee_init_block(:right, 9:10, 1:8,
+                Matrix{Float64}(I, 2, 2), backend)
+            HFDMRG.vee_window(l, r, 3:8, backend)
+        end
+        rrho = Matrix(Symmetric(randn(rng, 10, 10)))
+        rdn = Matrix(Symmetric(randn(rng, 10, 10)))
+        rv, rw = focks(ragwin(ragcompact), rrho, rdn),
+            focks(ragwin(ragprojection), rrho, rdn)
+        @test maximum(norm(rw[i] - rv[i], Inf) for i = 1:3) < 2e-11
+        H = Matrix(Diagonal(range(-2.0, 2.0; length = 14))) + 0.01 * Matrix(Symmetric(randn(rng, 14, 14)))
+        Hdn = H + Diagonal(range(-0.01, 0.01; length = 14))
+        up, dn = orthonormal_cols(rng, 14, 1), orthonormal_cols(rng, 14, 1)
+        kw = (; maxiter = 1, block_partition = layout, cutoff = 0.0,
+            scf_cutoff = Inf, verbose = false)
+        for run in (b -> solve_hfdmrg(H, b, up; kw...),
+                b -> solve_hfdmrg(H, b, up, dn; kw...),
+                b -> solve_hfdmrg(H, Hdn, b, up, dn; kw...))
+            a, b = run(compact), run(generic)
+            @test abs(a[3] - b[3]) < 2e-11
+            @test max(norm(a[1] * a[1]' - b[1] * b[1]'),
+                norm(a[2] * a[2]' - b[2] * b[2]')) < 2e-10
+        end
+    end
     @testset "Sliced convenience overloads" begin
         rng = MersenneTwister(11)
         nj = 2

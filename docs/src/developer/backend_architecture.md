@@ -277,6 +277,7 @@ The leading storage terms are:
 | Density plus target residual | Base plus `O(N*t + P^2)` | Base plus `O(k*t)` | Projection/lift `O(w^2*t + w*t^2)` and exact pair contraction `O(t^4)`. |
 | Sliced projection | Fixed `O(ns^2*nj^4)` or ragged `O(S2^2)` | Primarily the block basis | Builds full-`N` density and Fock intermediates, requiring `O(N^2 + N*w)` temporary storage per Fock route. |
 | Cached sliced | Same sliced input | About `O(length(ra)*k + k^4 + k^2*S2ext)` | Whole-slice windows reference block caches and retain only `O(kmax^2 + kmax*dmax + dmax^2)` scratch. Left--right fields contract lazily from exterior channels in about `O(S2R*kL^2 + S2L*kR^2)` work per Fock; split windows delegate entirely to projection. |
+| Private Coulomb-cached sliced | Certified pair-symmetric sliced input | `O(K^2 + K*sum(Dext))`, `K=k(k+1)/2`, `D=d(d+1)/2` | Stores normalized canonical pairs and one exterior orientation; constructor rejects tensors outside fixed scale-aware Coulomb-symmetry gates. |
 
 These terms describe interaction-specific storage, not the complete solver.
 Actual time depends on block ranks, center placement, slice sizes, BLAS shape,
@@ -303,6 +304,8 @@ old four-index block interaction is quintic rather than sextic. Aligned
 windows likewise do not form eager `VLR` or `VRL` tensors. Each Fock call
 projects the current opposite-region density onto its physical slices and
 contracts direct and exchange fields from the retained ordered channels.
+The private physical-Coulomb sibling further packs both pair spaces with the
+orthonormal `sqrt(2)` off-diagonal weight; the generic ordered backend is unchanged.
 
 The accepted cached-sliced design and frozen-Be evidence are preserved in
 `notes/cached_sliced_performance_final_2026-07-20.md`.
