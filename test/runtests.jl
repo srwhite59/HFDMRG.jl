@@ -1458,6 +1458,27 @@ try
         rv, rw = focks(ragwin(ragcompact), rrho, rdn),
             focks(ragwin(ragprojection), rrho, rdn)
         @test maximum(norm(rw[i] - rv[i], Inf) for i = 1:3) < 2e-11
+        wide_layout = HFDMRG.SliceLayout(fill(4, 7))
+        wide_blocks = coulomb_blocks(wide_layout.dims)
+        wide_compact = HFDMRG._SlicedBasisBackendCachedCoulomb(wide_layout,
+            HFDMRG.SlicedVeeRagged(wide_layout, wide_blocks))
+        wide_projection = HFDMRG.SlicedBasisBackend(wide_layout, wide_blocks)
+        L0 = HFDMRG.vee_init_block(:left, 1:4, 5:28,
+            Matrix{Float64}(I, 4, 4), wide_compact)
+        R0 = HFDMRG.vee_init_block(:right, 25:28, 1:24,
+            Matrix{Float64}(I, 4, 4), wide_compact)
+        wideL = grow_coulomb(L0, :left, 5:12, 10, wide_compact)
+        wideR = grow_coulomb(R0, :right, 17:24, 9, wide_compact)
+        function widewin(backend)
+            l = HFDMRG.vee_init_block(:left, wideL.ra, 13:28, wideL.phi, backend)
+            r = HFDMRG.vee_init_block(:right, wideR.ra, 1:16, wideR.phi, backend)
+            HFDMRG.vee_window(l, r, 13:16, backend)
+        end
+        wrho, wrhodn = (Matrix(Symmetric(randn(rng, 23, 23))) for _ = 1:2)
+        wnew = focks(HFDMRG.vee_window(wideL, wideR, 13:16, wide_compact),
+            wrho, wrhodn)
+        wref = focks(widewin(wide_projection), wrho, wrhodn)
+        @test maximum(norm(wnew[i] - wref[i], Inf) for i = 1:3) < 2e-10
         H = Matrix(Diagonal(range(-2.0, 2.0; length = 14))) + 0.01 * Matrix(Symmetric(randn(rng, 14, 14)))
         Hdn = H + Diagonal(range(-0.01, 0.01; length = 14))
         up, dn = orthonormal_cols(rng, 14, 1), orthonormal_cols(rng, 14, 1)

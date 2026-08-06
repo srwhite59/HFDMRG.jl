@@ -15,6 +15,8 @@ struct _SlicedCoulombScratch
     physical_work::Matrix{Float64}
     mixed::Matrix{Float64}
     exchange::Matrix{Float64}
+    mixed_dn::Matrix{Float64}
+    exchange_dn::Matrix{Float64}
     pair_density::Vector{Float64}
     pair_field::Vector{Float64}
 end
@@ -233,7 +235,7 @@ function vee_window(L::_SlicedCoulombBlockState, R::_SlicedCoulombBlockState, Cr
     ml, mr, maxd = size(L.phi, 2), size(R.phi, 2), maximum(backend.layout.dims)
     maxk = max(ml, mr); scratch = _SlicedCoulombScratch(zeros(maxd, maxd),
         zeros(maxd, maxk), zeros(maxk, maxd), zeros(maxk, maxd),
-        zeros(maxk^2), zeros(maxk^2))
+        zeros(maxk, maxd), zeros(maxk, maxd), zeros(maxk^2), zeros(maxk^2))
     centers = (first(_slice_local(backend.layout, first(Cra))):
         first(_slice_local(backend.layout, last(Cra))))
     _SlicedCoulombWindow(backend.V, backend.layout, ml, length(Cra), mr, centers,
@@ -302,7 +304,39 @@ function _add_coulomb_cross_direct!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
         end
     end
 end
-function _add_coulomb_cross_exchange!(F, rho, X, Y, xoff, yoff, layout, scratch)
+@inline function _exchange_scatter!(fup, fdn, mup, mdn, i, k, a, b, value,
+        ::Val{restricted}) where restricted
+    fup[i, b] = muladd(value, mup[k, a], fup[i, b])
+    fup[i, a] = muladd(value, mup[k, b], fup[i, a])
+    fup[k, b] = muladd(value, mup[i, a], fup[k, b])
+    fup[k, a] = muladd(value, mup[i, b], fup[k, a])
+    if !restricted
+        fdn[i, b] = muladd(value, mdn[k, a], fdn[i, b])
+        fdn[i, a] = muladd(value, mdn[k, b], fdn[i, a])
+        fdn[k, b] = muladd(value, mdn[i, a], fdn[k, b])
+        fdn[k, a] = muladd(value, mdn[i, b], fdn[k, a])
+    end
+end
+@inline function _exchange_scatter_physical_diagonal!(fup, fdn, mup, mdn, i, k,
+        a, value, ::Val{restricted}) where restricted
+    fup[i, a] = muladd(value, mup[k, a], fup[i, a])
+    fup[k, a] = muladd(value, mup[i, a], fup[k, a])
+    if !restricted
+        fdn[i, a] = muladd(value, mdn[k, a], fdn[i, a])
+        fdn[k, a] = muladd(value, mdn[i, a], fdn[k, a])
+    end
+end
+@inline function _exchange_scatter_pair_diagonal!(fup, fdn, mup, mdn, k, a, b,
+        value, ::Val{restricted}) where restricted
+    fup[k, b] = muladd(value, mup[k, a], fup[k, b])
+    b != a && (fup[k, a] = muladd(value, mup[k, b], fup[k, a]))
+    if !restricted
+        fdn[k, b] = muladd(value, mdn[k, a], fdn[k, b])
+        b != a && (fdn[k, a] = muladd(value, mdn[k, b], fdn[k, a]))
+    end
+end
+function _add_coulomb_cross_exchange_ordered!(F, rho, X, Y, xoff, yoff, layout,
+        scratch)
     kx, ky = size(X.phi, 2), size(Y.phi, 2)
     xrange, yrange = xoff + 1:xoff + kx, yoff + 1:yoff + ky
     for s in _active_slices(layout, Y.ra)
@@ -322,12 +356,63 @@ function _add_coulomb_cross_exchange!(F, rho, X, Y, xoff, yoff, layout, scratch)
         mul!(view(F, yrange, xrange), transpose(P), transpose(field), -1.0, 1.0)
     end
 end
+function _add_coulomb_cross_exchange!(Fup, Fdn, rhoup, rhodn, X, Y, xoff,
+        yoff, layout, scratch, restricted_value::Val{restricted}) where restricted
+    kx, ky = size(X.phi, 2), size(Y.phi, 2)
+    if kx < 10
+        _add_coulomb_cross_exchange_ordered!(Fup, rhoup, X, Y, xoff, yoff,
+            layout, scratch)
+        restricted || _add_coulomb_cross_exchange_ordered!(Fdn, rhodn, X, Y,
+            xoff, yoff, layout, scratch)
+        return
+    end
+    xrange, yrange = xoff + 1:xoff + kx, yoff + 1:yoff + ky
+    for s in _active_slices(layout, Y.ra)
+        P = _slice_phi(layout, Y.ra, Y.phi, s); d = size(P, 1)
+        mixedup = view(scratch.mixed, 1:kx, 1:d)
+        fieldup = view(scratch.exchange, 1:kx, 1:d)
+        mixeddn = view(scratch.mixed_dn, 1:kx, 1:d)
+        fielddn = view(scratch.exchange_dn, 1:kx, 1:d)
+        mul!(mixedup, view(rhoup, xrange, yrange), transpose(P)); fill!(fieldup, 0)
+        if !restricted
+            mul!(mixeddn, view(rhodn, xrange, yrange), transpose(P)); fill!(fielddn, 0)
+        end
+        W = view(X.W, :, _sym_state_range(X, s))
+        A = 0; rt2 = sqrt(2.0)
+        for b = 1:d, a = 1:b
+            A += 1; I = 0
+            for k = 1:kx
+                for i = 1:k - 1
+                    I += 1
+                    value = W[I, A] / (a == b ? rt2 : 2.0)
+                    if a == b
+                        _exchange_scatter_physical_diagonal!(fieldup, fielddn,
+                            mixedup, mixeddn, i, k, a, value, restricted_value)
+                    else
+                        _exchange_scatter!(fieldup, fielddn, mixedup, mixeddn,
+                            i, k, a, b, value, restricted_value)
+                    end
+                end
+                I += 1; value = W[I, A] / (a == b ? 1.0 : rt2)
+                _exchange_scatter_pair_diagonal!(fieldup, fielddn, mixedup,
+                    mixeddn, k, a, b, value, restricted_value)
+            end
+        end
+        mul!(view(Fup, xrange, yrange), fieldup, P, -1.0, 1.0)
+        mul!(view(Fup, yrange, xrange), transpose(P), transpose(fieldup), -1.0, 1.0)
+        if !restricted
+            mul!(view(Fdn, xrange, yrange), fielddn, P, -1.0, 1.0)
+            mul!(view(Fdn, yrange, xrange), transpose(P), transpose(fielddn),
+                -1.0, 1.0)
+        end
+    end
+end
 function _add_coulomb_cross!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff, layout,
         scratch, restricted::Val{r}) where r
     _add_coulomb_cross_direct!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff, layout,
         scratch, restricted)
-    _add_coulomb_cross_exchange!(Fup, rhoup, X, Y, xoff, yoff, layout, scratch)
-    r || _add_coulomb_cross_exchange!(Fdn, rhodn, X, Y, xoff, yoff, layout, scratch)
+    _add_coulomb_cross_exchange!(Fup, Fdn, rhoup, rhodn, X, Y, xoff, yoff,
+        layout, scratch, restricted)
 end
 function _add_coulomb_fock!(Fup, Fdn, rhoup, rhodn, win, restricted)
     ml, lc, mr = win.ml, win.lc, win.mr; roff = ml + lc; dims = win.layout.dims
