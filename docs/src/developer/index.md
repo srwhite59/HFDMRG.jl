@@ -18,8 +18,6 @@ convention, ownership rules, scaling expectations, and validation ladder.
 - `examples/`: executable user workflows.
 - `test/`: compact numerical and end-to-end regression tests.
 - `scripts/`: engineering benchmarks and cached/projection verification.
-- `reference/HF_dmrg_legacy.jl`: historical reference only; it is not an active
-  regression oracle.
 
 ## Local commands
 
