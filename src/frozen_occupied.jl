@@ -339,25 +339,25 @@ function _frozen_local!(p, li, ri, left, cra, right, Hup, Hdn, win, lambda,
             rhoup, rhodn = Zup * rup * Zup', Zdn * rdn * Zdn'
             Fup, Fdn = copy(Heffup), copy(Heffdn)
             if p.restricted
-                vee_add_fock_r!(Fup, rhoup, win)
-                nup > 0 && (Uup = eigsym(Zup' * Fup * Zup, diagnostics)[2][:, 1:nup])
+                @timeg "Fock build" vee_add_fock_r!(Fup, rhoup, win)
+                nup > 0 && (Uup = eigsym(Zup' * Fup * Zup)[2][:, 1:nup])
                 psiup = Zup * Uup
                 rup = (1 - lambda) * rup + lambda * (Uup * Uup')
                 rhoup = Zup * rup * Zup'
                 Fup = copy(Heffup)
-                vee_add_fock_r!(Fup, rhoup, win)
+                @timeg "Fock build" vee_add_fock_r!(Fup, rhoup, win)
                 energy = ef + tr(rhoup * (Fup + Heffup))
                 psidn = psiup
             else
-                vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
-                nup > 0 && (Uup = eigsym(Zup' * Fup * Zup, diagnostics)[2][:, 1:nup])
-                ndn > 0 && (Udn = eigsym(Zdn' * Fdn * Zdn, diagnostics)[2][:, 1:ndn])
+                @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+                nup > 0 && (Uup = eigsym(Zup' * Fup * Zup)[2][:, 1:nup])
+                ndn > 0 && (Udn = eigsym(Zdn' * Fdn * Zdn)[2][:, 1:ndn])
                 psiup, psidn = Zup * Uup, Zdn * Udn
                 rup = (1 - lambda) * rup + lambda * (Uup * Uup')
                 rdn = (1 - lambda) * rdn + lambda * (Udn * Udn')
                 rhoup, rhodn = Zup * rup * Zup', Zdn * rdn * Zdn'
                 Fup, Fdn = copy(Heffup), copy(Heffdn)
-                vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+                @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
                 energy = ef + 0.5tr(rhoup * (Fup + Heffup)) +
                     0.5tr(rhodn * (Fdn + Heffdn))
             end
@@ -420,14 +420,9 @@ function _frozen_audit!(p, prospective, diagnostics)
     end
     invup = invdn = false
     if prospective
-        timed = @timed begin
+        @timeg "occupation audit" begin
             invup = _aufbau_inverted(Fup, p.psiup)
             invdn = p.restricted ? invup : _aufbau_inverted(Fdn, p.psidn)
-        end
-        if diagnostics !== nothing
-            diagnostics.aufbau_calls += 1
-            diagnostics.aufbau_seconds += timed.time
-            diagnostics.aufbau_bytes += timed.bytes
         end
         invup && size(Cfu, 2) > 0 && (rup = hcat(rup, Cfu))
         invdn && size(Cfd, 2) > 0 && (rdn = hcat(rdn, Cfd))

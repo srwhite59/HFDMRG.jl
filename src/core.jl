@@ -43,14 +43,8 @@ struct SweepInfo{E, U, D}
 end
 
 mutable struct _RunDiagnostics
-    mode::Symbol
     spectra::Vector{NamedTuple}
     windows::Vector{NamedTuple}
-    eigsym_seconds::Float64
-    eigsym_calls::Int
-    aufbau_seconds::Float64
-    aufbau_bytes::Int
-    aufbau_calls::Int
     frozen_rebuilds::Int
     frozen_max_generations::Int
     frozen_live_generations::Int
@@ -61,15 +55,10 @@ mutable struct _RunDiagnostics
     frozen_rebuild_projector_error::Float64
 end
 
-function _RunDiagnostics(mode::Symbol = :detailed)
-    mode in (:detailed, :timing) ||
-        error("_RunDiagnostics mode must be :detailed or :timing")
-    _RunDiagnostics(mode, NamedTuple[], NamedTuple[], 0.0, 0, 0.0, 0, 0,
-        0, 0, 0, 0.0, 0, 0, 0, 0.0)
-end
+_RunDiagnostics() = _RunDiagnostics(NamedTuple[], NamedTuple[], 0, 0, 0, 0.0,
+    0, 0, 0, 0.0)
 
-_detailed(diagnostics) =
-    diagnostics !== nothing && diagnostics.mode === :detailed
+_detailed(diagnostics) = diagnostics !== nothing
 
 function _record_fixed_edge!(diagnostics, side, range)
     _detailed(diagnostics) || return
@@ -81,16 +70,14 @@ end
 
 function _record_window!(diagnostics, sweep, direction, window_ordinal,
         left, center_range, right, local_iterations, locally_converged,
-        damping_before, damping_after, rise_updates, local_energies, final_energy,
-        eigsym_before)
+        damping_before, damping_after, rise_updates, local_energies, final_energy)
     _detailed(diagnostics) || return
     push!(diagnostics.windows, (; sweep, direction, window_ordinal,
         left_range = left.ra, center_range, right_range = right.ra,
         left_rank = left.m, right_rank = right.m, local_iterations,
         reached_iteration_four = local_iterations == 4, locally_converged,
         cap_exhausted = local_iterations == 4 && !locally_converged,
-        damping_before, damping_after, rise_updates, local_energies, final_energy,
-        eigsym_seconds = diagnostics.eigsym_seconds - eigsym_before))
+        damping_before, damping_after, rise_updates, local_energies, final_energy))
 end
 
 function _notify_observer(observer, info::SweepInfo)
@@ -177,7 +164,7 @@ end
 function getphi(psira, diagnostics = nothing, sweep = 0, direction = :none,
         window_ordinal = 0, side = :none, physical_range = 1:0,
         environment_cutoff = 1e-10)
-    u, d, v = svd(psira)
+    u, d, v = @timeg "environment SVD" svd(psira)
     i = findlast(x -> x > environment_cutoff, d)
     i === nothing && (i = 1)
     mkeep = max(1, i)
@@ -203,7 +190,8 @@ function _makeblock(side, range, phi, H, Vee, firstindsH, finalindsH;
         H1ij = zeros(T, m, m)
         H1phi = zeros(T, length(raH1), m)
     end
-    vee_state = vee_init_block(side, range, raV, phi, Vee)
+    vee_state = @timeg "backend initialization" vee_init_block(
+        side, range, raV, phi, Vee)
     LRBlock(range, raH1, raV, m, phi, H1ij, H1phi, vee_state)
 end
 
@@ -223,7 +211,8 @@ function _makeblock_split(side, range, phi, Hup, Hdn, Vee, firstindsH, finalinds
     m = size(phi, 2)
     hup = _h1cache(range, phi, m, Hup, raH1; dofull)
     hdn = _h1cache(range, phi, m, Hdn, raH1; dofull)
-    vee_state = vee_init_block(side, range, raV, phi, Vee)
+    vee_state = @timeg "backend initialization" vee_init_block(
+        side, range, raV, phi, Vee)
     SplitLRBlock(range, raH1, raV, m, phi, hup, hdn, vee_state)
 end
 
@@ -268,6 +257,7 @@ function _addblockleft_h1(cra, PhiL, PhiC, oldcache, oldraH1, H, raH1)
 end
 
 function addblockright(cra, O, rblock, N, H, Vee, firstindsH)
+    @timeg "absorption" begin
     ra = cra[1]:rblock.ra[end]
     mold = rblock.m
     m = size(O, 2)
@@ -292,9 +282,11 @@ function addblockright(cra, O, rblock, N, H, Vee, firstindsH)
 
     vee_new = vee_absorb_block(:right, rblock.vee, cra, PhiR, PhiC, phi, raV, Vee)
     LRBlock(ra, raH1, raV, m, phi, H1ij, H1phi, vee_new)
+    end
 end
 
 function addblockleft(cra, O, lblock, N, H, Vee, finalindsH)
+    @timeg "absorption" begin
     mold = lblock.m
     m = size(O, 2)
     ra = lblock.ra[1]:cra[end]
@@ -319,9 +311,11 @@ function addblockleft(cra, O, lblock, N, H, Vee, finalindsH)
 
     vee_new = vee_absorb_block(:left, lblock.vee, cra, PhiL, PhiC, phi, raV, Vee)
     LRBlock(ra, raH1, raV, m, phi, H1ij, H1phi, vee_new)
+    end
 end
 
 function addblockright_split(cra, O, rblock, N, Hup, Hdn, Vee, firstindsH)
+    @timeg "absorption" begin
     ra = cra[1]:rblock.ra[end]
     m = size(O, 2)
     raH1 = minimum(firstindsH[ra]):cra[1] - 1
@@ -338,9 +332,11 @@ function addblockright_split(cra, O, rblock, N, Hup, Hdn, Vee, firstindsH)
     hdn = _addblockright_h1(cra, PhiC, PhiR, rblock.hdn, rblock.raH1, Hdn, raH1)
     vee_new = vee_absorb_block(:right, rblock.vee, cra, PhiR, PhiC, phi, raV, Vee)
     SplitLRBlock(ra, raH1, raV, m, phi, hup, hdn, vee_new)
+    end
 end
 
 function addblockleft_split(cra, O, lblock, N, Hup, Hdn, Vee, finalindsH)
+    @timeg "absorption" begin
     mold = lblock.m
     m = size(O, 2)
     ra = lblock.ra[1]:cra[end]
@@ -358,6 +354,7 @@ function addblockleft_split(cra, O, lblock, N, Hup, Hdn, Vee, finalindsH)
     hdn = _addblockleft_h1(cra, PhiL, PhiC, lblock.hdn, lblock.raH1, Hdn, raH1)
     vee_new = vee_absorb_block(:left, lblock.vee, cra, PhiL, PhiC, phi, raV, Vee)
     SplitLRBlock(ra, raH1, raV, m, phi, hup, hdn, vee_new)
+    end
 end
 
 function getblocksizes(N, m, blocksize; verbose = false)
@@ -621,24 +618,16 @@ function getpsireduced(psiup, Lra, Lphi, Cra, Rra, Rphi)
     vcat(psiL, psiC, psiR)
 end
 
-function eigsym(A, diagnostics = nothing)
-    start_ns = diagnostics === nothing ? 0 : time_ns()
-    E = eigen(Symmetric(A))
-    diagnostics === nothing || (diagnostics.eigsym_calls += 1)
-    diagnostics === nothing ||
-        (diagnostics.eigsym_seconds += (time_ns() - start_ns) * 1.0e-9)
+function eigsym(A)
+    E = @timeg "eigensolve" eigen(Symmetric(A))
     E.values, E.vectors
 end
 
-function _eigsym_occupied(A, nocc, diagnostics = nothing)
+function _eigsym_occupied(A, nocc)
     if !(A isa Matrix{Float64} && 0 < nocc <= fld(size(A, 1), 8))
-        return eigsym(A, diagnostics)
+        return eigsym(A)
     end
-    start_ns = diagnostics === nothing ? 0 : time_ns()
-    E = eigen(Symmetric(A), 1:nocc)
-    diagnostics === nothing || (diagnostics.eigsym_calls += 1)
-    diagnostics === nothing ||
-        (diagnostics.eigsym_seconds += (time_ns() - start_ns) * 1.0e-9)
+    E = @timeg "eigensolve" eigen(Symmetric(A), 1:nocc)
     E.values, E.vectors
 end
 
@@ -675,9 +664,9 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
     psiall = restricted ? psiup0 : hcat(psiup0, psidn0)
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
-    block = getinitialblocks(nblocks, blocksizes, Cranges, psiall, H, Vee,
-        firstindsH, finalindsH; verbose, _diagnostics, environment_cutoff,
-        _frozen = frozen)
+    block = @timeg "initialization" getinitialblocks(nblocks, blocksizes, Cranges,
+        psiall, H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
+        environment_cutoff, _frozen = frozen)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -700,6 +689,8 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
     iter = 0
     while iter < maxiter
         iter += 1
+        stop_solve = false
+        @timeg "sweep" begin
         energy = 0.0
         restart_frozen = false
         verbose && println()
@@ -709,15 +700,19 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
             direction = detailed ? (dir == 1 ? :left_to_right : :right_to_left) : :none
             window_ordinal = detailed ?
                 (dir == 1 ? b : nblocks - 1 - nblockcenter - b) : 0
-            H1B = getH1(block[b], block[b + 1 + nblockcenter], H)
-            Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
-            win = vee_window(block[b].vee, block[b + 1 + nblockcenter].vee, Cra, Vee)
+            H1B, Cra, win = @timeg "window construction" begin
+                H1B = getH1(block[b], block[b + 1 + nblockcenter], H)
+                Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
+                win = vee_window(block[b].vee,
+                    block[b + 1 + nblockcenter].vee, Cra, Vee)
+                (H1B, Cra, win)
+            end
             energy = energylast = 1e10
             local_energies = detailed ? Float64[] : nothing
             rise_updates = detailed ? Int[] : nothing
             damping_before = detailed ? lambda[b] : 0.0
-            eigsym_before = _diagnostics === nothing ? 0.0 : _diagnostics.eigsym_seconds
             local_iterations, locally_converged = 0, false
+            @timeg "local SCF" begin
             if frozen === nothing
             psiup_occ = @view psiup[:, 1:Nup]
             rhoup = psiup_occ * psiup_occ'
@@ -727,28 +722,28 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
             end
             Fup = copy(H1B)
             if restricted
-                vee_add_fock_r!(Fup, rhoup, win)
+                @timeg "Fock build" vee_add_fock_r!(Fup, rhoup, win)
             else
                 Fdn = copy(H1B)
-                vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+                @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
             end
             for s = 1:4
                 if restricted
-                    evals, evecs = _eigsym_occupied(Fup, Nup, _diagnostics)
+                    evals, evecs = _eigsym_occupied(Fup, Nup)
                     psiup = evecs[:, 1:Nup]
                     rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
                     Fup = copy(H1B)
-                    vee_add_fock_r!(Fup, rhoup, win)
+                    @timeg "Fock build" vee_add_fock_r!(Fup, rhoup, win)
                     energy = tr(rhoup * (Fup + H1B))
                 else
-                    evals, evecs = _eigsym_occupied(Fup, Nup, _diagnostics)
+                    evals, evecs = _eigsym_occupied(Fup, Nup)
                     psiup = evecs[:, 1:Nup]
                     rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
-                    evals, evecs = _eigsym_occupied(Fdn, Ndn, _diagnostics)
+                    evals, evecs = _eigsym_occupied(Fdn, Ndn)
                     psidn = evecs[:, 1:Ndn]
                     rhodn = (1 - lambda[b]) * rhodn + lambda[b] * psidn * psidn'
                     Fup, Fdn = copy(H1B), copy(H1B)
-                    vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+                    @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
                     energy = 0.5 * tr(rhoup * (Fup + H1B)) + 0.5 * tr(rhodn * (Fdn + H1B))
                 end
                 local_iterations = s
@@ -775,11 +770,12 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                 lambda[b] = result.lambda
                 detailed && (local_energies = result.energies; rise_updates = result.rises)
             end
+            end
 
             _record_window!(_diagnostics, iter, direction, window_ordinal, block[b],
                 Cra, block[b + 1 + nblockcenter], local_iterations,
                 locally_converged, damping_before, lambda[b], rise_updates,
-                local_energies, energy, eigsym_before)
+                local_energies, energy)
 
             rbl = block[b + 1 + nblockcenter]
             if frozen === nothing
@@ -872,32 +868,36 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
         end
         if restart_frozen
             Dup, Ddn = frozen.psiup * frozen.psiup', frozen.psidn * frozen.psidn'
-            block = getinitialblocks(nblocks, blocksizes, Cranges,
+            block = @timeg "initialization" getinitialblocks(
+                nblocks, blocksizes, Cranges,
                 restricted ? frozen.psiup : hcat(frozen.psiup, frozen.psidn),
                 H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
                 environment_cutoff, _frozen = frozen)
             psiallup, psialldn = frozen.psiup, frozen.psidn
             _record_frozen_rebuild_error!(_diagnostics, frozen, Dup, Ddn)
             iter -= 1
-            continue
-        end
-        verbose && @show iter, energy, energyiter
-        converged = abs(energyiter - energy) < cutoff
-        energyiter = energy
-        if frozen !== nothing
-            rebuild, converged = _frozen_audit!(frozen, converged, _diagnostics)
-            if rebuild
-                block = getinitialblocks(nblocks, blocksizes, Cranges,
-                    restricted ? frozen.psiup : hcat(frozen.psiup, frozen.psidn),
-                    H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
-                    environment_cutoff, _frozen = frozen)
+        else
+            verbose && @show iter, energy, energyiter
+            converged = abs(energyiter - energy) < cutoff
+            energyiter = energy
+            if frozen !== nothing
+                rebuild, converged = _frozen_audit!(frozen, converged, _diagnostics)
+                if rebuild
+                    block = @timeg "initialization" getinitialblocks(
+                        nblocks, blocksizes, Cranges,
+                        restricted ? frozen.psiup : hcat(frozen.psiup, frozen.psidn),
+                        H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
+                        environment_cutoff, _frozen = frozen)
+                end
+                psiallup, psialldn = frozen.psiup, frozen.psidn
             end
-            psiallup, psialldn = frozen.psiup, frozen.psidn
+            info = SweepInfo(iter, energyiter, psiallup,
+                restricted ? psiallup : psialldn, converged)
+            stop_requested = _notify_observer(observer, info)
+            stop_solve = converged || stop_requested
         end
-        info = SweepInfo(iter, energyiter, psiallup,
-            restricted ? psiallup : psialldn, converged)
-        stop_requested = _notify_observer(observer, info)
-        (converged || stop_requested) && break
+        end
+        stop_solve && break
     end
 
     restricted && (psialldn = psiallup)
@@ -938,9 +938,9 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
     psiall = hcat(psiup0, psidn0)
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
-    block = getinitialblocks_split(nblocks, blocksizes, Cranges, psiall, Hup, Hdn,
-        Vee, firstindsH, finalindsH; verbose, _diagnostics, environment_cutoff,
-        _frozen = frozen)
+    block = @timeg "initialization" getinitialblocks_split(nblocks, blocksizes,
+        Cranges, psiall, Hup, Hdn, Vee, firstindsH, finalindsH; verbose,
+        _diagnostics, environment_cutoff, _frozen = frozen)
 
     Lra = block[1].ra
     Rra = block[2 + nblockcenter].ra
@@ -964,6 +964,8 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
     iter = 0
     while iter < maxiter
         iter += 1
+        stop_solve = false
+        @timeg "sweep" begin
         energy = 0.0
         restart_frozen = false
         verbose && println()
@@ -974,32 +976,36 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
             direction = detailed ? (dir == 1 ? :left_to_right : :right_to_left) : :none
             window_ordinal = detailed ?
                 (dir == 1 ? b : nblocks - 1 - nblockcenter - b) : 0
-            H1Bup = getH1(block[b], block[b + 1 + nblockcenter], Hup, Val(:up))
-            H1Bdn = getH1(block[b], block[b + 1 + nblockcenter], Hdn, Val(:dn))
-            Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
-            win = vee_window(block[b].vee, block[b + 1 + nblockcenter].vee, Cra, Vee)
+            H1Bup, H1Bdn, Cra, win = @timeg "window construction" begin
+                H1Bup = getH1(block[b], block[b + 1 + nblockcenter], Hup, Val(:up))
+                H1Bdn = getH1(block[b], block[b + 1 + nblockcenter], Hdn, Val(:dn))
+                Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
+                win = vee_window(block[b].vee,
+                    block[b + 1 + nblockcenter].vee, Cra, Vee)
+                (H1Bup, H1Bdn, Cra, win)
+            end
             energy = energylast = 1e10
             local_energies = detailed ? Float64[] : nothing
             rise_updates = detailed ? Int[] : nothing
             damping_before = detailed ? lambda[b] : 0.0
-            eigsym_before = _diagnostics === nothing ? 0.0 : _diagnostics.eigsym_seconds
             local_iterations, locally_converged = 0, false
+            @timeg "local SCF" begin
             if frozen === nothing
             psiup_occ = @view psiup[:, 1:Nup]
             psidn_occ = @view psidn[:, 1:Ndn]
             rhoup = psiup_occ * psiup_occ'
             rhodn = psidn_occ * psidn_occ'
             Fup, Fdn = copy(H1Bup), copy(H1Bdn)
-            vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+            @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
             for s = 1:4
-                evals, evecs = _eigsym_occupied(Fup, Nup, _diagnostics)
+                evals, evecs = _eigsym_occupied(Fup, Nup)
                 psiup = evecs[:, 1:Nup]
                 rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
-                evals, evecs = _eigsym_occupied(Fdn, Ndn, _diagnostics)
+                evals, evecs = _eigsym_occupied(Fdn, Ndn)
                 psidn = evecs[:, 1:Ndn]
                 rhodn = (1 - lambda[b]) * rhodn + lambda[b] * psidn * psidn'
                 Fup, Fdn = copy(H1Bup), copy(H1Bdn)
-                vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+                @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
                 energy = 0.5 * tr(rhoup * (Fup + H1Bup)) +
                          0.5 * tr(rhodn * (Fdn + H1Bdn))
 
@@ -1027,11 +1033,12 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
                 lambda[b] = result.lambda
                 detailed && (local_energies = result.energies; rise_updates = result.rises)
             end
+            end
 
             _record_window!(_diagnostics, iter, direction, window_ordinal, block[b],
                 Cra, block[b + 1 + nblockcenter], local_iterations,
                 locally_converged, damping_before, lambda[b], rise_updates,
-                local_energies, energy, eigsym_before)
+                local_energies, energy)
 
             rbl = block[b + 1 + nblockcenter]
             if frozen === nothing
@@ -1125,32 +1132,36 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
         end
         if restart_frozen
             Dup, Ddn = frozen.psiup * frozen.psiup', frozen.psidn * frozen.psidn'
-            block = getinitialblocks_split(nblocks, blocksizes, Cranges,
+            block = @timeg "initialization" getinitialblocks_split(
+                nblocks, blocksizes, Cranges,
                 hcat(frozen.psiup, frozen.psidn), Hup, Hdn, Vee,
                 firstindsH, finalindsH; verbose, _diagnostics,
                 environment_cutoff, _frozen = frozen)
             psiallup, psialldn = frozen.psiup, frozen.psidn
             _record_frozen_rebuild_error!(_diagnostics, frozen, Dup, Ddn)
             iter -= 1
-            continue
-        end
-        verbose && @show iter, energy, energyiter
-        verbose && flush(stdout)
-        converged = _rel_converged(energyiter, energy, cutoff)
-        energyiter = energy
-        if frozen !== nothing
-            rebuild, converged = _frozen_audit!(frozen, converged, _diagnostics)
-            if rebuild
-                block = getinitialblocks_split(nblocks, blocksizes, Cranges,
-                    hcat(frozen.psiup, frozen.psidn), Hup, Hdn, Vee,
-                    firstindsH, finalindsH; verbose, _diagnostics,
-                    environment_cutoff, _frozen = frozen)
+        else
+            verbose && @show iter, energy, energyiter
+            verbose && flush(stdout)
+            converged = _rel_converged(energyiter, energy, cutoff)
+            energyiter = energy
+            if frozen !== nothing
+                rebuild, converged = _frozen_audit!(frozen, converged, _diagnostics)
+                if rebuild
+                    block = @timeg "initialization" getinitialblocks_split(
+                        nblocks, blocksizes, Cranges,
+                        hcat(frozen.psiup, frozen.psidn), Hup, Hdn, Vee,
+                        firstindsH, finalindsH; verbose, _diagnostics,
+                        environment_cutoff, _frozen = frozen)
+                end
+                psiallup, psialldn = frozen.psiup, frozen.psidn
             end
-            psiallup, psialldn = frozen.psiup, frozen.psidn
+            info = SweepInfo(iter, energyiter, psiallup, psialldn, converged)
+            stop_requested = _notify_observer(observer, info)
+            stop_solve = converged || stop_requested
         end
-        info = SweepInfo(iter, energyiter, psiallup, psialldn, converged)
-        stop_requested = _notify_observer(observer, info)
-        (converged || stop_requested) && break
+        end
+        stop_solve && break
     end
 
     psiallup, psialldn, energyiter

@@ -25,6 +25,8 @@ Inputs:
 """
 module HFDMRG
 
+include("timing.jl")
+using .TimeG: @timeg
 include("backend_api.jl")
 include("slice_layout.jl")
 include("core.jl")

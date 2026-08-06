@@ -117,6 +117,72 @@ try
         @test counted.calls == 2 * counted.windows
     end
 
+    @testset "Hierarchical timing" begin
+        timing = HFDMRG.TimeG
+        @test !timing.timing_enabled()
+        @test !timing.timing_live_enabled()
+
+        N = 12
+        Q = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1))
+             for i = 1:N, j = 1:N]
+        H = Matrix(Symmetric(Q * Diagonal(0.0:N - 1) * Q'))
+        Hdn = Matrix(Symmetric(Q *
+            Diagonal([2.0, 1.0, 0.0, collect(3.0:N - 1)...]) * Q'))
+        V = [0.01 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
+        up, dn = Q[:, 1:1], Q[:, 3:3]
+        kw = (; maxiter = 1, blocksize = 2, cutoff = 0.0,
+            scf_cutoff = 0.0, verbose = false)
+        run() = solve_hfdmrg(H, Hdn, V, up, dn; kw...)
+
+        reference = run()
+        run(); disabled_bytes = @allocated run()
+        @test @allocated(run()) == disabled_bytes
+        timing.reset_timing_report!()
+        @test isempty(timing.current_timing_report().roots)
+
+        timing.set_timing_thresholds!(expand = 0.0, drop = 0.0)
+        timing.set_timing!(true)
+        local timed
+        try
+            timed = run()
+        finally
+            timing.set_timing!(false)
+        end
+        @test timed == reference
+
+        report = timing.current_timing_report()
+        roots = timing._timing_merge_nodes(report.roots)
+        node(nodes, label) = only(filter(n -> n.label == label, nodes))
+        initialization, sweep = node(roots, "initialization"), node(roots, "sweep")
+        sweep_children = timing._timing_merge_nodes(sweep.children)
+        windows = node(sweep_children, "window construction")
+        local_scf = node(sweep_children, "local SCF")
+        absorption = node(sweep_children, "absorption")
+        svd_node = node(sweep_children, "environment SVD")
+        local_children = timing._timing_merge_nodes(local_scf.children)
+        fock = node(local_children, "Fock build")
+        eigensolve = node(local_children, "eigensolve")
+        @test windows.call_count == local_scf.call_count == absorption.call_count == 6
+        @test svd_node.call_count == 6
+        @test fock.call_count == 6 * (4 + 1)
+        @test eigensolve.call_count == 2 * 6 * 4
+
+        function check_additive(node)
+            child_time = sum(child.elapsed_seconds for child in node.children; init = 0.0)
+            @test isapprox(node.elapsed_seconds, node.self_seconds + child_time;
+                atol = 1e-9, rtol = 1e-9)
+            foreach(check_additive, node.children)
+        end
+        check_additive(initialization); check_additive(sweep)
+        rendered = timing.timing_report(report)
+        @test occursin("HFDMRG timing report", rendered)
+        @test occursin("Fock build", rendered)
+
+        timing.reset_timing_report!()
+        run()
+        @test isempty(timing.current_timing_report().roots)
+    end
+
     @testset "Hidden run diagnostics" begin
         N = 12
         Q = [sqrt(2 / (N + 1)) * sinpi(i * j / (N + 1))
@@ -130,7 +196,7 @@ try
             scf_cutoff = 0.0, verbose = false)
 
         plain = solve_hfdmrg(H, V, up, dn; kw...)
-        detailed = HFDMRG._RunDiagnostics(:detailed)
+        detailed = HFDMRG._RunDiagnostics()
         result = solve_hfdmrg(H, V, up, dn; kw..., _diagnostics = detailed)
         @test result == plain
         @test [(w.direction, w.window_ordinal) for w in detailed.windows] ==
@@ -156,30 +222,20 @@ try
         @test all(s -> s.retained_rank ==
                          something(findlast(>(1e-10), s.singular_values), 1),
             measured)
-        @test detailed.eigsym_calls == 2sum(w.local_iterations for w in detailed.windows)
-        @test detailed.eigsym_seconds > 0
-
-        fourth = HFDMRG._RunDiagnostics(:detailed)
+        fourth = HFDMRG._RunDiagnostics()
         solve_hfdmrg(H, V, up, dn; kw..., scf_cutoff = 1e-14,
             _diagnostics = fourth)
         @test fourth.windows[1].reached_iteration_four
         @test fourth.windows[1].locally_converged
         @test !fourth.windows[1].cap_exhausted
 
-        timing = HFDMRG._RunDiagnostics(:timing)
-        @test solve_hfdmrg(H, V, up, dn; kw..., _diagnostics = timing) == plain
-        @test isempty(timing.windows) && isempty(timing.spectra)
-        @test timing.eigsym_calls == detailed.eigsym_calls
-        @test timing.eigsym_seconds > 0
-
-        split_diagnostics = HFDMRG._RunDiagnostics(:detailed)
+        split_diagnostics = HFDMRG._RunDiagnostics()
         split = solve_hfdmrg(H, Hdn, V, up, dn; kw..., scf_cutoff = Inf,
             _diagnostics = split_diagnostics)
         @test split_diagnostics.windows[end].final_energy == split[3]
         @test all(w -> w.local_iterations == 1 && w.locally_converged &&
                          !w.reached_iteration_four && !w.cap_exhausted,
             split_diagnostics.windows)
-        @test_throws ErrorException HFDMRG._RunDiagnostics(:invalid)
     end
 
     @testset "Occupied subset eigensolve" begin
@@ -189,14 +245,12 @@ try
         levels = collect(1.0:w)
         A = Matrix(Symmetric(Q * Diagonal(levels) * Q'))
         full = HFDMRG.eigsym(A)
-        diagnostics = HFDMRG._RunDiagnostics(:timing)
-        subset = HFDMRG._eigsym_occupied(A, nocc, diagnostics)
+        subset = HFDMRG._eigsym_occupied(A, nocc)
         @test size(subset[2]) == (w, nocc)
         @test isapprox(subset[1], full[1][1:nocc]; atol = 2e-13, rtol = 2e-13)
         @test norm(A * subset[2] - subset[2] * Diagonal(subset[1])) <= 2e-12
         @test norm(subset[2] * subset[2]' -
                    full[2][:, 1:nocc] * full[2][:, 1:nocc]') <= 2e-11
-        @test diagnostics.eigsym_calls == 1 && diagnostics.eigsym_seconds > 0
         @test HFDMRG._eigsym_occupied(A, nocc + 1) == full
         A32 = Float32.(A)
         @test HFDMRG._eigsym_occupied(A32, 1) == HFDMRG.eigsym(A32)
@@ -310,7 +364,7 @@ try
             (:right_to_left, :right, 5:12),
         ]
         for environment_cutoff in (0.0, 1e-12, 1e-10, 1e-6)
-            diagnostics = HFDMRG._RunDiagnostics(:detailed)
+            diagnostics = HFDMRG._RunDiagnostics()
             solve_hfdmrg(H, V, up, dn;
                 kw..., environment_cutoff, _diagnostics = diagnostics)
             measured = filter(s -> s.status === :measured, diagnostics.spectra)
@@ -499,7 +553,6 @@ try
             _diagnostics = diagnostics, observer = x -> (push!(seen, x.converged); false),
             verbose = false)
         @test diagnostics.frozen_rebuilds == 1
-        @test diagnostics.aufbau_calls == 2 && diagnostics.aufbau_bytes > 0
         @test seen == [false, true]
         @test abs2(result[1][5]) > 1 - 2e-13
 
@@ -510,7 +563,6 @@ try
             cutoff = 0.0, scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
             _diagnostics = diagnostics, verbose = false)
         @test diagnostics.frozen_rebuilds == 1
-        @test diagnostics.aufbau_calls == 0
 
         H = Matrix(Diagonal([1.0:N - 1; -2.0]))
         up = zeros(N, 1); up[end] = 1
@@ -1670,7 +1722,7 @@ try
             @test maximum(abs.((Er[2] - Er[1], Eu[2] - Eu[1]))) <=
                 1e-11 * max(1.0, abs(Er[1]), abs(Eu[1]))
 
-            diagnostics = HFDMRG._RunDiagnostics(:detailed)
+            diagnostics = HFDMRG._RunDiagnostics()
             kw = (; maxiter = 1, blocksize = 0, block_partition = layout,
                 nblockcenter, cutoff = 0.0, scf_cutoff = Inf, verbose = false)
             result_cached, routes = withenv("HFDMRG_BENCH_TIMING" => "1") do
