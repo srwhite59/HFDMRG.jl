@@ -104,7 +104,7 @@ function _history_uhf_model_metrics(model, Cup, Cdn)
     K = hypot(norm(Kup), norm(Kdn))
     (; Fup, Fdn, energy = 0.5dot(Dup, Fup + model.Hup) + 0.5dot(Ddn, Fdn + model.Hdn),
        residual_up = norm(Rup), residual_dn = norm(Rdn), Kup, Kdn, K,
-       pulay_error_norm = K / sqrt(2))
+       commutator_rms = K / sqrt(2))
 end
 _history_uhf_converged(m) = norm(m.Kup) <= 1e-10 * max(1, norm(m.Fup)) &&
     norm(m.Kdn) <= 1e-10 * max(1, norm(m.Fdn))
@@ -113,21 +113,21 @@ function _history_uhf_diis(model, cup0, cdn0, policy)
     cup, cdn = copy(cup0), copy(cdn0)
     first = _history_uhf_model_metrics(model, cup, cdn)
     bestup, bestdn, best_energy, best_error = copy(cup), copy(cdn),
-        first.energy, first.pulay_error_norm
+        first.energy, first.commutator_rms
     focks, errors = Matrix{Float64}[], Matrix{Float64}[]
     consecutive_failures = pulay_rank = 0
     for iteration = 1:policy.diis_iterations
         metrics = _history_uhf_model_metrics(model, cup, cdn)
-        finite = all(isfinite, (metrics.energy, metrics.pulay_error_norm)) &&
+        finite = all(isfinite, (metrics.energy, metrics.commutator_rms)) &&
             all(isfinite, metrics.Fup) && all(isfinite, metrics.Fdn)
         finite || return (; cup = bestup, cdn = bestdn, status = :numerical_failure,
             iterations = iteration, failures = consecutive_failures, pulay_rank)
         tau = 128eps(Float64) * max(1, abs(best_energy), abs(metrics.energy))
         if metrics.energy < best_energy - tau ||
                 (abs(metrics.energy - best_energy) <= tau &&
-                    metrics.pulay_error_norm < best_error)
+                    metrics.commutator_rms < best_error)
             bestup, bestdn = copy(cup), copy(cdn)
-            best_energy, best_error = metrics.energy, metrics.pulay_error_norm
+            best_energy, best_error = metrics.energy, metrics.commutator_rms
         end
         _history_uhf_converged(metrics) && return (; cup = bestup, cdn = bestdn,
             status = :converged_best, iterations = iteration, failures = 0, pulay_rank)

@@ -2165,9 +2165,9 @@ try
             @test max(norm(mo.Fup - mp.Fup), norm(mo.Fdn - mp.Fdn),
                 abs(mo.energy - mp.energy), norm(ro.F - rp.F),
                 abs(ro.energy - rp.energy)) <= 2e-11
-            @test isapprox(mo.K, sqrt(2) * mo.pulay_error_norm;
+            @test isapprox(mo.K, sqrt(2) * mo.commutator_rms;
                 atol = eps(Float64), rtol = 2eps(Float64))
-            @test isapprox(mp.K, sqrt(2) * mp.pulay_error_norm;
+            @test isapprox(mp.K, sqrt(2) * mp.commutator_rms;
                 atol = eps(Float64), rtol = 2eps(Float64))
             audits = [HFDMRG._history_uhf_physical(H, Hdn, b, Cup, Cdn)
                 for b in (projection, compact)]

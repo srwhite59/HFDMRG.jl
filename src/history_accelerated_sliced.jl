@@ -257,7 +257,7 @@ function _history_uhf_model_metrics(model::_PackedCoulombHistoryUHFModel, Cup, C
     (; Fup, Fdn,
        energy = 0.5dot(Dup, Fup + model.Hup) + 0.5dot(Ddn, Fdn + model.Hdn),
        residual_up = norm(Rup), residual_dn = norm(Rdn), Kup, Kdn, K,
-       pulay_error_norm = K / sqrt(2))
+       commutator_rms = K / sqrt(2))
 end
 
 function _history_model_metrics(model::NamedTuple{(:H, :G)}, C)
@@ -285,7 +285,7 @@ function _history_uhf_model_metrics(model::NamedTuple{(:Hup, :Hdn, :G)}, Cup, Cd
     K = hypot(norm(Kup), norm(Kdn))
     (; Fup, Fdn, energy = 0.5dot(Dup, Fup + model.Hup) + 0.5dot(Ddn, Fdn + model.Hdn),
        residual_up = norm(Rup), residual_dn = norm(Rdn), Kup, Kdn, K,
-       pulay_error_norm = K / sqrt(2))
+       commutator_rms = K / sqrt(2))
 end
 
 function _history_physical(H, backend::_SlicedHistoryBackend, C)

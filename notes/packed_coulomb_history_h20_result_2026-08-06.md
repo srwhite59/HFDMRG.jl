@@ -41,9 +41,9 @@ K_beta  = sqrt(2) R_beta
 K       = hypot(K_alpha, K_beta).
 ```
 
-In the contracted Pulay solve, `pulay_error_norm = K/sqrt(2)` is the norm of the
-two spin commutators after their horizontal concatenation. It is a DIIS ranking
-quantity, not the physical stopping target.
+In the contracted Pulay solve, `commutator_rms = K/sqrt(2)` is the RMS of the
+alpha and beta commutator norms. The norm after horizontal concatenation is
+`K`. The RMS is a DIIS ranking quantity, not the physical stopping target.
 
 ## H20 offline evidence
 
