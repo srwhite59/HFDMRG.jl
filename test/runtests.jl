@@ -792,7 +792,7 @@ try
         end
     end
 
-    @testset "Sliced backend stub" begin
+    @testset "Sliced backend construction" begin
         nj = 2
         ns = 3
         N = nj * ns

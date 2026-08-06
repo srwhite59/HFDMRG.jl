@@ -74,10 +74,6 @@ function _check_range(ra, name)
     isempty(ra) && error("$name must be non-empty")
 end
 
-function _sliced_not_implemented()
-    error("SlicedBasisBackend not implemented yet")
-end
-
 function vee_init_block(side, ra, raV, phi, backend::SlicedBasisBackend)
     _check_side(side)
     _check_range(ra, "ra")
@@ -119,14 +115,6 @@ function vee_window(Lvee, Rvee, Cra, backend::SlicedBasisBackend)
         B[idx, ml + i] = 1.0
     end
     B[Rra, ml + lc + 1:end] = Rphi
-    SlicedBasisWindow(B, backend)
-end
-
-function vee_window(::Nothing, ::Nothing, Cra, backend::SlicedBasisBackend)
-    _check_range(Cra, "Cra")
-    N = backend.layout.offs[end]
-    Cra == 1:N || error("SlicedBasisBackend supports full-system center only")
-    B = Matrix{Float64}(I, N, N)
     SlicedBasisWindow(B, backend)
 end
 

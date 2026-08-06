@@ -207,11 +207,6 @@ function _makeblock(side, range, phi, H, Vee, firstindsH, finalindsH;
     LRBlock(range, raH1, raV, m, phi, H1ij, H1phi, vee_state)
 end
 
-function getblock(side, range, psi, H, Vee, firstindsH, finalindsH; dofull = true)
-    phi, _ = getphi(psi[range, :])
-    _makeblock(side, range, phi, H, Vee, firstindsH, finalindsH; dofull)
-end
-
 function _h1cache(range, phi, m, H, raH1; dofull = true)
     if dofull
         return BlockH1Cache(phi' * H[range, range] * phi, H[raH1, range] * phi)
@@ -230,13 +225,6 @@ function _makeblock_split(side, range, phi, Hup, Hdn, Vee, firstindsH, finalinds
     hdn = _h1cache(range, phi, m, Hdn, raH1; dofull)
     vee_state = vee_init_block(side, range, raV, phi, Vee)
     SplitLRBlock(range, raH1, raV, m, phi, hup, hdn, vee_state)
-end
-
-function getblock_split(side, range, psi, Hup, Hdn, Vee, firstindsH, finalindsH;
-    dofull = true)
-    phi, _ = getphi(psi[range, :])
-    _makeblock_split(
-        side, range, phi, Hup, Hdn, Vee, firstindsH, finalindsH; dofull)
 end
 
 function _addblockright_h1(cra, PhiC, PhiR, oldcache, oldraH1, H, raH1)
