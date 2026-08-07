@@ -38,6 +38,7 @@ include("backends/density_density_target_residual.jl")
 include("backends/sliced_basis.jl")
 include("backends/sliced_basis_cached.jl")
 include("backends/sliced_basis_cached_coulomb.jl")
+include("sliced_fock_audit.jl")
 include("history_accelerated_sliced.jl")
 
 export solve_hfdmrg

@@ -41,6 +41,8 @@ struct SlicedBasisCachedWindow{T}
     scratch::SlicedCachedCrossScratch
 end
 
+_retire_without_rebuild(::SlicedBasisBackendCached) = true
+
 const _bench_timing = Dict{Symbol, Float64}(
     :cache_init_calls => 0.0,
     :cache_incremental_calls => 0.0,
@@ -85,6 +87,352 @@ SlicedBasisBackendCached(layout::SliceLayout, Vblocks::Vector{Vector{Array{Float
 
 _slice_vee(V::Array{Float64,6}, n::Int, m::Int) = @view V[:, :, :, :, n, m]
 _slice_vee(vee::SlicedVeeRagged, n::Int, m::Int) = vee.V[n][m]
+
+function _exact_symmetric_matrix(A, name)
+    size(A, 1) == size(A, 2) || error("$name must be square")
+    scale = 1.0; disagreement = 0.0
+    @inbounds for j = 1:size(A, 2), i = 1:j
+        a, b = A[i, j], A[j, i]
+        isfinite(a) && isfinite(b) ||
+            error("$name must be finite in roundoff-exact sliced mode")
+        scale = max(scale, abs(a), abs(b))
+        disagreement = max(disagreement, abs(a - b))
+    end
+    disagreement <= 128eps(Float64) * scale ||
+        error("$name must be symmetric in roundoff-exact sliced mode")
+end
+function _frozen_backend_check(Hup, Hdn, backend::SlicedBasisBackendCached,
+        psiup, psidn, restricted, partition)
+    layout, S = backend.layout, nslices(backend.layout)
+    partition isa SliceLayout && partition.dims == layout.dims &&
+        partition.offs == layout.offs ||
+        error("roundoff-exact cached sliced mode requires block_partition == backend.layout")
+    9maximum(layout.dims) + 2 <= 40 ||
+        error("roundoff-exact cached sliced audit does not support this layout")
+    _exact_symmetric_matrix(Hup, "Hup"); _exact_symmetric_matrix(Hdn, "Hdn")
+    N = layout.offs[end]
+    N*eps(Float64)<0.5 || error("roundoff-exact sliced dimension exceeds arithmetic band")
+    for (C, name) in ((psiup, "psiup0"), (psidn, "psidn0"))
+        size(C, 1) == N || error("$name has wrong row dimension")
+        all(isfinite, C) || error("$name must be finite in roundoff-exact sliced mode")
+        g = N * eps(Float64) / (1 - N * eps(Float64))
+        norm(C' * C - I, Inf) <= 128g * max(1, size(C, 2)) ||
+            error("$name must be orthonormal in roundoff-exact sliced mode")
+    end
+    vmax, verr = 0.0, 0.0
+    for n = 1:S, m = 1:S
+        Vnm, Vmn = _slice_vee(backend.V, n, m), _slice_vee(backend.V, m, n)
+        all(isfinite, Vnm) || error("sliced interaction must be finite in roundoff-exact mode")
+        dn, dm = layout.dims[n], layout.dims[m]
+        @inbounds for a = 1:dn, b = 1:dn, c = 1:dm, d = 1:dm
+            v = Vnm[a, b, c, d]; vmax = max(vmax, abs(v))
+            verr = max(verr, abs(v - Vnm[b, a, c, d]),
+                abs(v - Vnm[a, b, d, c]), abs(v - Vmn[c, d, a, b]))
+        end
+    end
+    verr <= 128eps(Float64) * max(1.0, vmax) ||
+        error("sliced interaction lacks required physical symmetry")
+    Float64
+end
+
+_empty_frozen_field(backend::SlicedBasisBackendCached, m) = _SlicedFrozenField(
+    zeros(sum(abs2, backend.layout.dims)), zeros(m, m), zeros(m, m))
+_frozen_field_empty(f::_SlicedFrozenField) = all(iszero, f.Jpack) &&
+    all(iszero, f.kup) && all(iszero, f.kdn)
+
+mutable struct _SlicedFrozenScratch
+    pair_offs::Vector{Int}
+    sources::Vector{Int}
+    direct::Vector{Float64}
+    source_density::Vector{Float64}
+    density1::Matrix{Float64}
+    density2::Matrix{Float64}
+    kernel::Matrix{Float64}
+    work::Matrix{Float64}
+    square::Matrix{Float64}
+    Gup::Matrix{Float64}
+    Gdn::Matrix{Float64}
+end
+function _SlicedFrozenScratch(backend::SlicedBasisBackendCached)
+    layout = backend.layout
+    pair_offs = _pair_offs(layout, 1:nslices(layout))
+    d = maximum(layout.dims)
+    _SlicedFrozenScratch(pair_offs, zeros(Int, nslices(layout)),
+        zeros(pair_offs[end]), zeros(pair_offs[end]), zeros(d, d), zeros(d, d),
+        zeros(d, d), zeros(0, d), zeros(0, 0), zeros(0, 0), zeros(0, 0))
+end
+function _sliced_frozen_scratch!(p, backend::SlicedBasisBackendCached, n)
+    p.scratch isa _SlicedFrozenScratch ||
+        (p.scratch = _SlicedFrozenScratch(backend))
+    scratch = p.scratch::_SlicedFrozenScratch
+    d = maximum(backend.layout.dims)
+    if size(scratch.square, 1) < n
+        scratch.work = zeros(n, d)
+        scratch.square = zeros(n, n)
+        scratch.Gup = zeros(n, n)
+        scratch.Gdn = zeros(n, n)
+    end
+    scratch
+end
+
+function _sliced_frozen_direct!(scratch, backend, Cup, Cdn)
+    dims, offs, S = backend.layout.dims, backend.layout.offs,
+        nslices(backend.layout)
+    fill!(scratch.direct, 0); nsources = 0
+    for m = 1:S
+        rm = offs[m] + 1:offs[m + 1]
+        cup, cdn = @view(Cup[rm, :]), @view(Cdn[rm, :])
+        (any(x -> !iszero(x), cup) || any(x -> !iszero(x), cdn)) || continue
+        nsources += 1; scratch.sources[nsources] = m
+        T = reshape(@view(scratch.source_density[
+            _pair_range(scratch.pair_offs, m)]), dims[m], dims[m])
+        extra = @view scratch.density2[1:dims[m], 1:dims[m]]
+        mul!(T, cup, transpose(cup))
+        mul!(extra, cdn, transpose(cdn)); T .+= extra
+    end
+    for n = 1:S, source = 1:nsources
+        m = scratch.sources[source]
+        Jn = reshape(@view(scratch.direct[
+            _pair_range(scratch.pair_offs, n)]), dims[n], dims[n])
+        T = reshape(@view(scratch.source_density[
+            _pair_range(scratch.pair_offs, m)]), dims[m], dims[m])
+        Vnm = _slice_vee(backend.V, n, m)
+        @inbounds for a = 1:dims[n], b = 1:dims[n], c = 1:dims[m], d = 1:dims[m]
+            Jn[a, b] += Vnm[a, b, c, d] * T[c, d]
+        end
+    end
+    scratch.direct
+end
+function _sliced_frozen_exchange_projected!(Kbar, scratch, backend, C, ra, phi)
+    fill!(Kbar, 0); size(C, 2) == 0 && return Kbar
+    layout, dims, offs = backend.layout, backend.layout.dims, backend.layout.offs
+    k = size(phi, 2)
+    for n in _active_slices(layout, ra), m in _active_slices(layout, ra)
+        dn, dm = dims[n], dims[m]
+        rn, rm = offs[n] + 1:offs[n + 1], offs[m] + 1:offs[m + 1]
+        D = @view scratch.density1[1:dn, 1:dm]
+        K = @view scratch.kernel[1:dn, 1:dm]
+        mul!(D, @view(C[rn, :]), transpose(@view(C[rm, :])))
+        fill!(K, 0); Vnm = _slice_vee(backend.V, n, m)
+        @inbounds for a = 1:dn, d = 1:dm, b = 1:dn, c = 1:dm
+            K[a, d] += Vnm[a, b, c, d] * D[b, c]
+        end
+        phin, phim = _slice_phi(layout, ra, phi, n),
+            _slice_phi(layout, ra, phi, m)
+        work = @view scratch.work[1:k, 1:dm]
+        projected = @view scratch.square[1:k, 1:k]
+        mul!(work, transpose(phin), K); mul!(projected, work, phim)
+        Kbar .+= projected
+    end
+    Kbar
+end
+function _sliced_frozen_cross_exchange!(scratch, backend, Cf, Cp, ra)
+    (size(Cf, 2) == 0 || size(Cp, 2) == 0) && return 0.0
+    _sliced_frozen_cross_exchange(backend, Cf, Cp, ra)
+end
+function _sliced_frozen_direct_trace!(scratch, backend, Cup, Cdn, J)
+    offs, dims = backend.layout.offs, backend.layout.dims; value = 0.0
+    all(==(size(scratch.density1, 1)), dims) ||
+        return _sliced_frozen_direct_trace(backend, Cup, Cdn, J)
+    for n = 1:nslices(backend.layout)
+        d = dims[n]; rn = offs[n] + 1:offs[n + 1]
+        T = @view scratch.density1[1:d, 1:d]
+        extra = @view scratch.density2[1:d, 1:d]
+        mul!(T, @view(Cup[rn, :]), transpose(@view(Cup[rn, :])))
+        mul!(extra, @view(Cdn[rn, :]), transpose(@view(Cdn[rn, :])))
+        T .+= extra
+        value += dot(T, reshape(@view(J[
+            _pair_range(scratch.pair_offs, n)]), d, d))
+    end
+    value
+end
+
+function _sliced_frozen_direct(backend, Cup, Cdn)
+    dims, offs, S = backend.layout.dims, backend.layout.offs, nslices(backend.layout)
+    poffs = _pair_offs(backend.layout, 1:S); J = zeros(poffs[end])
+    sources = [m for m=1:S if any(x -> !iszero(x), @view(Cup[offs[m]+1:offs[m+1],:])) ||
+        any(x -> !iszero(x), @view(Cdn[offs[m]+1:offs[m+1],:]))]
+    T = [(@view Cup[offs[m]+1:offs[m+1],:]) * (@view Cup[offs[m]+1:offs[m+1],:])' +
+        (@view Cdn[offs[m]+1:offs[m+1],:]) * (@view Cdn[offs[m]+1:offs[m+1],:])'
+        for m in sources]
+    for n = 1:S, (i, m) in enumerate(sources)
+        Jn = reshape(@view(J[_pair_range(poffs, n)]), dims[n], dims[n])
+        Vnm = _slice_vee(backend.V, n, m)
+        @inbounds for a = 1:dims[n], b = 1:dims[n], c = 1:dims[m], d = 1:dims[m]
+            Jn[a, b] += Vnm[a, b, c, d] * T[i][c, d]
+        end
+    end
+    J
+end
+function _sliced_frozen_exchange_projected(backend, C, ra, phi)
+    layout, dims, offs = backend.layout, backend.layout.dims, backend.layout.offs
+    active = _active_slices(layout, ra); Kbar = zeros(size(phi,2),size(phi,2))
+    for n in active, m in active
+        rn, rm = offs[n] + 1:offs[n + 1], offs[m] + 1:offs[m + 1]
+        D = (@view C[rn, :]) * (@view C[rm, :])'; K = zeros(dims[n], dims[m])
+        Vnm = _slice_vee(backend.V, n, m)
+        @inbounds for a = 1:dims[n], d = 1:dims[m], b = 1:dims[n], c = 1:dims[m]
+            K[a, d] += Vnm[a, b, c, d] * D[b, c]
+        end
+        phin, phim = _slice_phi(layout, ra, phi, n), _slice_phi(layout, ra, phi, m)
+        Kbar .+= phin' * K * phim
+    end
+    Kbar
+end
+function _sliced_frozen_cross_exchange(backend, Cf, Cp, ra)
+    layout, dims, offs = backend.layout, backend.layout.dims, backend.layout.offs; value = 0.0
+    for n in _active_slices(layout,ra), m in _active_slices(layout,ra)
+        rn,rm=offs[n]+1:offs[n+1],offs[m]+1:offs[m+1]
+        Df=(@view Cf[rn,:])*(@view Cf[rm,:])'; Dp=(@view Cp[rn,:])*(@view Cp[rm,:])'
+        K=zeros(dims[n],dims[m]); Vnm=_slice_vee(backend.V,n,m)
+        @inbounds for a=1:dims[n],d=1:dims[m],b=1:dims[n],c=1:dims[m]
+            K[a,d]+=Vnm[a,b,c,d]*Dp[b,c]
+        end
+        value+=dot(Df,K)
+    end
+    value
+end
+function _sliced_frozen_direct_trace(backend, Cup, Cdn, J)
+    offs, dims = backend.layout.offs, backend.layout.dims
+    poffs = _pair_offs(backend.layout, 1:nslices(backend.layout)); value = 0.0
+    for n = 1:nslices(backend.layout)
+        rn = offs[n] + 1:offs[n + 1]
+        Tn = (@view Cup[rn, :]) * (@view Cup[rn, :])' + (@view Cdn[rn, :]) * (@view Cdn[rn, :])'
+        value += dot(Tn, reshape(@view(J[_pair_range(poffs, n)]), dims[n], dims[n]))
+    end
+    value
+end
+function _sliced_frozen_fresh(backend, p, Cup, Cdn, phi, ra)
+    J = _sliced_frozen_direct(backend, Cup, Cdn)
+    Kup, Kdn = _sliced_frozen_exchange_projected(backend, Cup, ra, phi),
+        _sliced_frozen_exchange_projected(backend, Cdn, ra, phi)
+    one = dot(Cup, p.Hup * Cup) + dot(Cdn, p.Hdn * Cdn); e = one + 0.5 *
+        (_sliced_frozen_direct_trace(backend, Cup, Cdn, J) - _sliced_frozen_cross_exchange(backend, Cup, Cup, ra) -
+        _sliced_frozen_cross_exchange(backend, Cdn, Cdn, ra))
+    _SlicedFrozenField(J, Kup, Kdn), e
+end
+function _frozen_absorption_map(backend::SlicedBasisBackendCached, side, oldblock,
+        cra, newblock)
+    _aligned_absorption(side, oldblock.ra, cra, newblock.raV, backend.layout) ||
+        error("roundoff-exact cached absorption is not whole-slice aligned")
+    A = _old_basis_map(side, oldblock.vee, cra, newblock.phi)
+    A === nothing && error("roundoff-exact cached absorption would use fallback")
+    A
+end
+function _promote_frozen_field(backend::SlicedBasisBackendCached, p, old, oldblock,
+        newblock, growth, A, diagnostics)
+    ra, f = newblock.ra, old.field
+    if size(growth.Cup,2)+size(growth.Cdn,2)==0
+        return _SlicedFrozenField(f.Jpack,A'*f.kup*A,A'*f.kdn*A),old.energy
+    end
+    scratch = _sliced_frozen_scratch!(p, backend, size(newblock.phi, 2))
+    JP = _sliced_frozen_direct!(scratch, backend, growth.Cup, growth.Cdn)
+    KPup, KPdn = zeros(size(newblock.phi, 2), size(newblock.phi, 2)),
+        zeros(size(newblock.phi, 2), size(newblock.phi, 2))
+    _sliced_frozen_exchange_projected!(KPup, scratch, backend, growth.Cup, ra,
+        newblock.phi)
+    _sliced_frozen_exchange_projected!(KPdn, scratch, backend, growth.Cdn, ra,
+        newblock.phi)
+    Cfu, Cfd = _ledger_columns(old, _frozen_size(p), :up),
+        _ledger_columns(old, _frozen_size(p), :dn)
+    fdirect = _sliced_frozen_direct_trace!(scratch, backend, growth.Cup,
+        growth.Cdn, f.Jpack)
+    Xup, Xdn = oldblock.phi' * growth.Cup[oldblock.ra, :],
+        oldblock.phi' * growth.Cdn[oldblock.ra, :]
+    fexchange = dot(Xup, f.kup * Xup) + dot(Xdn, f.kdn * Xdn)
+    rdirect = _sliced_frozen_direct_trace!(scratch, backend, Cfu, Cfd, JP)
+    rexchange = _sliced_frozen_cross_exchange!(
+        scratch, backend, Cfu, growth.Cup, ra) +
+        _sliced_frozen_cross_exchange!(scratch, backend, Cfd, growth.Cdn, ra)
+    self = 0.5 * (_sliced_frozen_direct_trace!(scratch, backend, growth.Cup,
+        growth.Cdn, JP) - _sliced_frozen_cross_exchange!(
+            scratch, backend, growth.Cup, growth.Cup, ra) -
+        _sliced_frozen_cross_exchange!(scratch, backend, growth.Cdn,
+            growth.Cdn, ra))
+    one = dot(growth.Cup, p.Hup * growth.Cup) +
+        dot(growth.Cdn, p.Hdn * growth.Cdn)
+    kup = A' * f.kup * A + KPup
+    kdn = A' * f.kdn * A + KPdn
+    if diagnostics !== nothing
+        diagnostics.frozen_promotions_up += size(growth.Cup, 2)
+        diagnostics.frozen_promotions_dn += size(growth.Cdn, 2)
+        diagnostics.frozen_direct_orientation_error = max(
+            diagnostics.frozen_direct_orientation_error, abs(fdirect - rdirect))
+        diagnostics.frozen_exchange_orientation_error = max(
+            diagnostics.frozen_exchange_orientation_error, abs(fexchange - rexchange))
+    end
+    _SlicedFrozenField(f.Jpack + JP, kup, kdn),
+        old.energy + one + self + 0.5 * (fdirect + rdirect - fexchange - rexchange)
+end
+function _sliced_project_frozen_direct(backend, B, J)
+    layout = backend.layout; poffs = _pair_offs(layout, 1:nslices(layout)); G = zeros(size(B, 2), size(B, 2))
+    for n = 1:nslices(layout)
+        rn = layout.offs[n] + 1:layout.offs[n + 1]
+        Jn = reshape(@view(J[_pair_range(poffs, n)]), layout.dims[n], layout.dims[n]); Bn = @view B[rn, :]; G .+= Bn' * Jn * Bn
+    end
+    G
+end
+function _sliced_project_frozen_direct!(G, scratch, backend, B, J)
+    layout = backend.layout; fill!(G, 0); w = size(B, 2)
+    for n = 1:nslices(layout)
+        d = layout.dims[n]; rn = layout.offs[n] + 1:layout.offs[n + 1]
+        Jn = reshape(@view(J[_pair_range(scratch.pair_offs, n)]), d, d)
+        Bn = @view B[rn, :]
+        work = @view scratch.work[1:w, 1:d]
+        projected = @view scratch.square[1:w, 1:w]
+        mul!(work, transpose(Bn), Jn); mul!(projected, work, Bn)
+        G .+= projected
+    end
+    G
+end
+function _frozen_effective(backend::SlicedBasisBackendCached, p, L, R, B)
+    N, lf, rf = size(B, 1), L.field, R.field
+    scratch = _sliced_frozen_scratch!(p, backend, size(B, 2))
+    CLu, CLd = _ledger_columns(L, N, :up), _ledger_columns(L, N, :dn)
+    CRu, CRd = _ledger_columns(R, N, :up), _ledger_columns(R, N, :dn)
+    @. scratch.direct = lf.Jpack + rf.Jpack
+    w = size(B, 2); Gup = @view scratch.Gup[1:w, 1:w]
+    Gdn = @view scratch.Gdn[1:w, 1:w]
+    _sliced_project_frozen_direct!(Gup, scratch, backend, B, scratch.direct)
+    copyto!(Gdn, Gup); ml, mr = size(lf.kup, 1), size(rf.kup, 1)
+    Gup[1:ml, 1:ml] -= lf.kup; Gdn[1:ml, 1:ml] -= lf.kdn
+    Gup[end - mr + 1:end, end - mr + 1:end] -= rf.kup; Gdn[end - mr + 1:end, end - mr + 1:end] -= rf.kdn
+    lr = _sliced_frozen_direct_trace!(scratch, backend, CLu, CLd, rf.Jpack)
+    rl = _sliced_frozen_direct_trace!(scratch, backend, CRu, CRd, lf.Jpack)
+    Gup, Gdn, L.energy + R.energy + 0.5 * (lr + rl),
+        hcat(CLu, CRu), hcat(CLd, CRd)
+end
+_frozen_window_check(backend::SlicedBasisBackendCached, win) =
+    win isa SlicedBasisCachedWindow ||
+        error("roundoff-exact cached sliced mode forbids projection windows")
+_frozen_audit_context(p, spin, backend::SlicedBasisBackendCached) = spin === :up ?
+    _SlicedFockAuditContext(p.Hup, backend, p.psiup, p.psidn, :up) :
+    _SlicedFockAuditContext(p.Hdn, backend, p.psiup, p.psidn, :dn)
+function _sliced_frozen_payload(p)
+    values, seen = 0, IdDict{Any,Nothing}()
+    for i = eachindex(p.cuts)
+        isassigned(p.cuts, i) || continue
+        cut = p.cuts[i]; f = cut.field
+        for array in (f.Jpack, f.kup, f.kdn)
+            haskey(seen, array) || (seen[array] = nothing; values += length(array))
+        end
+        values += 3
+        node = cut.ledger
+        while node !== nothing
+            if !haskey(seen, node)
+                seen[node] = nothing
+                for array in (node.up, node.dn, node.originup, node.origindn)
+                    haskey(seen, array) ||
+                        (seen[array] = nothing; values += length(array))
+                end
+            end
+            node = node.parent
+        end
+    end
+    values
+end
+_frozen_payload(p::_FrozenPolicy{T,B}) where {T,B<:SlicedBasisBackendCached} =
+    _sliced_frozen_payload(p)
 
 _slice_local(layout::SliceLayout, p::Int) = slice_local(layout, p)
 

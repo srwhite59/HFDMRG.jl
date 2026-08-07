@@ -46,17 +46,34 @@ mutable struct _RunDiagnostics
     spectra::Vector{NamedTuple}
     windows::Vector{NamedTuple}
     frozen_rebuilds::Int
+    frozen_global_initializations::Int
     frozen_max_generations::Int
     frozen_live_generations::Int
-    frozen_recurrence_error::Float64
     frozen_zero_up_windows::Int
     frozen_zero_dn_windows::Int
     frozen_zero_both_windows::Int
     frozen_rebuild_projector_error::Float64
+    frozen_promotions_up::Int
+    frozen_promotions_dn::Int
+    frozen_residual_thaws::Int
+    frozen_inversion_thaws::Int
+    frozen_indeterminate_thaws::Int
+    frozen_scheduled_thaws::Int
+    frozen_audit_rebuilds::Int
+    frozen_transition_rebuilds::Int
+    frozen_direct_orientation_error::Float64
+    frozen_exchange_orientation_error::Float64
+    frozen_retained_values::Int
+    frozen_cuts::Vector{NamedTuple}
+    frozen_events::Vector{NamedTuple}
+    frozen_window_entries_up::Int
+    frozen_window_entries_dn::Int
+    frozen_window_entry_error::Float64
 end
 
-_RunDiagnostics() = _RunDiagnostics(NamedTuple[], NamedTuple[], 0, 0, 0, 0.0,
-    0, 0, 0, 0.0)
+_RunDiagnostics() = _RunDiagnostics(NamedTuple[], NamedTuple[],
+    0, 0, 0, 0, 0, 0, 0, 0.0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0.0, 0.0, 0, NamedTuple[], NamedTuple[], 0, 0, 0.0)
 
 _detailed(diagnostics) = diagnostics !== nothing
 
@@ -440,8 +457,10 @@ function getinitialblocks(nblocks, blocksizes, Cranges, psi, H, Vee, firstindsH,
     block = Vector{typeof(block1)}(undef, nblocks)
     block[1] = block1
     block[nblocks] = blockn
-    _frozen === nothing ||
+    if _frozen !== nothing
+        _diagnostics === nothing || (_diagnostics.frozen_global_initializations += 1)
         _frozen_begin_blocks!(_frozen, nblocks, block1.m, blockn.m)
+    end
     _record_fixed_edge!(_diagnostics, :left, left)
     _record_fixed_edge!(_diagnostics, :right, right)
     verbose && @show block[1].ra
@@ -483,8 +502,10 @@ function getinitialblocks_split(nblocks, blocksizes, Cranges, psi, Hup, Hdn, Vee
     block = Vector{typeof(block1)}(undef, nblocks)
     block[1] = block1
     block[nblocks] = blockn
-    _frozen === nothing ||
+    if _frozen !== nothing
+        _diagnostics === nothing || (_diagnostics.frozen_global_initializations += 1)
         _frozen_begin_blocks!(_frozen, nblocks, block1.m, blockn.m)
+    end
     _record_fixed_edge!(_diagnostics, :left, left)
     _record_fixed_edge!(_diagnostics, :right, right)
     verbose && @show block[1].ra
@@ -617,6 +638,12 @@ function getpsireduced(psiup, Lra, Lphi, Cra, Rra, Rphi)
     psiR = Rphi' * psiup[Rra, :]
     vcat(psiL, psiC, psiR)
 end
+function _initial_reduced(block, nblockcenter, Cup, Cdn, restricted)
+    left, right = block[1], block[2 + nblockcenter]; center = last(left.ra) + 1:first(right.ra) - 1
+    up = getpsireduced(Cup, left.ra, left.phi, center, right.ra, right.phi)
+    dn = restricted ? up : getpsireduced(Cdn, left.ra, left.phi, center, right.ra, right.phi)
+    up, dn
+end
 
 function eigsym(A)
     E = @timeg "eigensolve" eigen(Symmetric(A))
@@ -636,10 +663,16 @@ function _rel_converged(energy_old, energy_new, cutoff)
     abs(energy_old - energy_new) < cutoff * scale
 end
 
-function solve_hfdmrg_core(H, Vee, psiup0, psidn0; frozen_occupied = :off, kwargs...)
+function solve_hfdmrg_core(H, Vee, psiup0, psidn0; frozen_occupied = :off,
+        frozen_leakage_schedule = nothing, kwargs...)
     frozen_occupied in (:off, :roundoff_exact) ||
         error("frozen_occupied must be :off or :roundoff_exact")
-    _solve_hfdmrg_core(Val(frozen_occupied), H, Vee, psiup0, psidn0; kwargs...)
+    frozen_occupied === :off ? frozen_leakage_schedule === nothing ||
+        error("frozen leakage schedule requires frozen_occupied=:roundoff_exact") :
+        frozen_leakage_schedule isa _FrozenLeakageSchedule ||
+        error("scheduled frozen mode requires a private _FrozenLeakageSchedule")
+    _solve_hfdmrg_core(Val(frozen_occupied), H, Vee, psiup0, psidn0;
+        frozen_leakage_schedule, kwargs...)
 end
 
 function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
@@ -651,29 +684,27 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
     cutoff = 1e-11,
     scf_cutoff = nothing,
     environment_cutoff = 1e-10,
+    frozen_leakage_schedule = nothing,
     observer = nothing,
     _diagnostics = nothing,
     verbose = false) where {frozen_mode}
 
     environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(H, 1)
-    frozen = frozen_mode === :off ? nothing :
-        _frozen_policy(H, H, Vee, psiup0, psidn0, restricted)
+    frozen = frozen_mode === :off ? nothing : _frozen_policy(
+        H, H, Vee, psiup0, psidn0, restricted, block_partition, frozen_leakage_schedule)
+    final_policy = frozen
+    frozen === nothing || (maxiter = min(maxiter, 24))
     finalindsH, firstindsH = getfinal(H, N)
     m = restricted ? Nup : Nup + Ndn
     psiall = restricted ? psiup0 : hcat(psiup0, psidn0)
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
-    block = @timeg "initialization" getinitialblocks(nblocks, blocksizes, Cranges,
-        psiall, H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
-        environment_cutoff, _frozen = frozen)
+    block = @timeg "initialization" getinitialblocks(nblocks, blocksizes,
+        Cranges, psiall, H, Vee, firstindsH, finalindsH; verbose,
+        _diagnostics, environment_cutoff, _frozen = frozen)
 
-    Lra = block[1].ra
-    Rra = block[2 + nblockcenter].ra
-    Cra = Lra[end] + 1:Rra[1] - 1
-    psiup = getpsireduced(psiup0, Lra, block[1].phi, Cra, Rra, block[2 + nblockcenter].phi)
-    psidn = restricted ? psiup : getpsireduced(psidn0, Lra, block[1].phi, Cra, Rra,
-        block[2 + nblockcenter].phi)
+    psiup, psidn = _initial_reduced(block, nblockcenter, psiup0, psidn0, restricted)
 
     left2right = [(b, 1, 1) for b = 1:nblocks - 1 - nblockcenter]
     left2right[end] = (nblocks - 1 - nblockcenter, 1, -1)
@@ -689,7 +720,6 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
     iter = 0
     while iter < maxiter
         iter += 1
-        stop_solve = false
         @timeg "sweep" begin
         energy = 0.0
         restart_frozen = false
@@ -761,6 +791,8 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                     Cra, block[b + 1 + nblockcenter], H1B, H1B, win, lambda[b],
                     scf_cutoff, false, _diagnostics)
                 if result.stale
+                    _retire_without_rebuild(frozen.backend) &&
+                        error("nonrebuilding frozen state lost determinant containment")
                     _protect_stale!(frozen, result.up, result.dn, _diagnostics)
                     restart_frozen = true
                     break
@@ -792,8 +824,8 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                 if transdir == 1
                     growth = _frozen_growth!(frozen, :left, block[b],
                         Cranges[b + 1], b, environment_cutoff)
-                    block[b + 1] = addblockleft(
-                        Cranges[b + 1], growth.O, block[b], N, H, Vee, finalindsH)
+                    block[b + 1] = addblockleft(Cranges[b + 1], growth.O,
+                        block[b], N, H, Vee, finalindsH)
                     _frozen_store_growth!(frozen, b + 1, b, :left,
                         block[b], block[b + 1], growth, _diagnostics)
                 else
@@ -867,37 +899,58 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
             end
         end
         if restart_frozen
-            Dup, Ddn = frozen.psiup * frozen.psiup', frozen.psidn * frozen.psidn'
+            Cup, Cdn = copy(frozen.psiup), copy(frozen.psidn)
             block = @timeg "initialization" getinitialblocks(
                 nblocks, blocksizes, Cranges,
                 restricted ? frozen.psiup : hcat(frozen.psiup, frozen.psidn),
                 H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
                 environment_cutoff, _frozen = frozen)
             psiallup, psialldn = frozen.psiup, frozen.psidn
-            _record_frozen_rebuild_error!(_diagnostics, frozen, Dup, Ddn)
+            _record_frozen_rebuild_error!(_diagnostics, frozen, Cup, Cdn)
             iter -= 1
-        else
-            verbose && @show iter, energy, energyiter
-            converged = abs(energyiter - energy) < cutoff
-            energyiter = energy
-            if frozen !== nothing
-                rebuild, converged = _frozen_audit!(frozen, converged, _diagnostics)
-                if rebuild
+            continue
+        end
+        verbose && @show iter, energy, energyiter
+        converged = abs(energyiter - energy) < cutoff
+        energyiter = energy
+        if frozen !== nothing
+            action = _frozen_audit!(frozen, _diagnostics); converged = false
+            if action !== :continue
+                Cup, Cdn = copy(frozen.psiup), copy(frozen.psidn)
+                psiallup, psialldn = frozen.psiup, frozen.psidn
+                if action === :off || action === :drained
+                    frozen = nothing
+                    if action === :off
+                        block = @timeg "initialization" getinitialblocks(
+                            nblocks, blocksizes, Cranges,
+                            restricted ? psiallup : hcat(psiallup, psialldn), H,
+                            Vee, firstindsH, finalindsH; verbose, _diagnostics,
+                            environment_cutoff)
+                    end
+                    psiup, psidn = _initial_reduced(
+                        block, nblockcenter, psiallup, psialldn, restricted)
+                else
                     block = @timeg "initialization" getinitialblocks(
                         nblocks, blocksizes, Cranges,
                         restricted ? frozen.psiup : hcat(frozen.psiup, frozen.psidn),
                         H, Vee, firstindsH, finalindsH; verbose, _diagnostics,
                         environment_cutoff, _frozen = frozen)
                 end
+                _record_frozen_rebuild_error!(_diagnostics, final_policy, Cup, Cdn)
+            else
                 psiallup, psialldn = frozen.psiup, frozen.psidn
             end
-            info = SweepInfo(iter, energyiter, psiallup,
-                restricted ? psiallup : psialldn, converged)
-            stop_requested = _notify_observer(observer, info)
-            stop_solve = converged || stop_requested
+        elseif final_policy !== nothing
+            final_policy.off_sweeps += 1
+            converged = converged && final_policy.off_sweeps >= 2 &&
+                _frozen_final_audit!(final_policy, psiallup,
+                    restricted ? psiallup : psialldn, _diagnostics)
         end
+        info = SweepInfo(iter, energyiter, psiallup,
+            restricted ? psiallup : psialldn, converged)
+        stop_requested = _notify_observer(observer, info)
+        (converged || stop_requested) && break
         end
-        stop_solve && break
     end
 
     restricted && (psialldn = psiallup)
@@ -905,11 +958,16 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
 end
 
 function solve_hfdmrg_core_split(Hup, Hdn, Vee, psiup0, psidn0;
-        frozen_occupied = :off, kwargs...)
+        frozen_occupied = :off, frozen_leakage_schedule = nothing, kwargs...)
     frozen_occupied in (:off, :roundoff_exact) ||
         error("frozen_occupied must be :off or :roundoff_exact")
+    frozen_occupied === :off ? frozen_leakage_schedule === nothing ||
+        error("frozen leakage schedule requires frozen_occupied=:roundoff_exact") :
+        frozen_leakage_schedule isa _FrozenLeakageSchedule ||
+        error("scheduled frozen mode requires a private _FrozenLeakageSchedule")
     _solve_hfdmrg_core_split(
-        Val(frozen_occupied), Hup, Hdn, Vee, psiup0, psidn0; kwargs...)
+        Val(frozen_occupied), Hup, Hdn, Vee, psiup0, psidn0;
+        frozen_leakage_schedule, kwargs...)
 end
 
 function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psidn0;
@@ -920,14 +978,17 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
     cutoff = 1e-11,
     scf_cutoff = nothing,
     environment_cutoff = 1e-10,
+    frozen_leakage_schedule = nothing,
     observer = nothing,
     _diagnostics = nothing,
     verbose = false) where {frozen_mode}
 
     environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(Hup, 1)
-    frozen = frozen_mode === :off ? nothing :
-        _frozen_policy(Hup, Hdn, Vee, psiup0, psidn0, false)
+    frozen = frozen_mode === :off ? nothing : _frozen_policy(
+        Hup, Hdn, Vee, psiup0, psidn0, false, block_partition, frozen_leakage_schedule)
+    final_policy = frozen
+    frozen === nothing || (maxiter = min(maxiter, 24))
     size(Hup, 2) == N || error("Hup must be square")
     size(Hdn) == (N, N) || error("Hdn must have the same size as Hup")
     size(psiup0, 1) == N || error("psiup0 has wrong row dimension")
@@ -942,13 +1003,7 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
         Cranges, psiall, Hup, Hdn, Vee, firstindsH, finalindsH; verbose,
         _diagnostics, environment_cutoff, _frozen = frozen)
 
-    Lra = block[1].ra
-    Rra = block[2 + nblockcenter].ra
-    Cra = Lra[end] + 1:Rra[1] - 1
-    psiup = getpsireduced(psiup0, Lra, block[1].phi, Cra, Rra,
-        block[2 + nblockcenter].phi)
-    psidn = getpsireduced(psidn0, Lra, block[1].phi, Cra, Rra,
-        block[2 + nblockcenter].phi)
+    psiup, psidn = _initial_reduced(block, nblockcenter, psiup0, psidn0, false)
 
     left2right = [(b, 1, 1) for b = 1:nblocks - 1 - nblockcenter]
     left2right[end] = (nblocks - 1 - nblockcenter, 1, -1)
@@ -964,7 +1019,6 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
     iter = 0
     while iter < maxiter
         iter += 1
-        stop_solve = false
         @timeg "sweep" begin
         energy = 0.0
         restart_frozen = false
@@ -977,8 +1031,10 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
             window_ordinal = detailed ?
                 (dir == 1 ? b : nblocks - 1 - nblockcenter - b) : 0
             H1Bup, H1Bdn, Cra, win = @timeg "window construction" begin
-                H1Bup = getH1(block[b], block[b + 1 + nblockcenter], Hup, Val(:up))
-                H1Bdn = getH1(block[b], block[b + 1 + nblockcenter], Hdn, Val(:dn))
+                H1Bup = getH1(
+                    block[b], block[b + 1 + nblockcenter], Hup, Val(:up))
+                H1Bdn = getH1(
+                    block[b], block[b + 1 + nblockcenter], Hdn, Val(:dn))
                 Cra = block[b].ra[end] + 1:block[b + 1 + nblockcenter].ra[1] - 1
                 win = vee_window(block[b].vee,
                     block[b + 1 + nblockcenter].vee, Cra, Vee)
@@ -1024,6 +1080,8 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
                     Cra, block[b + 1 + nblockcenter], H1Bup, H1Bdn, win, lambda[b],
                     scf_cutoff, true, _diagnostics)
                 if result.stale
+                    _retire_without_rebuild(frozen.backend) &&
+                        error("nonrebuilding frozen state lost determinant containment")
                     _protect_stale!(frozen, result.up, result.dn, _diagnostics)
                     restart_frozen = true
                     break
@@ -1131,37 +1189,57 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
             end
         end
         if restart_frozen
-            Dup, Ddn = frozen.psiup * frozen.psiup', frozen.psidn * frozen.psidn'
+            Cup, Cdn = copy(frozen.psiup), copy(frozen.psidn)
             block = @timeg "initialization" getinitialblocks_split(
                 nblocks, blocksizes, Cranges,
                 hcat(frozen.psiup, frozen.psidn), Hup, Hdn, Vee,
                 firstindsH, finalindsH; verbose, _diagnostics,
                 environment_cutoff, _frozen = frozen)
             psiallup, psialldn = frozen.psiup, frozen.psidn
-            _record_frozen_rebuild_error!(_diagnostics, frozen, Dup, Ddn)
+            _record_frozen_rebuild_error!(_diagnostics, frozen, Cup, Cdn)
             iter -= 1
-        else
-            verbose && @show iter, energy, energyiter
-            verbose && flush(stdout)
-            converged = _rel_converged(energyiter, energy, cutoff)
-            energyiter = energy
-            if frozen !== nothing
-                rebuild, converged = _frozen_audit!(frozen, converged, _diagnostics)
-                if rebuild
+            continue
+        end
+        verbose && @show iter, energy, energyiter
+        verbose && flush(stdout)
+        converged = _rel_converged(energyiter, energy, cutoff)
+        energyiter = energy
+        if frozen !== nothing
+            action = _frozen_audit!(frozen, _diagnostics); converged = false
+            if action !== :continue
+                Cup, Cdn = copy(frozen.psiup), copy(frozen.psidn)
+                psiallup, psialldn = frozen.psiup, frozen.psidn
+                if action === :off || action === :drained
+                    frozen = nothing
+                    if action === :off
+                        block = @timeg "initialization" getinitialblocks_split(
+                            nblocks, blocksizes,
+                            Cranges, hcat(psiallup, psialldn), Hup, Hdn, Vee,
+                            firstindsH, finalindsH; verbose, _diagnostics,
+                            environment_cutoff)
+                    end
+                    psiup, psidn = _initial_reduced(
+                        block, nblockcenter, psiallup, psialldn, false)
+                else
                     block = @timeg "initialization" getinitialblocks_split(
                         nblocks, blocksizes, Cranges,
                         hcat(frozen.psiup, frozen.psidn), Hup, Hdn, Vee,
                         firstindsH, finalindsH; verbose, _diagnostics,
                         environment_cutoff, _frozen = frozen)
                 end
+                _record_frozen_rebuild_error!(_diagnostics, final_policy, Cup, Cdn)
+            else
                 psiallup, psialldn = frozen.psiup, frozen.psidn
             end
-            info = SweepInfo(iter, energyiter, psiallup, psialldn, converged)
-            stop_requested = _notify_observer(observer, info)
-            stop_solve = converged || stop_requested
+        elseif final_policy !== nothing
+            final_policy.off_sweeps += 1
+            converged = converged && final_policy.off_sweeps >= 2 &&
+                _frozen_final_audit!(final_policy, psiallup, psialldn, _diagnostics)
         end
+        info = SweepInfo(iter, energyiter, psiallup, psialldn, converged)
+        stop_requested = _notify_observer(observer, info)
+        (converged || stop_requested) && break
         end
-        stop_solve && break
     end
 
     psiallup, psialldn, energyiter

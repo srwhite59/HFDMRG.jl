@@ -67,6 +67,47 @@ function _SlicedBasisBackendCachedCoulomb(layout::SliceLayout, vee::SlicedVeeRag
     _certify_coulomb(layout, vee)
     _SlicedBasisBackendCachedCoulomb{SlicedVeeRagged}(layout, vee)
 end
+
+_generic_cached_backend(backend::_SlicedBasisBackendCachedCoulomb) =
+    SlicedBasisBackendCached(backend.layout, backend.V)
+_retire_without_rebuild(::_SlicedBasisBackendCachedCoulomb) = true
+function _frozen_backend_check(Hup, Hdn,
+        backend::_SlicedBasisBackendCachedCoulomb, psiup, psidn, restricted,
+        partition)
+    _frozen_backend_check(Hup, Hdn, _generic_cached_backend(backend), psiup,
+        psidn, restricted, partition)
+end
+_empty_frozen_field(backend::_SlicedBasisBackendCachedCoulomb, m) =
+    _SlicedFrozenField(zeros(sum(abs2, backend.layout.dims)), zeros(m, m),
+        zeros(m, m))
+
+function _frozen_absorption_map(backend::_SlicedBasisBackendCachedCoulomb,
+        side, oldblock, cra, newblock)
+    _aligned_absorption(side, oldblock.ra, cra, newblock.raV, backend.layout) ||
+        error("roundoff-exact compact absorption is not whole-slice aligned")
+    A = _old_basis_map(side, oldblock.vee, cra, newblock.phi)
+    A === nothing &&
+        error("roundoff-exact compact absorption would use fallback")
+    A
+end
+function _promote_frozen_field(backend::_SlicedBasisBackendCachedCoulomb, p,
+        old, oldblock, newblock, growth, A, diagnostics)
+    _promote_frozen_field(_generic_cached_backend(backend), p, old, oldblock,
+        newblock, growth, A, diagnostics)
+end
+function _frozen_effective(backend::_SlicedBasisBackendCachedCoulomb, p, L, R,
+        B)
+    _frozen_effective(_generic_cached_backend(backend), p, L, R, B)
+end
+_frozen_window_check(backend::_SlicedBasisBackendCachedCoulomb, win) =
+    win isa _SlicedCoulombWindow ||
+        error("roundoff-exact compact sliced mode forbids projection windows")
+_frozen_audit_context(p, spin,
+        backend::_SlicedBasisBackendCachedCoulomb) = spin === :up ?
+    _SlicedFockAuditContext(p.Hup, backend, p.psiup, p.psidn, :up) :
+    _SlicedFockAuditContext(p.Hdn, backend, p.psiup, p.psidn, :dn)
+_frozen_payload(p::_FrozenPolicy{T,B}) where
+        {T,B<:_SlicedBasisBackendCachedCoulomb} = _sliced_frozen_payload(p)
 function _pack_sym!(v, X, add = false)
     n = size(X, 1)
     for j = 1:n, i = 1:j

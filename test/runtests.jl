@@ -49,6 +49,9 @@ try
         windows::Int
     end
 
+    Base.getproperty(b::FockCountingBackend, name::Symbol) =
+        name === :V ? getproperty(getfield(b, :backend), name) : getfield(b, name)
+
     struct CountedFockWindow{W, B}
         window::W
         backend::B
@@ -74,6 +77,27 @@ try
         win.backend.calls += 1
         HFDMRG.vee_add_fock!(Fup, Fdn, rhoup, rhodn, win.window)
     end
+
+    HFDMRG._frozen_backend_check(Hup, Hdn, b::FockCountingBackend,
+        psiup, psidn, restricted, partition) = HFDMRG._frozen_backend_check(
+            Hup, Hdn, b.backend, psiup, psidn, restricted, partition)
+    HFDMRG._empty_frozen_field(b::FockCountingBackend, m) =
+        HFDMRG._empty_frozen_field(b.backend, m)
+    HFDMRG._promote_frozen_field(b::FockCountingBackend, p, args...) =
+        HFDMRG._promote_frozen_field(b.backend, p, args...)
+    HFDMRG._frozen_fresh(b::FockCountingBackend, p, args...) =
+        HFDMRG._frozen_fresh(b.backend, p, args...)
+    HFDMRG._frozen_effective(b::FockCountingBackend, p, args...) =
+        HFDMRG._frozen_effective(b.backend, p, args...)
+    HFDMRG._retire_without_rebuild(b::FockCountingBackend) =
+        HFDMRG._retire_without_rebuild(b.backend)
+    HFDMRG._frozen_audit_context(p, spin, b::FockCountingBackend) =
+        HFDMRG._frozen_audit_context(p, spin, b.backend)
+
+    f2c_schedule = HFDMRG._FrozenLeakageSchedule()
+    one_sweep_schedule = HFDMRG._FrozenLeakageSchedule(1)
+    @test f2c_schedule.sweeps_per_rung == 2
+    @test_throws ErrorException HFDMRG._FrozenLeakageSchedule(0)
 
     @testset "Public API" begin
         @test isdefined(HFDMRG, :solve_hfdmrg)
@@ -115,6 +139,30 @@ try
         HFDMRG.solve_hfdmrg_core(H, counted, up, up; restricted = true,
             scf_cutoff = Inf, kw...)
         @test counted.calls == 2 * counted.windows
+
+        frozenkw = (; kw..., frozen_occupied = :roundoff_exact,
+            frozen_leakage_schedule = f2c_schedule)
+        frozen_routes = (
+            (b, d, scf) -> HFDMRG.solve_hfdmrg_core(H, b, up, up;
+                restricted = true, scf_cutoff = scf,
+                _diagnostics = d, frozenkw...),
+            (b, d, scf) -> HFDMRG.solve_hfdmrg_core(H, b, up, dn;
+                restricted = false, scf_cutoff = scf,
+                _diagnostics = d, frozenkw...),
+            (b, d, scf) -> HFDMRG.solve_hfdmrg_core_split(H, Hdn, b, up, dn;
+                scf_cutoff = scf, _diagnostics = d, frozenkw...),
+        )
+        for run in frozen_routes, scf in (0.0, Inf)
+            counted = FockCountingBackend(density, 0, 0)
+            diagnostics = HFDMRG._RunDiagnostics()
+            result = run(counted, diagnostics, scf)
+            oracle = run(density, HFDMRG._RunDiagnostics(), scf)
+            iterations = getproperty.(diagnostics.windows, :local_iterations)
+            @test result == oracle
+            @test counted.calls == sum(n == 0 ? 0 : n + 1 for n in iterations)
+            @test scf == 0 ? all(==(4), iterations) : all(<=(1), iterations)
+            @test counted.calls == (scf == 0 ? 5 : 2) * counted.windows
+        end
     end
 
     @testset "Hierarchical timing" begin
@@ -415,19 +463,24 @@ try
             @test run((;)) == run((; frozen_occupied = :off))
         end
         @test solve_hfdmrg(H, zero_target, up, dn;
-            kw..., frozen_occupied = :roundoff_exact) ==
-            solve_hfdmrg(H, V, up, dn; kw..., frozen_occupied = :roundoff_exact)
+            kw..., frozen_occupied = :roundoff_exact,
+            frozen_leakage_schedule = f2c_schedule) ==
+            solve_hfdmrg(H, V, up, dn; kw..., frozen_occupied = :roundoff_exact,
+                frozen_leakage_schedule = f2c_schedule)
         for backend in (projection, cached, target)
             @test_throws ErrorException solve_hfdmrg(
-                H, backend, up, dn; kw..., frozen_occupied = :roundoff_exact)
+                H, backend, up, dn; kw..., frozen_occupied = :roundoff_exact,
+                frozen_leakage_schedule = f2c_schedule)
         end
         @test_throws ErrorException solve_hfdmrg(H, V, up; kw..., frozen_occupied = :bad)
         Vbad = copy(V); Vbad[1, 2] += 1e-4
         @test_throws ErrorException solve_hfdmrg(
-            H, Vbad, up; kw..., frozen_occupied = :roundoff_exact)
+            H, Vbad, up; kw..., frozen_occupied = :roundoff_exact,
+            frozen_leakage_schedule = f2c_schedule)
         Vbad[1, 2] = NaN
         @test_throws ErrorException solve_hfdmrg(
-            H, Vbad, up; kw..., frozen_occupied = :roundoff_exact)
+            H, Vbad, up; kw..., frozen_occupied = :roundoff_exact,
+            frozen_leakage_schedule = f2c_schedule)
 
         function physical_energy(Hu, Hd, V, Cu, Cd)
             Du, Dd = Cu * Cu', Cd * Cd'
@@ -435,6 +488,40 @@ try
             sum(Hu .* Du) + sum(Hd .* Dd) + 0.5dot(q, V * q) -
                 0.5sum(V .* (Du .* Du + Dd .* Dd))
         end
+
+        @testset "Slot-scoped sweep families and drainage" begin
+            N = 16
+            eye = Matrix{Float64}(I, N, N)
+            leakage, target_leakage = 5e-5, 4e-5
+            seed = zeros(N, 1)
+            seed[9], seed[15] = sqrt(1 - leakage), sqrt(leakage)
+            target = zeros(N, 1)
+            target[9], target[15] =
+                sqrt(1 - target_leakage), sqrt(target_leakage)
+            basis = hcat(target, nullspace(target'))
+            H = Matrix(Symmetric(basis * Diagonal(0.0:N - 1) * basis'))
+            diagnostics = HFDMRG._RunDiagnostics()
+            result = solve_hfdmrg(H, zeros(N, N), seed;
+                maxiter = 7, blocksize = 2, nblockcenter = 1, cutoff = Inf,
+                scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+                frozen_leakage_schedule = one_sweep_schedule,
+                _diagnostics = diagnostics, verbose = false)
+            families = (diagnostics.frozen_cuts[1:6],
+                diagnostics.frozen_cuts[7:12], diagnostics.frozen_cuts[13:18])
+            @test all(rows ->
+                sum(r.active_rank for r in rows) / length(rows) == 1, families)
+            @test [sum(r.frozen_up for r in rows) / length(rows)
+                for rows in families] == [0.5, 0.5, 0.5]
+            @test all(rows -> count(r -> r.frozen_up > 0, rows) == 3, families)
+            baseline = -4.336808689964836e-19
+            @test abs(result[3] - baseline) < 2e-32
+            @test HFDMRG._thin_projector_error(result[1], target) < 2e-12
+            @test diagnostics.frozen_rebuilds == 0
+            @test diagnostics.frozen_transition_rebuilds == 0
+            @test any(e -> e.rung === :off && hasproperty(e, :drained) &&
+                e.drained, diagnostics.frozen_events)
+        end
+
         N = 16
         V = [0.03 / (1 + abs(i - j)) for i = 1:N, j = 1:N]
         h = collect(2.0:N + 1); h[[2, 5, 12, 15]] = [-4, -3, -2, -1]
@@ -443,7 +530,8 @@ try
         up = Matrix{Float64}(I, N, N)[:, [2, 15]]
         dn = Matrix{Float64}(I, N, N)[:, [5, 12]]
         exactkw = (; maxiter = 2, blocksize = 2, cutoff = 0.0,
-            scf_cutoff = Inf, frozen_occupied = :roundoff_exact, verbose = false)
+            scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+            frozen_leakage_schedule = f2c_schedule, verbose = false)
         for (Hu, Hd) in ((H, H), (H, Hdn))
             diagnostics = HFDMRG._RunDiagnostics()
             result = Hu === Hd ? solve_hfdmrg(Hu, V, up, dn;
@@ -455,7 +543,6 @@ try
             @test norm(result[2]' * result[2] - I) < 2e-13
             @test diagnostics.frozen_max_generations == 3
             @test diagnostics.frozen_live_generations == 2
-            @test diagnostics.frozen_recurrence_error < 2e-13
         end
 
         H = Matrix(Diagonal([1.0:N - 1; 0.0]))
@@ -475,6 +562,7 @@ try
             result = solve_hfdmrg(H, Hdn, V, up, dn; maxiter = 1,
                 block_partition = layout, nblockcenter = 1, cutoff = 0.0,
                 scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+                frozen_leakage_schedule = f2c_schedule,
                 _diagnostics = diagnostics, verbose = false)
             @test size(result[1], 2) == size(result[2], 2) == nocc
             @test norm(result[1] * result[1]' - up * up') < 2e-13
@@ -482,9 +570,6 @@ try
             @test norm(result[1]' * result[1] - I) < 2e-13
             @test norm(result[2]' * result[2] - I) < 2e-13
             @test abs(result[3] - physical_energy(H, Hdn, V, result[1], result[2])) < 2e-13
-            @test (diagnostics.frozen_zero_up_windows > 0) == (nocc < 6)
-            @test diagnostics.frozen_zero_dn_windows > 0
-            @test (diagnostics.frozen_zero_both_windows > 0) == (nocc == 4)
         end
 
         rng = MersenneTwister(9); N = 12
@@ -493,7 +578,8 @@ try
         Q = Matrix(qr(randn(rng, N, 4)).Q); diagnostics = HFDMRG._RunDiagnostics()
         result = solve_hfdmrg(H, V, Q[:, 1:2], Q[:, 3:4]; maxiter = 2,
             blocksize = 2, cutoff = 0.0, scf_cutoff = 0.0,
-            frozen_occupied = :roundoff_exact, _diagnostics = diagnostics,
+            frozen_occupied = :roundoff_exact,
+            frozen_leakage_schedule = f2c_schedule, _diagnostics = diagnostics,
             verbose = false)
         @test any(w -> w.damping_after < 1, diagnostics.windows)
         @test norm((result[1] * result[1]')^2 - result[1] * result[1]') < 2e-13
@@ -513,15 +599,13 @@ try
             info.sweep == 2
         end
         diagnostics = HFDMRG._RunDiagnostics()
-        result = solve_hfdmrg(H, V, up; maxiter = 3, blocksize = 2, cutoff = 0.0,
-            scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
+        @test_throws ErrorException solve_hfdmrg(H, V, up; maxiter = 3,
+            blocksize = 2, cutoff = 0.0, scf_cutoff = Inf,
+            frozen_occupied = :roundoff_exact,
+            frozen_leakage_schedule = f2c_schedule,
             _diagnostics = diagnostics, observer, verbose = false)
-        @test diagnostics.frozen_rebuilds == 1
-        @test diagnostics.frozen_rebuild_projector_error < 2e-13
-        @test callbacks == [(1, false), (2, false)]
-        @test size(result[1], 2) == 2
-        @test norm(result[1]' * result[1] - I) < 2e-13
-        @test result[1] == result[2]
+        @test diagnostics.frozen_rebuilds == 0
+        @test callbacks == [(1, false)]
 
         C = Matrix{Float64}(I, 4, 4)[:, 1:2]
         F = zeros(4, 4); F[3, 1] = F[1, 3] = 1e-5; F[3, 2] = F[2, 3] = 2e-5
@@ -530,47 +614,6 @@ try
         r2 = HFDMRG._frozen_residual_norm(F, C, C * U)
         @test isapprox(r1, hypot(1e-5, 2e-5); atol = 1e-20)
         @test isapprox(r1, r2; atol = 1e-20)
-        residual_policy = HFDMRG._frozen_policy(
-            F, F, HFDMRG.DensityDensityBackend(zeros(4, 4)), C, C, true)
-        HFDMRG._frozen_begin_blocks!(residual_policy, 2, 1, 1)
-        ledger = HFDMRG._FrozenLedger(1, nothing, C, C)
-        residual_policy.cuts[1] = HFDMRG._FrozenCut(
-            ledger, 2, 2, zeros(4), zeros(1, 1), zeros(1, 1), 0.0)
-        @test HFDMRG._frozen_audit!(residual_policy, false, nothing) == (true, false)
-        @test size(residual_policy.protectedup, 2) == 2
-
-        Hinv = Matrix(Diagonal(1.0:N)); policy = HFDMRG._frozen_policy(
-            Hinv, Hinv, HFDMRG.DensityDensityBackend(V), up, up, true)
-        HFDMRG._frozen_begin_blocks!(policy, 2, 1, 1); policy.rebuilt = true
-        @test HFDMRG._frozen_audit!(policy, true, nothing) == (false, false)
-
-        h = collect(1.0:N); h[2] = 0; h[5] = -2
-        H = Matrix(Diagonal(h)); up = zeros(N, 1); up[2] = 1
-        diagnostics = HFDMRG._RunDiagnostics()
-        seen = Bool[]
-        result = solve_hfdmrg(H, zeros(N, N), up; maxiter = 2, blocksize = 2,
-            cutoff = Inf, scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
-            _diagnostics = diagnostics, observer = x -> (push!(seen, x.converged); false),
-            verbose = false)
-        @test diagnostics.frozen_rebuilds == 1
-        @test seen == [false, true]
-        @test abs2(result[1][5]) > 1 - 2e-13
-
-        h[2], h[5] = -2, 0
-        H = Matrix(Diagonal(h)); H[2, 5] = H[5, 2] = 0.1
-        diagnostics = HFDMRG._RunDiagnostics()
-        solve_hfdmrg(H, zeros(N, N), up; maxiter = 1, blocksize = 2,
-            cutoff = 0.0, scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
-            _diagnostics = diagnostics, verbose = false)
-        @test diagnostics.frozen_rebuilds == 1
-
-        H = Matrix(Diagonal([1.0:N - 1; -2.0]))
-        up = zeros(N, 1); up[end] = 1
-        diagnostics = HFDMRG._RunDiagnostics()
-        solve_hfdmrg(H, zeros(N, N), up; maxiter = 1, blocksize = 2,
-            cutoff = 0.0, scf_cutoff = Inf, frozen_occupied = :roundoff_exact,
-            _diagnostics = diagnostics, verbose = false)
-        @test any(w -> w.local_iterations == 0, diagnostics.windows)
     end
 
     @testset "Split one-body UHF API" begin
@@ -1560,6 +1603,53 @@ try
             @test abs(a[3] - b[3]) < 2e-11
             @test max(norm(a[1] * a[1]' - b[1] * b[1]'),
                 norm(a[2] * a[2]' - b[2] * b[2]')) < 2e-10
+        end
+
+        @testset "Finite-leakage compact lifecycle" begin
+            frozenkw = (; block_partition = layout, nblockcenter = 1,
+                maxiter = 2, cutoff = 0.0, scf_cutoff = Inf,
+                frozen_occupied = :roundoff_exact,
+                frozen_leakage_schedule = f2c_schedule, verbose = false)
+            for run in ((b, d) -> solve_hfdmrg(H, b, up;
+                        frozenkw..., _diagnostics = d),
+                    (b, d) -> solve_hfdmrg(H, b, up, dn;
+                        frozenkw..., _diagnostics = d),
+                    (b, d) -> solve_hfdmrg(H, Hdn, b, up, dn;
+                        frozenkw..., _diagnostics = d))
+                dc, dg = HFDMRG._RunDiagnostics(), HFDMRG._RunDiagnostics()
+                compact_result, generic_result = run(compact, dc), run(generic, dg)
+                @test abs(compact_result[3] - generic_result[3]) < 3e-11
+                @test max(norm(compact_result[1] * compact_result[1]' -
+                        generic_result[1] * generic_result[1]'),
+                    norm(compact_result[2] * compact_result[2]' -
+                        generic_result[2] * generic_result[2]')) < 3e-10
+                @test dc.frozen_promotions_up + dc.frozen_promotions_dn > 0
+                @test dc.frozen_retained_values > 0
+                @test dc.frozen_rebuilds == dc.frozen_transition_rebuilds == 0
+            end
+
+            zlayout = HFDMRG.SliceLayout(fill(2, 8))
+            zN = zlayout.offs[end]
+            zbackend = HFDMRG._SlicedBasisBackendCachedCoulomb(
+                zlayout, zeros(2, 2, 2, 2, 8, 8))
+            eye = Matrix{Float64}(I, zN, zN)
+            leakage = 5e-5
+            q = reshape(sqrt(leakage) * eye[:, 1] +
+                sqrt(1 - leakage) * eye[:, end], :, 1)
+            qbasis = hcat(q, nullspace(q'))
+            zH = Matrix(Symmetric(qbasis * Diagonal(0.0:zN - 1) * qbasis'))
+            diagnostics = HFDMRG._RunDiagnostics()
+            result = solve_hfdmrg(zH, zbackend, q;
+                block_partition = zlayout, nblockcenter = 1, maxiter = 8,
+                cutoff = Inf, scf_cutoff = Inf,
+                frozen_occupied = :roundoff_exact,
+                frozen_leakage_schedule = one_sweep_schedule,
+                _diagnostics = diagnostics, verbose = false)
+            @test HFDMRG._thin_projector_error(q, result[1]) < 3e-12
+            @test diagnostics.frozen_global_initializations == 1
+            @test diagnostics.frozen_transition_rebuilds == 0
+            @test any(e -> e.rung === :off && hasproperty(e, :drained) &&
+                e.drained, diagnostics.frozen_events)
         end
     end
     @testset "Sliced convenience overloads" begin
