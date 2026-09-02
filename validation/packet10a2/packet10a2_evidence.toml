@@ -1,0 +1,54 @@
+schema = "hfdmrg-packet10a2-transfer-v1"
+packet = "10A2"
+status = "candidate_unstaged_uncommitted"
+branch = "packet10a1-compact-rhf-foundation"
+parent = "afbe940d0f785835be93c8c086c6dad491fb256e"
+historical_base = "58188665fc35c38cacdb6dd6308b9a660805897a"
+julia_version = "1.12.6"
+blas_threads = 4
+runtime_dependencies = ["LinearAlgebra"]
+public_exports = ["BandedOneBody", "HFDMRGResult", "RHFCompactState", "UnitCellInteraction", "solve_hfdmrg"]
+solve_hfdmrg_method_count = 19
+compact_rhf_method_count = 1
+superseded_public_rhf_boundaries = 6
+retained_uhf_methods = 12
+compact_production_lines = 2793
+loaded_transitional_source_lines = 8751
+retained_historical_assertions = 702
+repurposed_private_boundary_assertions = 2
+retired_historical_rhf_assertions = 112
+packet10a2_compact_assertions = 607
+public_boundary_assertions = 18
+packet10a1_foundation_assertions = 41
+complete_suite_assertions = 1370
+ordinary_suite = "passed"
+checked_bounds_suite = "passed"
+fresh_manifest_free_isolated_suite = "passed"
+post_boundary_checked_isolated_delta = "passed"
+preflight_allocation_bytes = 0
+h2_represented_energy = -0.44914425911533473
+h2_half_sweeps = 5
+h1000_run = false
+ppp_modified = false
+historical_main_modified = false
+remotes_modified = false
+preexisting_untracked_files = 8
+
+[compatibility]
+dense_interaction = "deterministic migration boundary"
+sliced_backend = "deterministic migration boundary; backend utilities retained"
+sliced_layout = "deterministic migration boundary; layout utility retained"
+cached_sliced_backend = "deterministic migration boundary; backend utilities retained"
+cached_coulomb_backend = "deterministic migration boundary; backend utilities retained"
+target_residual_backend = "deterministic migration boundary; backend utilities retained"
+private_history_rhf = "deterministic migration boundary; common policy and UHF history utilities retained"
+
+[preserved_untracked_sha256]
+"JuliaStyle.md" = "a298dc2da12b03e1bcb19b6ae398343bc598784a59085cbebd37db4d1614c7c4"
+"notes/angular_be_g0_continuation_result_2026-08-05.md" = "b75e14018907567bc7247c8aca97aca2753e0c59013c100f0f9b948862b7e685"
+"notes/axis_pinned_be_history_uhf_validation_design_2026-08-05.md" = "5161d264619af97fae84815141eb5fcb045b2dea71f5a02acfb1528e2cd9e992"
+"notes/frozen_local_solve_design_2026-08-04.md" = "a3aae93b1f64bc40ed3242225b49c71b0aac23a8f4bc6816faee232b8d993a05"
+"notes/history_accelerated_density_uhf_basin_validation_plan_2026-08-04.md" = "76811e2d99ea8fd9dd84cbc36d7cd56f2e65b665019ccfde73fadb4fdf329e54"
+"notes/history_accelerated_density_uhf_wl_qualification_plan_2026-08-05.md" = "98cb9d98586a58cf8606fb43760f7cf075dfb80a6defc3546a08de3c96263ef0"
+"notes/history_accelerated_sliced_design_2026-08-05.md" = "cc3e463df2e2445e300bf41e7e7797bd3b1e9dde5386b9f1c8ad8d483a2c1bf2"
+"notes/uhf_guidance_donor_hill_reconciliation_2026-08-05.md" = "80a7796dd2d0f46e64e9aa96b97a80818ea010167e808212cc77afd6c7005a10"

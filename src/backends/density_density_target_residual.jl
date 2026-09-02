@@ -164,8 +164,7 @@ function vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::DDTargetWindow)
 end
 
 function solve_hfdmrg(H, backend::DensityDensityTargetResidualBackend, psiup0; kwargs...)
-    backend.zero_residual && return solve_hfdmrg(H, backend.base.V, psiup0; kwargs...)
-    solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
+    _removed_rhf_route("target-residual-backend")
 end
 
 function solve_hfdmrg(H, backend::DensityDensityTargetResidualBackend, psiup0, psidn0;

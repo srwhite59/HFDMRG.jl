@@ -294,7 +294,7 @@ solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; kwargs...) -> (psiup, psidn
 Restricted HF (RHF) sweep using a sliced-basis backend.
 """
 function solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; kwargs...)
-    solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
+    _removed_rhf_route("sliced-backend")
 end
 
 """
@@ -325,8 +325,7 @@ Restricted HF (RHF) sweep using a sliced-basis backend constructed from layout
 and sliced two-electron integrals (fixed V6 or ragged Vblocks).
 """
 function solve_hfdmrg(H, layout::SliceLayout, V, psiup0; kwargs...)
-    backend = SlicedBasisBackend(layout, V)
-    solve_hfdmrg(H, backend, psiup0; kwargs...)
+    _removed_rhf_route("sliced-layout")
 end
 
 """

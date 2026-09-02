@@ -1,36 +1,29 @@
 """
 HFDMRG implements a DMRG-style Hartree-Fock sweep.
 
-Algorithm summary:
-- Build a local L-C-R superblock basis from left/right environment blocks and
-  the bare center sites.
-- Perform a few SCF micro-iterations: build rho from occupied orbitals, ask the
-  backend to add interaction mean-field terms to the Fock matrix, diagonalize,
-  occupy, and mix densities.
-- Update block bases via SVD truncation of occupied orbitals (DMRG analogy),
-  and sweep left-to-right and right-to-left until energy converges.
+The compact RHF route owns one exact-sized block collection and one live root,
+uses block-native dimer initialization, visits terminal-complete two-block
+centers, and publishes at most one monotone one-Fock update per center.  State
+selection is controlled explicitly by `state_maxdim` and `state_cutoff`.
 
 Public entrypoints:
-- solve_hfdmrg(H, V, psiup0; kwargs...): restricted HF using the density-density
-  backend.
+- solve_hfdmrg(one_body::BandedOneBody, operator::UnitCellInteraction;
+  kwargs...): compact unit-cell restricted HF.
 - solve_hfdmrg(H, V, psiup0, psidn0; kwargs...): unrestricted HF using the
-  density-density backend.
+  retained historical density-density engine.
 - solve_hfdmrg(Hup, Hdn, V, psiup0, psidn0; kwargs...): unrestricted HF with
-  spin-dependent one-body Hamiltonians and the same density-density backend.
 
-Inputs:
-- H, V: N x N real/symmetric matrices (one-body Hamiltonian and interaction).
-- Hup, Hdn: N x N up/down one-body Hamiltonians for spin-dependent UHF.
-- psiup0/psidn0: N x Nspin matrices with orthonormal columns (initial orbitals).
+The superseded dense, sliced, cached, and target-residual RHF signatures fail
+with deterministic migration errors.  They never enter the global-coefficient
+engine.  Their UHF overloads and underlying backend utilities remain available
+during the staged transfer.
 """
 module HFDMRG
 
 include("timing.jl")
 using .TimeG: @timeg
 
-# Compact unit-cell RHF numerical foundation.  This remains private until the
-# terminal-complete lifecycle and optimizing facade replace the historical
-# engine.
+# Compact unit-cell RHF numerical engine.
 const UNIT_CELL_WIDTH = 18
 include("unit_cell_interaction.jl")
 include("pairs.jl")
@@ -38,6 +31,8 @@ include("state.jl")
 include("one_body.jl")
 include("interaction_blocks.jl")
 include("interaction_centers.jl")
+include("fixed_state_lifecycle.jl")
+include("nonlinear_rhf.jl")
 
 include("backend_api.jl")
 include("slice_layout.jl")
@@ -53,6 +48,7 @@ include("backends/sliced_basis_cached_coulomb.jl")
 include("sliced_fock_audit.jl")
 include("history_accelerated_sliced.jl")
 
-export solve_hfdmrg
+export BandedOneBody, HFDMRGResult, RHFCompactState, UnitCellInteraction,
+    solve_hfdmrg
 
 end # module

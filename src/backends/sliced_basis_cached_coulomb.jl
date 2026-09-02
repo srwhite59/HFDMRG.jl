@@ -550,7 +550,8 @@ vee_add_fock_r!(F, rho, win::_SlicedCoulombWindow) = begin
 vee_add_fock!(Fup, Fdn, rhoup, rhodn, win::_SlicedCoulombWindow) = begin
     win.ml + win.lc + win.mr == size(Fup, 1) || error("window dimensions do not match F")
     _add_coulomb_fock!(Fup, Fdn, rhoup, rhodn, win, Val(false)) end
-solve_hfdmrg(H, backend::_SlicedBasisBackendCachedCoulomb, psiup0; kwargs...) = solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
+solve_hfdmrg(H, backend::_SlicedBasisBackendCachedCoulomb, psiup0; kwargs...) =
+    _removed_rhf_route("cached-Coulomb-backend")
 function solve_hfdmrg(H, backend::_SlicedBasisBackendCachedCoulomb, psiup0, psidn0; kwargs...)
     solve_hfdmrg_core(H, backend, psiup0, psidn0; restricted = false, kwargs...) end
 function solve_hfdmrg(Hup, Hdn, backend::_SlicedBasisBackendCachedCoulomb,
