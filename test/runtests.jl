@@ -2445,6 +2445,8 @@ try
                 routes[:window_local_calls] > 0
         end
     end
+
+    include("compact_rhf_foundation.jl")
 finally
     empty!(LOAD_PATH)
     append!(LOAD_PATH, old_load_path)

@@ -27,6 +27,18 @@ module HFDMRG
 
 include("timing.jl")
 using .TimeG: @timeg
+
+# Compact unit-cell RHF numerical foundation.  This remains private until the
+# terminal-complete lifecycle and optimizing facade replace the historical
+# engine.
+const UNIT_CELL_WIDTH = 18
+include("unit_cell_interaction.jl")
+include("pairs.jl")
+include("state.jl")
+include("one_body.jl")
+include("interaction_blocks.jl")
+include("interaction_centers.jl")
+
 include("backend_api.jl")
 include("slice_layout.jl")
 include("core.jl")
