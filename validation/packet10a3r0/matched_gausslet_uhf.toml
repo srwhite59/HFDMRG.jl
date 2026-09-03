@@ -1,0 +1,82 @@
+blas_threads = 4
+gausslet_function = "run_atomic_injected_angular_hfdmrg_hf"
+gausslet_source_commit = "891bf3e84653197b90b930d7d5787be17d8fb998"
+gausslet_source_file = "src/angular/angular_atomic_benchmark.jl"
+generated_at = "2026-09-02T23:25:48.183"
+julia_threads = 1
+julia_version = "1.12.6"
+schema = "hfdmrg-packet10a3r0-gausslet-uhf-v1"
+
+[candidate]
+energy = 39.38381696539275
+projector_dn_sha256 = "33583f1789a11331371b27caf0b6cbe765086d005498baa95599594a8812f763"
+projector_up_sha256 = "8b5962d490a8111f6a5db31da150559345e2f0cda1fc979251979ffb97f028e2"
+psidn_sha256 = "ff581ed3cb202415015acc84cb5e82234610edf899427e8067970d41df384142"
+psidn_size = [840, 1]
+psiup_sha256 = "d1a523da1a809592f4b5812896cf90e868bf97c0c56967de4909e75cb23efb24"
+psiup_size = [840, 2]
+source = "/private/tmp/hfdmrg-packet10a3.U8VKSK/worktree/src/HFDMRG.jl"
+
+    [candidate.method]
+    file = "/private/tmp/hfdmrg-packet10a3.U8VKSK/worktree/src/core.jl"
+    line = 1271
+    signature = "Tuple{Main.Packet10A3R0Candidate.HFDMRG.var\"#solve_hfdmrg\", Vararg{Any, 4}}"
+
+[clean]
+commit = "19e11fc2b12a142138dc3324f585d8aa92d46098"
+energy = 39.38381696539275
+projector_dn_sha256 = "33583f1789a11331371b27caf0b6cbe765086d005498baa95599594a8812f763"
+projector_up_sha256 = "8b5962d490a8111f6a5db31da150559345e2f0cda1fc979251979ffb97f028e2"
+psidn_sha256 = "ff581ed3cb202415015acc84cb5e82234610edf899427e8067970d41df384142"
+psidn_size = [840, 1]
+psiup_sha256 = "d1a523da1a809592f4b5812896cf90e868bf97c0c56967de4909e75cb23efb24"
+psiup_size = [840, 2]
+source = "/private/tmp/hfdmrg-packet10a2r2.vBy6xL/worktree/src/HFDMRG.jl"
+
+    [clean.method]
+    file = "/private/tmp/hfdmrg-packet10a2r2.vBy6xL/worktree/src/core.jl"
+    line = 1271
+    signature = "Tuple{Main.Packet10A3R0Clean.HFDMRG.var\"#solve_hfdmrg\", Vararg{Any, 4}}"
+
+[comparison]
+alpha_projector_frobenius = 0.0
+alpha_projector_hash_equal = true
+beta_projector_frobenius = 0.0
+beta_projector_hash_equal = true
+energy_difference = 0.0
+
+[controls]
+blocksize = 64
+cutoff = 0.0
+maxiter = 1
+nblockcenter = 1
+scf_cutoff = +inf
+verbose = false
+
+[fixture]
+basis_family = "G10"
+lmax = 2
+mapping_c = 0.15
+mapping_s = 0.15
+ndn = 1
+nuclear_charge = 2.0
+nup = 2
+odd_even_kmax = 2
+quadrature_accuracy = "medium"
+quadrature_rmax = 12.0
+radial_count = 6
+reference_spacing = 1.0
+route = "dense_density_density"
+solver_mode = "unrestricted"
+tails = 3
+xgaussian_alpha = 0.2
+
+[inputs]
+H_sha256 = "a0a66610e632b6eaeb2aaf4fd017191ce788228c9d98149fdbfa6e66f454ff1b"
+H_size = [840, 840]
+V_sha256 = "374609e29e37707fd2d1c48ff05bb61c17b0c8edb46f41c40aa176e35a6eb73e"
+V_size = [840, 840]
+psidn0_sha256 = "91f17a234571bbc4ec0a2c040cad5666a17295d1a5fc868e1420797af73d6c5c"
+psidn0_size = [840, 1]
+psiup0_sha256 = "80508a226e3449b284192a68f593e94bafa49d3ad0a07d8b5d34ae06e7b9736c"
+psiup0_size = [840, 2]

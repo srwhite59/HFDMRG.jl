@@ -333,8 +333,14 @@ function solve_hfdmrg(one_body::BandedOneBody,
         "maximum half-sweeps must be positive"))
     starting_orientation in (:physical, :reflected) || throw(ArgumentError(
         "starting orientation must be physical or reflected"))
-    spin === :rhf || throw(ArgumentError(
-        "compact unit-cell UHF is not installed"))
+    spin in (:rhf, :uhf) || throw(ArgumentError("spin must be rhf or uhf"))
+    if spin === :uhf
+        initialization === :atomic_neel || throw(ArgumentError(
+            "UHF currently requires atomic_neel initialization"))
+        return _solve_uhf_hfdmrg(one_body, operator; state_maxdim,
+            state_cutoff, energy_tolerance, maximum_half_sweeps,
+            starting_orientation, exact, atom_intervals, spin_swapped)
+    end
     initialization === :dimer || throw(ArgumentError(
         "RHF currently requires dimer initialization"))
     !spin_swapped || throw(ArgumentError(

@@ -68,15 +68,20 @@ Hamiltonian. Historical RHF returns identical alpha and beta orbitals.
 
 The compact unit-cell route is selected only by
 `solve_hfdmrg(one_body::BandedOneBody, operator::UnitCellInteraction; ...)`.
-It returns an `HFDMRGResult` containing represented working energy,
-convergence diagnostics, and a compact block/root state handle. It does not
-materialize global occupied coefficients. The compact represented energy and
-the historical dense/sliced electronic energy are distinct result contracts.
+With `spin=:rhf` it returns `HFDMRGResult`; with `spin=:uhf` it returns
+`UHFDMRGResult`. Both contain represented working energy, convergence
+diagnostics, and a compact block/root state handle. Neither materializes
+global occupied coefficients. The compact represented energy and the
+historical dense/sliced electronic energy are distinct result contracts.
 
 ## Supported routes
 
 - `solve_hfdmrg(one_body::BandedOneBody,
-  operator::UnitCellInteraction; ...)`: compact block-native unit-cell RHF.
+  operator::UnitCellInteraction; spin=:rhf, ...)`: compact block-native
+  unit-cell RHF with dimer initialization.
+- `solve_hfdmrg(one_body::BandedOneBody,
+  operator::UnitCellInteraction; spin=:uhf, ...)`: compact block-native
+  independent-spin unit-cell UHF with atomic-Neel initialization.
 - `solve_hfdmrg(H, V, psiup0; ...)`: density-density RHF.
 - `solve_hfdmrg(H, V, psiup0, psidn0; ...)`: common-one-body UHF.
 - `solve_hfdmrg(Hup, Hdn, V, psiup0, psidn0; ...)`: split-one-body UHF.

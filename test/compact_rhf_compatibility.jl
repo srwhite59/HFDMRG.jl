@@ -1,4 +1,4 @@
-@testset "dual RHF backend dispatch boundaries" begin
+@testset "dual RHF/UHF backend dispatch boundaries" begin
     sites = 12
     h = Matrix(Diagonal(vcat(-2.0, collect(1.0:sites-1))))
     v = zeros(sites, sites)
@@ -56,8 +56,18 @@
     @test compact isa HFDMRG.HFDMRGResult
     @test compact.state isa HFDMRG.RHFCompactState
     @test !(compact isa Tuple)
+    compact_uhf = HFDMRG.solve_hfdmrg(one_body, operator; spin=:uhf,
+        initialization=:atomic_neel, state_maxdim=4, state_cutoff=1e-12,
+        energy_tolerance=1e-9, maximum_half_sweeps=4, exact=true)
+    @test compact_uhf isa HFDMRG.UHFDMRGResult
+    @test compact_uhf.state isa HFDMRG.UHFCompactState
+    @test !(compact_uhf isa Tuple)
     @test which(HFDMRG.solve_hfdmrg,
         (typeof(one_body), typeof(operator))) !==
         which(HFDMRG.solve_hfdmrg, (typeof(h), typeof(v), typeof(up)))
+    @test which(HFDMRG.solve_hfdmrg,
+        (typeof(one_body), typeof(operator))) !==
+        which(HFDMRG.solve_hfdmrg,
+            (typeof(h), typeof(v), typeof(up), typeof(dn)))
     @test isempty(Test.detect_ambiguities(HFDMRG; recursive=true))
 end

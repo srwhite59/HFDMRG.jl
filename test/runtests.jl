@@ -2451,6 +2451,9 @@ try
     include("compact_terminal_fragments.jl")
     include("compact_nonlinear_rhf.jl")
     include("compact_rhf_compatibility.jl")
+    include("compact_uhf_foundation.jl")
+    include("compact_nonlinear_uhf.jl")
+    include("compact_timing.jl")
 finally
     empty!(LOAD_PATH)
     append!(LOAD_PATH, old_load_path)
