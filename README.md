@@ -62,12 +62,21 @@ The checked-in `examples/quickstart.jl` prints:
 energy = -2.41361165233
 ```
 
-All supported routes return `(psiup, psidn, energy)`, with full-physical-basis
-occupied orbitals and the electronic energy of the supplied Hamiltonian. RHF
-returns identical alpha and beta orbitals.
+Historical dense and sliced routes return `(psiup, psidn, energy)`, with
+full-physical-basis occupied orbitals and the electronic energy of the supplied
+Hamiltonian. Historical RHF returns identical alpha and beta orbitals.
+
+The compact unit-cell route is selected only by
+`solve_hfdmrg(one_body::BandedOneBody, operator::UnitCellInteraction; ...)`.
+It returns an `HFDMRGResult` containing represented working energy,
+convergence diagnostics, and a compact block/root state handle. It does not
+materialize global occupied coefficients. The compact represented energy and
+the historical dense/sliced electronic energy are distinct result contracts.
 
 ## Supported routes
 
+- `solve_hfdmrg(one_body::BandedOneBody,
+  operator::UnitCellInteraction; ...)`: compact block-native unit-cell RHF.
 - `solve_hfdmrg(H, V, psiup0; ...)`: density-density RHF.
 - `solve_hfdmrg(H, V, psiup0, psidn0; ...)`: common-one-body UHF.
 - `solve_hfdmrg(Hup, Hdn, V, psiup0, psidn0; ...)`: split-one-body UHF.
@@ -80,6 +89,10 @@ returns identical alpha and beta orbitals.
 
 `solve_hfdmrg` is the only exported name. Supported layout and backend types
 are accessed with the `HFDMRG.` qualifier.
+
+Argument types form a strict dispatch boundary: typed compact unit-cell calls
+never enter the dense/sliced solver, and matrix/sliced calls never enter the
+compact solver.
 
 ## Algorithm in one page
 

@@ -883,7 +883,7 @@ solve_hfdmrg(H, backend::SlicedBasisBackendCached, psiup0; kwargs...) -> (psiup,
 Restricted HF (RHF) sweep using the cached sliced-basis backend.
 """
 function solve_hfdmrg(H, backend::SlicedBasisBackendCached, psiup0; kwargs...)
-    _removed_rhf_route("cached-sliced-backend")
+    solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
 end
 
 """

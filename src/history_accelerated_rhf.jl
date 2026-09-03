@@ -192,7 +192,6 @@ end
 function _solve_history_rhf(H, V, C0; _policy = _HistoryRHFPolicy(),
         nblockcenter = 1, blocksize = 200, block_partition = nothing,
         scf_cutoff = 1e-11, environment_cutoff = 1e-10, verbose = false)
-    _removed_rhf_route("history-accelerated")
     _history_inputs(H, V, C0, _policy)
     start_ns = time_ns()
     solver = (; nblockcenter, blocksize, block_partition, scf_cutoff,

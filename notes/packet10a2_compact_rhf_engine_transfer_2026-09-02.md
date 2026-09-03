@@ -1,5 +1,11 @@
 # Packet 10A2: compact RHF engine transfer candidate
 
+> Superseded in architecture by Packet 10A2R2. Packet 10A2R2 retains this
+> compact engine unchanged but restores the scientifically distinct historical
+> dense/sliced RHF engine behind disjoint `solve_hfdmrg` signatures. The
+> migration boundaries and single-engine line target below describe the
+> accepted intermediate commit, not the corrected public contract.
+
 ## Outcome
 
 Packet 10A2 installs the standalone terminal-complete compact RHF lifecycle

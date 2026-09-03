@@ -294,7 +294,7 @@ solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; kwargs...) -> (psiup, psidn
 Restricted HF (RHF) sweep using a sliced-basis backend.
 """
 function solve_hfdmrg(H, backend::SlicedBasisBackend, psiup0; kwargs...)
-    _removed_rhf_route("sliced-backend")
+    solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
 end
 
 """
@@ -324,8 +324,13 @@ solve_hfdmrg(H, layout::SliceLayout, V, psiup0; kwargs...) -> (psiup, psidn, ene
 Restricted HF (RHF) sweep using a sliced-basis backend constructed from layout
 and sliced two-electron integrals (fixed V6 or ragged Vblocks).
 """
-function solve_hfdmrg(H, layout::SliceLayout, V, psiup0; kwargs...)
-    _removed_rhf_route("sliced-layout")
+const _SlicedInteractionInput = Union{Array{Float64,6},SlicedVeeRagged,
+    Vector{Vector{Array{Float64,4}}}}
+
+function solve_hfdmrg(H, layout::SliceLayout, V::_SlicedInteractionInput,
+        psiup0; kwargs...)
+    backend = SlicedBasisBackend(layout, V)
+    solve_hfdmrg(H, backend, psiup0; kwargs...)
 end
 
 """
@@ -334,7 +339,8 @@ solve_hfdmrg(H, layout::SliceLayout, V, psiup0, psidn0; kwargs...) -> (psiup, ps
 Unrestricted HF (UHF) sweep using a sliced-basis backend constructed from layout
 and sliced two-electron integrals (fixed V6 or ragged Vblocks).
 """
-function solve_hfdmrg(H, layout::SliceLayout, V, psiup0, psidn0; kwargs...)
+function solve_hfdmrg(H, layout::SliceLayout, V::_SlicedInteractionInput,
+        psiup0, psidn0; kwargs...)
     backend = SlicedBasisBackend(layout, V)
     solve_hfdmrg(H, backend, psiup0, psidn0; kwargs...)
 end
@@ -345,7 +351,8 @@ solve_hfdmrg(Hup, Hdn, layout::SliceLayout, V, psiup0, psidn0; kwargs...) -> (ps
 Unrestricted HF (UHF) sweep with spin-dependent one-body Hamiltonians using a
 sliced-basis backend constructed from layout and sliced two-electron integrals.
 """
-function solve_hfdmrg(Hup, Hdn, layout::SliceLayout, V, psiup0, psidn0; kwargs...)
+function solve_hfdmrg(Hup, Hdn, layout::SliceLayout,
+        V::_SlicedInteractionInput, psiup0, psidn0; kwargs...)
     Hup === Hdn && return solve_hfdmrg(Hup, layout, V, psiup0, psidn0; kwargs...)
     backend = SlicedBasisBackend(layout, V)
     solve_hfdmrg_core_split(Hup, Hdn, backend, psiup0, psidn0; kwargs...)

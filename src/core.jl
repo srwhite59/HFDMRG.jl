@@ -1253,17 +1253,11 @@ matrices. psiup0 is N x Nup with orthonormal columns. Returns the optimized
 orbitals in the physical site basis for the last sweep position and the final
 energy. For RHF, psidn == psiup.
 """
-function _removed_rhf_route(route::AbstractString)
-    throw(ArgumentError("the $route RHF solver route was removed; use " *
-        "solve_hfdmrg(BandedOneBody, UnitCellInteraction; state_maxdim, " *
-        "state_cutoff, energy_tolerance, maximum_half_sweeps). Legacy " *
-        "maxiter/cutoff/environment_cutoff controls are not silently " *
-        "reinterpreted because their units and state-selection semantics " *
-        "differ from the compact controls"))
-end
-
 function solve_hfdmrg(H, V, psiup0; kwargs...)
-    _removed_rhf_route("dense-interaction")
+    backend = DensityDensityBackend(V)
+    haskey(kwargs, :frozen_occupied) &&
+        return solve_hfdmrg_core(H, backend, psiup0, psiup0; restricted = true, kwargs...)
+    _solve_hfdmrg_core(Val(:off), H, backend, psiup0, psiup0; restricted = true, kwargs...)
 end
 
 """
