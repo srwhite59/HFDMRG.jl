@@ -70,4 +70,9 @@
         which(HFDMRG.solve_hfdmrg,
             (typeof(h), typeof(v), typeof(up), typeof(dn)))
     @test isempty(Test.detect_ambiguities(HFDMRG; recursive=true))
+    @test Set(names(HFDMRG)) == Set((:BandedOneBody, :HFDMRG,
+        :HFDMRGResult, :ProducerEnergy, :ProducerHamiltonian,
+        :UHFDMRGResult, :UnitCellInteraction, :producer_energy,
+        :solve_hfdmrg))
+    @test_throws MethodError HFDMRG.producer_energy(restricted[1](), nothing)
 end

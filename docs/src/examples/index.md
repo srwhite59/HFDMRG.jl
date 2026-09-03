@@ -50,6 +50,17 @@ own results. Run them from the repository root in this order:
    julia --project=. examples/cached_sliced.jl
    ```
 
+6. **Compact producer-energy audit** -- `examples/compact_producer_energy.jl`
+
+   Solves a small typed unit-cell RHF problem, then evaluates the same compact
+   determinant with an explicit uncompressed producer Hamiltonian. It prints
+   the distinct represented and producer energies without reconstructing
+   occupied coefficients.
+
+   ```sh
+   julia --project=. examples/compact_producer_energy.jl
+   ```
+
 ## Scope
 
 These examples demonstrate package mechanics rather than benchmark claims.

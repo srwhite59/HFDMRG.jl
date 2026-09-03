@@ -1,0 +1,44 @@
+schema = "hfdmrg-packet10a4-producer-public-surface-v1"
+packet = "10A4"
+status = "review_candidate_unstaged_uncommitted"
+parent = "0c2d35dc4e054898a750ddbbcebd8921d0bbfd3e"
+branch = "packet10a3-compact-uhf-dual-backend"
+julia_version = "1.12.6"
+solve_hfdmrg_method_count = 19
+method_ambiguities = 0
+historical_tuple_smoke = "passed"
+dual_backend_dispatch_assertions = 53
+exported_api = ["solve_hfdmrg", "producer_energy", "BandedOneBody", "UnitCellInteraction", "ProducerHamiltonian", "HFDMRGResult", "UHFDMRGResult", "ProducerEnergy"]
+compact_foundation_assertions = 41
+focused_producer_assertions = 107
+checked_bounds = true
+representative_warmed_producer_allocation_bytes = 240
+producer_source_donor_sha256 = "17cafbf21ca84bf95085ee2d72693d3b921bce4f46319f4fb8c65940768c4f49"
+producer_test_donor_sha256 = "c350bc0c1056704773c972bf320aa0f6ab45c4a33caaca4096ee8eac12ee7fce"
+producer_physical_lines = 496
+loaded_source_lines = 11086
+loaded_physical_lines = 10513
+historical_rhf_changed = false
+historical_uhf_changed = false
+gausslet_handshake_changed = false
+cross_backend_fallback = false
+producer_residual = false
+h1000_run = false
+large_benchmark_run = false
+docs_build = "not_run_documenter_unavailable"
+ppp_modified = false
+gaussletbases_modified = false
+stale_primary_modified = false
+
+[example]
+represented_energy = -0.44914425911533473
+producer_energy = -0.4491442591153346
+
+[dispatch]
+historical_dense_rhf = "global coefficient tuple unchanged"
+historical_sliced_rhf = "global coefficient tuple unchanged"
+historical_dense_uhf = "global coefficient tuple unchanged"
+historical_sliced_uhf = "global coefficient tuple unchanged"
+compact_unit_cell_rhf = "HFDMRGResult plus optional producer audit"
+compact_unit_cell_uhf = "UHFDMRGResult plus optional producer audit"
+historical_tuple_producer_energy = "no method"

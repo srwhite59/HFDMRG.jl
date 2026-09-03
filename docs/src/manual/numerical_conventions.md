@@ -69,6 +69,20 @@ E_{\mathrm{RHF}}=2\operatorname{Tr}(DH)+2d^TVd-
 Sliced and target-residual backends obey the same trace convention. Their
 storage and contraction conventions are detailed in [Interaction backends](@ref).
 
+## Compact represented and producer energies
+
+The compact typed solver reports `represented_energy`, the objective evaluated
+with its working unit-cell representation. The optional
+`producer_energy(result, producer)` operation evaluates the same final compact
+determinant with a caller-supplied uncompressed density-density Hamiltonian and
+explicit constant. Its total follows the UHF decomposition above (with equal
+spin projectors in RHF).
+
+These quantities have deliberately different names. Agreement between them is
+a same-state energy comparison, not a bound on the occupied--virtual residual
+of the producer Hamiltonian. The producer audit supplies no residual and does
+not alter solver convergence status.
+
 ## Residual and stationarity
 
 For one spin, a gauge-invariant occupied--virtual residual can be written

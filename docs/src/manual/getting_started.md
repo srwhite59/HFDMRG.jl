@@ -52,9 +52,11 @@ Run the file directly with:
 julia --project=. examples/quickstart.jl
 ```
 
-All public solve routes return `(psiup, psidn, energy)`. In RHF the two orbital
-matrices are identical. In UHF their column counts independently fix
-``N_\alpha`` and ``N_\beta``.
+Historical matrix and sliced solve routes return `(psiup, psidn, energy)`. In
+historical RHF the two orbital matrices are identical. In UHF their column
+counts independently fix ``N_\alpha`` and ``N_\beta``. The typed compact
+`BandedOneBody, UnitCellInteraction` route instead returns `HFDMRGResult` or
+`UHFDMRGResult` and retains compact state rather than global coefficients.
 
 ## Supported interaction choices
 

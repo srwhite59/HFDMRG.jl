@@ -92,12 +92,32 @@ historical dense/sliced electronic energy are distinct result contracts.
 - `HFDMRG.DensityDensityTargetResidualBackend(V, Q, residual_pair)`: a small
   signed four-index correction in a fixed orthonormal target space.
 
-`solve_hfdmrg` is the only exported name. Supported layout and backend types
-are accessed with the `HFDMRG.` qualifier.
+The exported surface is `solve_hfdmrg`, `producer_energy`, and the concrete
+compact input/result records `BandedOneBody`, `UnitCellInteraction`,
+`ProducerHamiltonian`, `HFDMRGResult`, `UHFDMRGResult`, and `ProducerEnergy`.
+Historical layout and backend types are accessed with the `HFDMRG.` qualifier.
 
 Argument types form a strict dispatch boundary: typed compact unit-cell calls
 never enter the dense/sliced solver, and matrix/sliced calls never enter the
 compact solver.
+
+## Optional producer-energy audit
+
+`producer_energy(compact_result, producer)` evaluates a caller-supplied
+uncompressed density-density Hamiltonian on the final compact RHF or UHF
+determinant. `ProducerHamiltonian` references the caller's one-body and
+interaction arrays; it does not copy them. The audit streams physical
+projector blocks from the compact lifecycle without materializing global
+occupied coefficients or a dense density matrix and without mutating the
+solver state.
+
+The returned `ProducerEnergy.total` is observational. It is distinct from the
+solver's `represented_energy`, does not replace it, and does not certify
+stationarity for the producer Hamiltonian. The evaluator takes `O(N^2)` time
+and linear-in-`N` density storage plus bounded link/projector scratch. It is
+defined only for compact `HFDMRGResult` and `UHFDMRGResult`; historical tuple
+results retain their existing energy contract and have no compatibility
+fallback through this operation.
 
 ## Algorithm in one page
 
@@ -172,6 +192,7 @@ julia --project=. examples/basic_uhf.jl
 julia --project=. examples/observer_checkpoint.jl
 julia --project=. examples/target_residual.jl
 julia --project=. examples/cached_sliced.jl
+julia --project=. examples/compact_producer_energy.jl
 ```
 
 The [Examples](docs/src/examples/index.md) page explains what each workflow

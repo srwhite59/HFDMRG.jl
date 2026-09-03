@@ -5,13 +5,16 @@ solver controls, observation, physical slice layouts, and the backend
 constructors needed to select a supported interaction representation. It does
 not expose every internal helper or state type.
 
-- [Solvers and controls](@ref) contains the `solve_hfdmrg` docstrings, route
-  table, keyword contract, return semantics, and `SweepInfo`.
+- [Solvers and controls](@ref) contains the solve-route table, the distinct
+  historical and compact return contracts, producer audit, keyword contract,
+  and `SweepInfo`.
 - [Layouts and backends](@ref) contains `SliceLayout`, sliced representation
   helpers, and explicit backend constructors.
 
-`solve_hfdmrg` is the only exported name. Supported types such as
-`HFDMRG.SliceLayout` are intentionally qualified.
+The exported API comprises `solve_hfdmrg`, `producer_energy`,
+`BandedOneBody`, `UnitCellInteraction`, `ProducerHamiltonian`,
+`HFDMRGResult`, `UHFDMRGResult`, and `ProducerEnergy`. Historical types such
+as `HFDMRG.SliceLayout` are intentionally qualified.
 
 ## Module
 

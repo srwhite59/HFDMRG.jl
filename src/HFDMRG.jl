@@ -30,10 +30,13 @@ Public entrypoints:
   retained historical density-density engine.
 - solve_hfdmrg(Hup, Hdn, V, psiup0, psidn0; kwargs...): unrestricted HF with
   spin-dependent one-body matrices.
+- producer_energy(result, producer): observational uncompressed-Hamiltonian
+  energy audit for compact RHF or UHF results only.
 
 Historical calls return `(psiup, psidn, energy)` with global occupied
 coefficients. Compact calls return `HFDMRGResult` or `UHFDMRGResult` with a
-compact state handle.
+compact state handle. `producer_energy` does not change either solver
+implementation or reconstruct global occupied coefficients.
 """
 module HFDMRG
 
@@ -54,6 +57,7 @@ include("uhf_blocks.jl")
 include("uhf_centers.jl")
 include("uhf_lifecycle.jl")
 include("nonlinear_uhf.jl")
+include("producer_energy.jl")
 
 include("backend_api.jl")
 include("slice_layout.jl")
@@ -69,7 +73,7 @@ include("backends/sliced_basis_cached_coulomb.jl")
 include("sliced_fock_audit.jl")
 include("history_accelerated_sliced.jl")
 
-export BandedOneBody, HFDMRGResult, RHFCompactState, UHFDMRGResult,
-    UHFCompactState, UnitCellInteraction, solve_hfdmrg
+export BandedOneBody, HFDMRGResult, ProducerEnergy, ProducerHamiltonian,
+    UHFDMRGResult, UnitCellInteraction, producer_energy, solve_hfdmrg
 
 end # module

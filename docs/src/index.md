@@ -27,11 +27,13 @@ The package separates two responsibilities:
 
 ## Current status
 
-The public surface is intentionally narrow: `solve_hfdmrg` is the only exported
-name, while supported layout and backend constructors are accessed with the
-`HFDMRG.` qualifier. History acceleration is implemented as a private,
-provisional research path and is documented only to explain its numerical
-contract. It has no public calling syntax.
+The public surface is intentionally narrow. `solve_hfdmrg` covers both the
+historical dense/sliced routes and the dispatch-isolated compact typed route.
+`producer_energy` is an optional observational audit for compact results only.
+The concrete compact input and result records are exported; historical layout
+and backend constructors remain qualified with `HFDMRG.`. History acceleration
+is implemented as a private, provisional research path and has no public
+calling syntax.
 
 HFDMRG presently has no hosted documentation deployment. Build this manual
 locally with:

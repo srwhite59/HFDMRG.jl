@@ -6,8 +6,10 @@ local SCF, computes energies, and decides when to stop. A backend translates
 one particular interaction representation into the block and window objects
 needed by that engine.
 
-This is the in-repository extension contract. `solve_hfdmrg` is the only
-exported name; the functions in `src/backend_api.jl`
+This is the in-repository extension contract. Historical backend types remain
+qualified with `HFDMRG.`; compact input/result records and the
+`solve_hfdmrg`/`producer_energy` operations form the narrow exported surface.
+The functions in `src/backend_api.jl`
 are an architectural seam for HFDMRG development, not a promise that private
 state types or helper names are stable public API.
 

@@ -4,7 +4,8 @@
 
 Four interaction families share the public sweep: density-density, density plus
 a target-space residual, sliced projection, and cached sliced. Backend types
-are qualified with `HFDMRG.`; only `solve_hfdmrg` is exported.
+are qualified with `HFDMRG.`. The compact input/result records and the
+`solve_hfdmrg` and `producer_energy` operations form the exported surface.
 
 ## Common inputs and outputs
 
