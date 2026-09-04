@@ -12,6 +12,10 @@ mutable struct UHFNonlinearWorkspace
     beta_geodesic::Matrix{Float64}
     alpha_fock::Matrix{Float64}
     beta_fock::Matrix{Float64}
+    transaction_calls::Int
+    eigensolution_calls::Int
+    trial_energy_calls::Int
+    publication_calls::Int
 end
 
 function UHFNonlinearWorkspace(one_body::BandedOneBody,
@@ -31,7 +35,7 @@ function UHFNonlinearWorkspace(one_body::BandedOneBody,
         matrix(alpha_capacity), matrix(beta_capacity),
         matrix(alpha_capacity), matrix(beta_capacity),
         matrix(alpha_capacity), matrix(beta_capacity),
-        matrix(alpha_capacity), matrix(beta_capacity))
+        matrix(alpha_capacity), matrix(beta_capacity), 0, 0, 0, 0)
 end
 
 struct UHFCompactState
@@ -108,7 +112,7 @@ function _uhf_candidate_energy!(candidate, lifecycle::UHFFixedLifecycle,
     prepare_uhf_lifecycle_center!(workspace.prepared, left, right, cell,
         lifecycle.intervals[cell], lifecycle.intervals[cell+1], one_body,
         operator)
-    uhf_center_energy_fock!(workspace.prepared,
+    uhf_center_true_energy!(workspace.prepared,
         @view(root.alpha.covariance[1:root.alpha.rank, 1:root.alpha.rank]),
         @view(root.beta.covariance[1:root.beta.rank, 1:root.beta.rank]),
         root.alpha.occupied, root.beta.occupied).total
@@ -129,6 +133,7 @@ function _uhf_trial_advance!(trial::UHFMovingRoot, source::UHFMovingRoot,
         workspace.trial_alpha_work, workspace.trial_beta_work)
     energy = _uhf_candidate_energy!(candidate, lifecycle, one_body, operator,
         workspace.lifecycle)
+    workspace.trial_energy_calls += 1
     candidate, energy
 end
 
@@ -161,6 +166,7 @@ function _monotone_uhf_center_transaction!(lifecycle::UHFFixedLifecycle,
         control::UHFStateControl, workspace::UHFNonlinearWorkspace;
         geodesic_steps=_RHF_GEODESIC_STEPS)
     _preflight_uhf_nonlinear(lifecycle, one_body, operator, control, workspace)
+    workspace.transaction_calls += 1
     localwork = workspace.lifecycle
     left, right = _uhf_lifecycle_blocks(lifecycle, localwork)
     cell, forward = lifecycle.next_center, lifecycle.forward
@@ -185,30 +191,33 @@ function _monotone_uhf_center_transaction!(lifecycle::UHFFixedLifecycle,
         alpha_root.occupied)
     _lowest_projector!(workspace.beta_proposal, workspace.beta_fock, mb,
         beta_root.occupied)
+    workspace.eigensolution_calls += 2
     alpha_change = _projector_distance(workspace.alpha_incoming,
         workspace.alpha_proposal, ma)
     beta_change = _projector_distance(workspace.beta_incoming,
         workspace.beta_proposal, mb)
+
+    full, proposal_energy = _uhf_trial_advance!(workspace.trial_root,
+        lifecycle.root, lifecycle, left, right,
+        @view(workspace.alpha_proposal[1:ma, 1:ma]),
+        @view(workspace.beta_proposal[1:mb, 1:mb]), one_body, operator,
+        control, workspace)
+    envelope = _rhf_energy_envelope(incoming.total, ma + mb)
+    if proposal_energy <= incoming.total + envelope
+        _publish_uhf_advance_candidate!(lifecycle, full)
+        workspace.publication_calls += 1
+        lifecycle.center_visits += 1
+        return _uhf_update_record(cell, forward, incoming.total,
+            incoming.total, proposal_energy, proposal_energy, 1.0,
+            :accepted_full, alpha_change, beta_change, full, ma, mb)
+    end
 
     baseline, baseline_energy = _uhf_trial_advance!(workspace.baseline_root,
         lifecycle.root, lifecycle, left, right,
         @view(workspace.alpha_incoming[1:ma, 1:ma]),
         @view(workspace.beta_incoming[1:mb, 1:mb]), one_body, operator,
         control, workspace)
-    full, proposal_energy = _uhf_trial_advance!(workspace.trial_root,
-        lifecycle.root, lifecycle, left, right,
-        @view(workspace.alpha_proposal[1:ma, 1:ma]),
-        @view(workspace.beta_proposal[1:mb, 1:mb]), one_body, operator,
-        control, workspace)
     envelope = _rhf_energy_envelope(baseline_energy, ma + mb)
-    if proposal_energy <= baseline_energy + envelope
-        _publish_uhf_advance_candidate!(lifecycle, full)
-        lifecycle.center_visits += 1
-        return _uhf_update_record(cell, forward, incoming.total,
-            baseline_energy, proposal_energy, proposal_energy, 1.0,
-            :accepted_full, alpha_change, beta_change, full, ma, mb)
-    end
-
     for step in geodesic_steps
         _geodesic_projector!(workspace.alpha_geodesic,
             workspace.alpha_incoming, workspace.alpha_proposal, ma,
@@ -223,6 +232,7 @@ function _monotone_uhf_center_transaction!(lifecycle::UHFFixedLifecycle,
             control, workspace)
         if energy <= baseline_energy + envelope
             _publish_uhf_advance_candidate!(lifecycle, trial)
+            workspace.publication_calls += 1
             lifecycle.center_visits += 1
             return _uhf_update_record(cell, forward, incoming.total,
                 baseline_energy, proposal_energy, energy, step,
@@ -230,6 +240,7 @@ function _monotone_uhf_center_transaction!(lifecycle::UHFFixedLifecycle,
         end
     end
     _publish_uhf_advance_candidate!(lifecycle, baseline)
+    workspace.publication_calls += 1
     lifecycle.center_visits += 1
     _uhf_update_record(cell, forward, incoming.total, baseline_energy,
         proposal_energy, baseline_energy, 0.0, :rejected_no_safe_trial,

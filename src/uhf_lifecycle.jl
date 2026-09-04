@@ -33,7 +33,7 @@ mutable struct UHFFixedLifecycle
 end
 
 mutable struct UHFLifecycleWorkspace
-    prepared::PreparedUHFCenter
+    prepared::FastUHFPreparedCenter
     builder::UHFBlockBuildWorkspace
     alpha_root::RHFRootWorkspace
     beta_root::RHFRootWorkspace
@@ -50,8 +50,10 @@ function UHFLifecycleWorkspace(one_body::BandedOneBody,
     center_alpha = 2UNIT_CELL_WIDTH + 2maximum_alpha
     center_beta = 2UNIT_CELL_WIDTH + 2maximum_beta
     channels = _maximum_channel_rank(operator)
-    prepared = PreparedUHFCenter(center_alpha, center_beta, channels;
-        maximum_rhs=max(maximum_rhs, channels))
+    prepared = FastUHFPreparedCenter(center_alpha, center_beta, operator;
+        maximum_rhs=max(maximum_rhs, channels),
+        maximum_alpha_side=maximum_alpha,
+        maximum_beta_side=maximum_beta)
     builder = UHFBlockBuildWorkspace(max(UNIT_CELL_WIDTH + maximum_alpha,
             UNIT_CELL_WIDTH), max(UNIT_CELL_WIDTH + maximum_beta,
             UNIT_CELL_WIDTH), channels)

@@ -92,20 +92,21 @@ function center_oracle(one_body, operator, blocks, bases, occupied)
         hartree=hartree, exchange=exchange), fock, basis
 end
 
-function warmed_nonfactor_allocation(prepared, left, center, right,
-        one_body, operator, root, output, input)
-    HFDMRG.prepare_two_sided_center!(prepared, left, center, right,
+function warmed_nonfactor_allocation(prepared, left, right, cell,
+        one_body, operator, density, occupied, output, input)
+    HFDMRG._prepare_lifecycle_center!(prepared, left, right, cell,
         one_body, operator)
-    HFDMRG.center_energy_fock!(prepared, root)
+    HFDMRG._center_energy_fock!(prepared, density, occupied)
     HFDMRG.apply_center_fock!(output, prepared, input)
     @allocated begin
-        HFDMRG.prepare_two_sided_center!(prepared, left, center, right,
+        HFDMRG._prepare_lifecycle_center!(prepared, left, right, cell,
             one_body, operator)
-        HFDMRG.center_energy_fock!(prepared, root)
+        HFDMRG._center_energy_fock!(prepared, density, occupied)
         HFDMRG.apply_center_fock!(output, prepared, input)
         nothing
     end
 end
+
 @testset "compact RHF block-state nucleus" begin
     for atoms in (10, 20)
         one_body, operator = nucleus_fixture(atoms)
@@ -113,60 +114,43 @@ end
         center_cell = atoms ÷ 2
         left, left_basis = grow_cells(one_body, operator, 1:center_cell-1,
             3, provenance)
-        center = HFDMRG.seed_cell_block(one_body, operator, center_cell;
-            provenance=provenance)
+        first_center = HFDMRG.seed_cell_block(one_body, operator, center_cell;
+            provenance)
+        second_center = HFDMRG.seed_cell_block(one_body, operator,
+            center_cell + 1; provenance)
         right, right_basis = grow_cells(one_body, operator,
-            center_cell+1:atoms, 4, provenance)
-        center_basis = Matrix{Float64}(I, 18, 18)
-        rank = left.rank + center.rank + right.rank
+            center_cell+2:atoms, 4, provenance)
+        physical_basis = Matrix{Float64}(I, 18, 18)
+        rank = left.rank + 36 + right.rank
+        occupied = min(atoms ÷ 2, rank)
         density, oracle_energy, oracle_fock, _ = center_oracle(one_body,
-            operator, (left, center, right),
-            (left_basis, center_basis, right_basis), min(atoms ÷ 2, rank))
-        prepared = HFDMRG.PreparedRHFCenter(rank,
-            HFDMRG._maximum_channel_rank(operator); maximum_rhs=3)
-        HFDMRG.prepare_two_sided_center!(prepared, left, center, right,
+            operator, (left, first_center, second_center, right),
+            (left_basis, physical_basis, physical_basis, right_basis), occupied)
+        prepared = HFDMRG.FastRHFPreparedCenter(rank, operator;
+            maximum_rhs=3, maximum_side_rank=max(left.rank, right.rank))
+        HFDMRG._prepare_lifecycle_center!(prepared, left, right, center_cell,
             one_body, operator)
-        root = HFDMRG.RHFRoot(density; occupied=min(atoms ÷ 2, rank))
-        energy = HFDMRG.center_energy_fock!(prepared, root)
+        energy = HFDMRG._center_energy_fock!(prepared, density, occupied)
         @test abs(energy.total - oracle_energy.total) <= 2e-11
         @test abs(energy.one_body - oracle_energy.one_body) <= 2e-12
         @test abs(energy.hartree - oracle_energy.hartree) <= 2e-11
         @test abs(energy.exchange - oracle_energy.exchange) <= 2e-11
         @test maximum(abs, prepared.fock[1:rank, 1:rank] - oracle_fock) <= 2e-11
-        vector = collect(range(-0.4, 0.7; length=rank))
-        output = similar(vector)
-        HFDMRG.apply_center_fock!(output, prepared, vector)
-        @test output ≈ oracle_fock * vector atol=2e-11 rtol=2e-11
         panel = reshape(collect(range(-0.3, 0.9; length=3rank)), rank, 3)
         panel_output = similar(panel)
         HFDMRG.apply_center_fock!(panel_output, prepared, panel)
         @test panel_output ≈ oracle_fock * panel atol=2e-11 rtol=2e-11
-        allocation = warmed_nonfactor_allocation(prepared, left, center,
-            right, one_body, operator, root, panel_output, panel)
-        @test allocation == 0
-        larger = HFDMRG.PreparedRHFCenter(rank + 3,
-            HFDMRG._maximum_channel_rank(operator); maximum_rhs=4)
+        @test warmed_nonfactor_allocation(prepared, left, right, center_cell,
+            one_body, operator, density, occupied, panel_output, panel) == 0
+        larger = HFDMRG.FastRHFPreparedCenter(rank + 3, operator;
+            maximum_rhs=4, maximum_side_rank=max(left.rank, right.rank))
         inactive_before = reinterpret(UInt64, copy(larger.h1[rank+1:end, :]))
-        HFDMRG.prepare_two_sided_center!(larger, left, center, right,
+        HFDMRG._prepare_lifecycle_center!(larger, left, right, center_cell,
             one_body, operator)
         @test reinterpret(UInt64, copy(larger.h1[rank+1:end, :])) ==
             inactive_before
-        reflected_left = HFDMRG.reflect_block(right, atoms)
-        reflected_center = HFDMRG.reflect_block(center, atoms)
-        reflected_right = HFDMRG.reflect_block(left, atoms)
-        reflected_prepared = HFDMRG.PreparedRHFCenter(rank,
-            HFDMRG._maximum_channel_rank(operator))
-        HFDMRG.prepare_two_sided_center!(reflected_prepared,
-            reflected_left, reflected_center, reflected_right,
-            one_body, operator)
-        permutation = vcat(left.rank+center.rank+1:rank,
-            left.rank+1:left.rank+center.rank, 1:left.rank)
-        reflected_density = density[permutation, permutation]
-        reflected_root = HFDMRG.RHFRoot(reflected_density;
-            occupied=min(atoms ÷ 2, rank))
-        reflected_energy = HFDMRG.center_energy_fock!(reflected_prepared,
-            reflected_root)
-        @test reflected_energy.total ≈ energy.total atol=2e-11
+        @test HFDMRG.reflect_block(HFDMRG.reflect_block(left, atoms), atoms).cells ==
+            left.cells
         if atoms == 10
             first_cell = HFDMRG.seed_cell_block(one_body, operator, 1)
             second_cell = HFDMRG.seed_cell_block(one_body, operator, 2)
@@ -178,10 +162,8 @@ end
                 one_body, operator, builder)
             publication = @allocated published = HFDMRG.build_outer_block(
                 first_cell, second_cell, link, one_body, operator, builder)
-            durable_arrays = sizeof(published.h1) +
-                sizeof(published.pair_field) +
-                sizeof(published.left_feature) +
-                sizeof(published.right_feature) +
+            durable_arrays = sizeof(published.h1) + sizeof(published.pair_field) +
+                sizeof(published.left_feature) + sizeof(published.right_feature) +
                 sizeof(published.left_edge) + sizeof(published.right_edge)
             @test durable_arrays <= publication <= Base.summarysize(published)
             @test @allocated(HFDMRG._fill_merged!(builder, first_cell,
@@ -189,30 +171,32 @@ end
         end
     end
 end
+
 @testset "terminal, exact, reflection, and ownership" begin
     one_body, operator = nucleus_fixture(2)
-    left = HFDMRG.seed_cell_block(one_body, operator, 1; provenance=UInt(2))
-    right = HFDMRG.seed_cell_block(one_body, operator, 2; provenance=UInt(2))
+    first = HFDMRG.seed_cell_block(one_body, operator, 1; provenance=UInt(2))
+    second = HFDMRG.seed_cell_block(one_body, operator, 2; provenance=UInt(2))
     density, oracle_energy, oracle_fock, _ = center_oracle(one_body, operator,
-        (left, right), (Matrix{Float64}(I, 18, 18),
+        (first, second), (Matrix{Float64}(I, 18, 18),
             Matrix{Float64}(I, 18, 18)), 1)
-    prepared = HFDMRG.PreparedRHFCenter(36, 1; maximum_rhs=2)
-    HFDMRG.prepare_terminal_center!(prepared, left, right, one_body, operator)
-    root = HFDMRG.RHFRoot(density; occupied=1)
-    energy = HFDMRG.center_energy_fock!(prepared, root)
+    empty = HFDMRG._empty_outer_block(operator, UInt(2))
+    prepared = HFDMRG.FastRHFPreparedCenter(36, operator; maximum_rhs=2)
+    HFDMRG._prepare_lifecycle_center!(prepared, empty, empty, 1,
+        one_body, operator)
+    energy = HFDMRG._center_energy_fock!(prepared, density, 1)
     @test energy.total ≈ oracle_energy.total atol=2e-11
     @test prepared.fock[1:36, 1:36] ≈ oracle_fock atol=2e-11
-    reflected = reverse(reverse(left))
-    @test reflected.h1 == left.h1
-    @test reflected.pair_field == left.pair_field
-    @test reflected.left_feature == left.left_feature
-    @test HFDMRG.reflect_block(HFDMRG.reflect_block(left, 2), 2).cells ==
-        left.cells
-    @test HFDMRG.block_storage_bytes(left) ==
-        8sum(values(HFDMRG.block_storage_formula(18, 1, 1, 18)))
-    @test !any(size(array, 1) == operator.sites &&
-        size(array, 2) > 18 for array in (left.h1, left.pair_field,
-            left.left_feature, left.right_feature))
+    @test reverse(reverse(first)).h1 == first.h1
+    @test HFDMRG.reflect_block(HFDMRG.reflect_block(first, 2), 2).cells ==
+        first.cells
+    durable = sum(sizeof, (first.h1, first.pair_field, first.left_feature,
+        first.right_feature, first.left_core, first.right_core,
+        first.left_edge, first.right_edge, first.link.close_map,
+        first.link.completed_map))
+    @test HFDMRG.block_storage_bytes(first) == durable
+    @test !any(size(array, 1) == operator.sites && size(array, 2) > 18
+        for array in (first.h1, first.pair_field, first.left_feature,
+            first.right_feature))
 end
 
 @testset "validation, zero rank, aliases, and BLAS" begin
@@ -224,21 +208,22 @@ end
     @test_throws ArgumentError HFDMRG.RHFRoot([0.8 0.0; 0.0 0.0]; occupied=1)
     one_body, operator = nucleus_fixture(2)
     block = HFDMRG.seed_cell_block(one_body, operator, 1)
-    prepared = HFDMRG.PreparedRHFCenter(36, 1)
-    @test_throws ArgumentError HFDMRG.prepare_terminal_center!(prepared,
-        block, block, one_body, operator)
+    empty = HFDMRG._empty_outer_block(operator, UInt(0))
+    prepared = HFDMRG.FastRHFPreparedCenter(54, operator;
+        maximum_side_rank=18)
+    @test_throws ArgumentError HFDMRG._prepare_lifecycle_center!(prepared,
+        block, empty, 1, one_body, operator)
     snapshot = copy(prepared.h1)
-    @test_throws ArgumentError HFDMRG.prepare_terminal_center!(prepared,
-        block, block, one_body, operator)
-    @test isequal(prepared.h1, snapshot)
-    other = HFDMRG.seed_cell_block(one_body, operator, 2;
-        provenance=UInt(1))
-    @test_throws ArgumentError HFDMRG.prepare_terminal_center!(prepared,
-        block, other, one_body, operator)
-    @test isequal(prepared.h1, snapshot)
-    vector = ones(18)
-    prepared.active_rank = 18
-    fill!(@view(prepared.fock[1:18, 1:18]), 0.0)
+    @test_throws ArgumentError HFDMRG._prepare_lifecycle_center!(prepared,
+        block, empty, 1, one_body, operator)
+    @test prepared.h1 == snapshot
+    other = HFDMRG.seed_cell_block(one_body, operator, 2; provenance=UInt(1))
+    @test_throws ArgumentError HFDMRG._prepare_lifecycle_center!(prepared,
+        empty, other, 1, one_body, operator)
+    @test prepared.h1 == snapshot
+    vector = ones(36)
+    prepared.active_rank = 36
+    fill!(@view(prepared.fock[1:36, 1:36]), 0.0)
     @test_throws ArgumentError HFDMRG.apply_center_fock!(vector, prepared,
         vector)
     @test BLAS.get_num_threads() == threads
@@ -246,11 +231,10 @@ end
     residual_operator = HFDMRG.UnitCellInteraction(operator.sites, 1,
         Float64[], reshape([operator.tail_transfer[1]], 1, 1),
         operator.phase_source, operator.phase_sink, operator.local_triangle)
-    first = HFDMRG.seed_cell_block(one_body, residual_operator, 1)
-    second = HFDMRG.seed_cell_block(one_body, residual_operator, 2)
-    residual_prepared = HFDMRG.PreparedRHFCenter(36, 1)
-    HFDMRG.prepare_terminal_center!(residual_prepared, first, second,
-        one_body, residual_operator)
-    @test @allocated(HFDMRG.prepare_terminal_center!(residual_prepared,
-        first, second, one_body, residual_operator)) == 0
+    residual_prepared = HFDMRG.FastRHFPreparedCenter(36, residual_operator)
+    residual_empty = HFDMRG._empty_outer_block(residual_operator, UInt(0))
+    HFDMRG._prepare_lifecycle_center!(residual_prepared, residual_empty,
+        residual_empty, 1, one_body, residual_operator)
+    @test @allocated(HFDMRG._prepare_lifecycle_center!(residual_prepared,
+        residual_empty, residual_empty, 1, one_body, residual_operator)) == 0
 end

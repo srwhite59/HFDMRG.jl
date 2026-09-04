@@ -34,8 +34,7 @@ function unequal_uhf_center_fixture()
     left = HFDMRG.build_uhf_outer_block(first, second, alpha_link, beta_link,
         one_body, operator, builder)
     right = HFDMRG._empty_uhf_block(operator, provenance)
-    prepared = HFDMRG.PreparedUHFCenter(39, 38,
-        HFDMRG._maximum_channel_rank(operator); maximum_rhs=3)
+    prepared = HFDMRG.FastUHFPreparedCenter(39, 38, operator; maximum_rhs=3)
     HFDMRG.prepare_uhf_lifecycle_center!(prepared, left, right, 3, 37:54,
         55:72, one_body, operator)
     basis_alpha = zeros(72, 39); basis_beta = zeros(72, 38)
@@ -115,11 +114,12 @@ end
 
     alpha_snapshot = copy(prepared.alpha.h1)
     beta_snapshot = copy(prepared.beta.h1)
-    small = HFDMRG.PreparedUHFCenter(38, 38, 1)
+    small = HFDMRG.FastUHFPreparedCenter(38, 38, operator)
+    small_alpha = copy(small.alpha.h1); small_beta = copy(small.beta.h1)
     @test_throws DimensionMismatch HFDMRG.prepare_uhf_lifecycle_center!(small,
         left, right, 3, 37:54, 55:72, one_body, operator)
-    @test all(isnan, small.alpha.h1)
-    @test all(isnan, small.beta.h1)
+    @test small.alpha.h1 == small_alpha
+    @test small.beta.h1 == small_beta
     @test_throws ArgumentError HFDMRG.apply_uhf_center_fock!(alpha_vector,
         beta_output, prepared, alpha_vector, beta_vector)
     @test prepared.alpha.h1 == alpha_snapshot
@@ -128,7 +128,7 @@ end
     # The direct dense fixture above is the controlling RHF-limit oracle; the
     # equality of the two spin Focks is also checked on the physical H2 center.
     h2, v2 = nucleus_fixture(2); empty = HFDMRG._empty_uhf_block(v2, UInt(3))
-    rhf_center = HFDMRG.PreparedUHFCenter(36, 36, 1)
+    rhf_center = HFDMRG.FastUHFPreparedCenter(36, 36, v2)
     HFDMRG.prepare_uhf_lifecycle_center!(rhf_center, empty, empty, 1, 1:18,
         19:36, h2, v2)
     orbital = deterministic_isometry(36, 1, 11)
@@ -351,13 +351,13 @@ end
     @test HFDMRG.cross_hartree_rank(zero_alpha.cross_hartree) == 0
     @test zero_alpha.alpha.completed_count == 1
 
-    hostile = HFDMRG.PreparedUHFCenter(40, 41, 1)
+    hostile = HFDMRG.FastUHFPreparedCenter(40, 41, v2)
     alpha_inactive = reinterpret(UInt64, copy(hostile.alpha.h1[37:end, :]))
     beta_inactive = reinterpret(UInt64, copy(hostile.beta.h1[37:end, :]))
     cross_alpha_inactive = reinterpret(UInt64,
-        copy(hostile.cross_alpha[HFDMRG.pair_dimension(36)+1:end, :]))
+        copy(hostile.cross_alpha[37:end, :]))
     cross_beta_inactive = reinterpret(UInt64,
-        copy(hostile.cross_beta[HFDMRG.pair_dimension(36)+1:end, :]))
+        copy(hostile.cross_beta[37:end, :]))
     empty_h2 = HFDMRG._empty_uhf_block(v2, UInt(13))
     HFDMRG.prepare_uhf_lifecycle_center!(hostile, empty_h2, empty_h2, 1,
         1:18, 19:36, h2, v2)
@@ -366,10 +366,10 @@ end
     @test reinterpret(UInt64, copy(hostile.beta.h1[37:end, :])) ==
         beta_inactive
     @test reinterpret(UInt64,
-        copy(hostile.cross_alpha[HFDMRG.pair_dimension(36)+1:end, :])) ==
+        copy(hostile.cross_alpha[37:end, :])) ==
         cross_alpha_inactive
     @test reinterpret(UInt64,
-        copy(hostile.cross_beta[HFDMRG.pair_dimension(36)+1:end, :])) ==
+        copy(hostile.cross_beta[37:end, :])) ==
         cross_beta_inactive
 
     atomic_workspace = HFDMRG.UHFLifecycleWorkspace(h2, v2, 2, 2)
@@ -444,7 +444,7 @@ end
     one_body, operator = nucleus_fixture(2); provenance = UInt(4)
     left = HFDMRG._empty_uhf_block(operator, provenance)
     right = HFDMRG._empty_uhf_block(operator, provenance)
-    prepared = HFDMRG.PreparedUHFCenter(36, 36, 1; maximum_rhs=2)
+    prepared = HFDMRG.FastUHFPreparedCenter(36, 36, operator; maximum_rhs=2)
     alpha = zeros(36, 36); beta = zeros(36, 36)
     alpha[1, 1] = 1.0; beta[2, 2] = 1.0
     HFDMRG.prepare_uhf_lifecycle_center!(prepared, left, right, 1, 1:18,

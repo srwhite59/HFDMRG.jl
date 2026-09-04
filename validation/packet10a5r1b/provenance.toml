@@ -1,0 +1,73 @@
+schema = "hfdmrg-packet10a5r1b-provenance-v1"
+packet = "10A5R1B"
+recipient_base = "83cc6f112b0f477736f87e702d98402727ff3cfc"
+donor_repository = "PPP"
+donor_commit = "0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c"
+all_transfers_are_adapted = true
+verbatim_slices = 0
+
+[[families]]
+name = "independent-spin direct two-sided center"
+donor_file = "src/_IndependentSpinTwoSidedCenters.jl"
+donor_functions = "_prepare_one_spin_two_sided! through _independent_spin_two_sided_fock_core!"
+donor_lines = "255-745"
+donor_range_sha256 = "f938e5dcd2bc97ee48e5cb9f06eab335969f18fd9767426dddedc0304cf4a778"
+recipient_files = ["src/fast_rhf_centers.jl", "src/uhf_centers.jl"]
+recipient_sha256 = ["469e717a1580a8cea90aeefe1294618ebb85f6146ec2c67f3510e5b072c10aee", "087c9f39100f2d78bda69ba0331dd13b0f02bb9be68a8ddb29ce08aed6f6d468"]
+classification = "adapted"
+adaptation = "Consolidated donor side views and workspaces into typed HFDMRG center owners; reused the accepted R1A separated-spin self-field arithmetic; adapted field access, two-group center rows, banded H1, counters, and result decomposition. Opposite-spin Hartree remains direct and implicit; no expanded packed-pair cross panel exists."
+
+[[families]]
+name = "independent-spin block and cross-Hartree ownership"
+donor_file = "src/_IndependentSpinCrossHartree.jl"
+donor_functions = "complete compressed cross-Hartree owner and contractions"
+donor_lines = "1-505"
+donor_range_sha256 = "99a1949824e92f1df17ba43866f31731a5ef6ad3a34184c300b50e7ab9dfe3d2"
+recipient_files = ["src/uhf_blocks.jl", "src/uhf_centers.jl"]
+recipient_sha256 = ["2950f1a78736e44f0fe681d2da97b6eda51480d8d31da28bd8bc6a3b7ad2f318", "087c9f39100f2d78bda69ba0331dd13b0f02bb9be68a8ddb29ce08aed6f6d468"]
+classification = "adapted"
+adaptation = "Retained HFDMRG's donor-equivalent compressed block factors and independent alpha/beta exchange records; contracted them directly into square per-spin center fields using shared MPO channels."
+
+[[families]]
+name = "independent-spin interaction blocks"
+donor_file = "src/_IndependentSpinInteractionBlocks.jl"
+donor_functions = "complete independent-spin interaction block owner"
+donor_lines = "1-310"
+donor_range_sha256 = "1aaf458e547535ba1d1fa32ebd5cb9327d77b52dc6d1d6b4dd2122eb4aeb4716"
+recipient_files = ["src/uhf_blocks.jl"]
+recipient_sha256 = ["2950f1a78736e44f0fe681d2da97b6eda51480d8d31da28bd8bc6a3b7ad2f318"]
+classification = "adapted"
+adaptation = "Mapped donor independent alpha/beta link, H1, exchange-pair, shared-Hartree, reflection, and storage ownership into UHFOuterBlock without a common-union pair field."
+
+[[families]]
+name = "entry build and collection lifecycle"
+donor_file = "src/_IndependentSpinCollectionLifecycle.jl"
+donor_functions = "parent and entry build; initialization, motion, replacement, center preparation, reflection, reconstruction, and half sweep"
+donor_lines = "368-677 and 757-1486"
+donor_range_sha256 = "838ece5c813be3329b566a6a41c3ff11d8008900d60bea6a75c34afa9ae67873+67ddde835db05b4bbb893126e065d9af847bfefc6a9aed8ba0199f3794d72c5b"
+recipient_files = ["src/uhf_blocks.jl", "src/uhf_lifecycle.jl"]
+recipient_sha256 = ["2950f1a78736e44f0fe681d2da97b6eda51480d8d31da28bd8bc6a3b7ad2f318", "980df6f8694798ae746a69384c6e719a81a535104b95ae9ec26aa658f85d0208"]
+classification = "adapted"
+adaptation = "Consolidated PPP's distributed wrappers into HFDMRG's one exact-sized collection, moving independent-spin root, reusable entry workspace, block-native atomic-Neel initializer, two-group schedule, terminal turnaround, reflection, and reconstruction contracts."
+
+[[families]]
+name = "monotone one-Fock transaction"
+donor_file = "src/_IndependentSpinMonotoneTransaction.jl"
+donor_functions = "_independent_spin_represented_energy_certificate! through _independent_spin_monotone_transaction!"
+donor_lines = "147-396"
+donor_range_sha256 = "79b0e044733974e930242e55eee694cbd59ae1b6435cfd22db7162d78ae4e69c"
+recipient_files = ["src/nonlinear_uhf.jl"]
+recipient_sha256 = ["1a3942c294ea9ea5502a7138aa78f3dfb3f6e6c9ef77001b2e19a1bd03a5decd"]
+classification = "adapted"
+adaptation = "Adapted the two independent eigensolutions, one post-factorization true-energy trial, accepted-full publication, and common-parameter geodesic fallback to HFDMRG's result records. The simpler recipient schedule lazily constructs the unchanged baseline only when the full proposal fails."
+
+[[families]]
+name = "stored nonlinear traversal"
+donor_file = "src/_IndependentSpinStoredNonlinear.jl"
+donor_functions = "_turn_independent_spin_nonlinear! through _independent_spin_stored_nonlinear_sweep!"
+donor_lines = "125-292"
+donor_range_sha256 = "98bf94b11c7a05d2254c78ed5d1dedbb5ae42367eaeb631505d570fbd0b1dfee"
+recipient_files = ["src/nonlinear_uhf.jl", "src/uhf_lifecycle.jl"]
+recipient_sha256 = ["1a3942c294ea9ea5502a7138aa78f3dfb3f6e6c9ef77001b2e19a1bd03a5decd", "980df6f8694798ae746a69384c6e719a81a535104b95ae9ec26aa658f85d0208"]
+classification = "adapted"
+adaptation = "Retained the recipient half-sweep evidence and convergence surface while using donor-equivalent moving-root publication, terminal turn, and reusable nonlinear ownership."

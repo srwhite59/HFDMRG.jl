@@ -24,10 +24,11 @@ end
     energies = Dict{Tuple{Int,Bool,Symbol},Float64}()
     for atoms in (2, 10), exact in (false, true),
             orientation in (:physical, :reflected)
-        result, one_body, operator = solve_fixture(atoms, orientation; exact)
+        result, one_body, operator = solve_fixture(atoms, orientation; exact,
+            sweeps=exact ? 100 : 60, tolerance=exact ? 1.0e-11 : 1.0e-7)
         @test result.converged
         @test result.reason == :energy_converged
-        @test result.half_sweeps <= 60
+        @test result.half_sweeps <= (exact ? 100 : 60)
         @test result.accepted_full + result.accepted_fallback > 0
         @test result.rejected_updates >= 0
         @test result.maximum_state_rank <= (exact ? atoms ÷ 2 : 4)
@@ -49,12 +50,11 @@ end
         energies[(atoms, exact, orientation)] = result.represented_energy
     end
     for atoms in (2, 10), exact in (false, true)
-        # Representation exactness leaves the caller's 1e-7 nonlinear
-        # stopping target unchanged.  Two independently started solves have
-        # the sum of those stopping envelopes; each exact replay above remains
-        # constrained at roundoff scale.
+        # Exact-representation orientation parity is a high-accuracy result;
+        # finite cases retain the deliberately looser nonlinear smoke target.
         @test abs(energies[(atoms, exact, :physical)] -
-            energies[(atoms, exact, :reflected)]) <= 2.0e-7
+            energies[(atoms, exact, :reflected)]) <=
+            (exact ? 2.0e-11 : 2.0e-7)
     end
 end
 

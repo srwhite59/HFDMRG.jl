@@ -12,6 +12,30 @@ PPP's separated left/center/right panels are evaluated directly from the
 equivalent block feature records already owned by HFDMRG.  In particular no
 total-center packed-pair matrix is formed.
 """
+function _add_core_hartree!(h1, block::RHFOuterBlock, offset::Int,
+        core, feature)
+    channels = length(core)
+    @inbounds for j = 1:block.rank, i = 1:j
+        value = 0.0
+        pair = pair_index(i, j)
+        for channel = 1:channels
+            value = muladd(core[channel], feature[pair, channel], value)
+        end
+        value *= 2.0 / pair_scale(i, j)
+        h1[offset+i, offset+j] += value
+        i != j && (h1[offset+j, offset+i] += value)
+    end
+    nothing
+end
+
+@inline function _core_cross(first, second)
+    value = 0.0
+    @inbounds for channel in eachindex(first, second)
+        value = muladd(first[channel], second[channel], value)
+    end
+    4.0value
+end
+
 mutable struct FastRHFPreparedCenter
     maximum_rank::Int
     maximum_rhs::Int
@@ -47,12 +71,15 @@ end
 
 function FastRHFPreparedCenter(maximum_rank::Int,
         operator::UnitCellInteraction;
-        maximum_rhs::Int=1)
+        maximum_rhs::Int=1, maximum_side_rank::Int=max(
+            (maximum_rank - 2UNIT_CELL_WIDTH) ÷ 2, 1))
     maximum_rank >= 1 || throw(ArgumentError("maximum rank must be positive"))
     maximum_rhs >= 1 || throw(ArgumentError("RHS capacity must be positive"))
     channels = max(_maximum_channel_rank(operator), 1)
     residual = max(size(operator.residual_transfer, 1), 1)
-    maximum_side = max((maximum_rank - 2UNIT_CELL_WIDTH) ÷ 2, 1)
+    maximum_side_rank >= 1 || throw(ArgumentError(
+        "side rank capacity must be positive"))
+    maximum_side = maximum_side_rank
     FastRHFPreparedCenter(maximum_rank, maximum_rhs, 0, 0.0,
         zeros(maximum_rank, maximum_rank),
         zeros(maximum_rank, maximum_rank),
@@ -469,6 +496,8 @@ function apply_center_fock!(output::AbstractVecOrMat{Float64},
     rank = prepared.active_rank
     size(input, 1) == rank && size(output) == size(input) ||
         throw(DimensionMismatch("fast RHF center action dimensions disagree"))
+    Base.mightalias(output, input) && throw(ArgumentError(
+        "fast RHF center action input and output must not alias"))
     mul!(output, @view(prepared.fock[1:rank, 1:rank]), input)
 end
 
