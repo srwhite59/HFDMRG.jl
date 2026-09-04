@@ -119,8 +119,8 @@ function _uhf_candidate_energy!(candidate, lifecycle::UHFFixedLifecycle,
 end
 
 function _uhf_trial_advance!(trial::UHFMovingRoot, source::UHFMovingRoot,
-        lifecycle::UHFFixedLifecycle, left::UHFOuterBlock,
-        right::UHFOuterBlock, alpha_covariance, beta_covariance,
+        lifecycle::UHFFixedLifecycle, left::UHFEntryBlock,
+        right::UHFEntryBlock, alpha_covariance, beta_covariance,
         one_body::BandedOneBody, operator::UnitCellInteraction,
         control::UHFStateControl, workspace::UHFNonlinearWorkspace)
     _copy_uhf_root!(trial, source)

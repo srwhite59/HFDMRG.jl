@@ -107,8 +107,8 @@ end
     HFDMRG._spin_swap_uhf_lifecycle!(lifecycle, operator)
     @test lifecycle.root.alpha === beta_before
     @test lifecycle.root.beta === alpha_before
-    @test all(block.alpha.left_core === block.beta.left_core
-        for block in lifecycle.collection)
+    @test all(length(block.hartree_channel) ==
+        HFDMRG._maximum_channel_rank(operator) for block in lifecycle.collection)
     HFDMRG._spin_swap_uhf_lifecycle!(lifecycle, operator)
     @test lifecycle.root.alpha === alpha_before
     @test lifecycle.root.beta === beta_before

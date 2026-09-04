@@ -16,7 +16,7 @@ function _check_uhf_root(root::UHFMovingRoot)
 end
 
 mutable struct UHFFixedLifecycle
-    collection::Vector{UHFOuterBlock}
+    collection::Vector{UHFEntryBlock}
     root::UHFMovingRoot
     intervals::Vector{UnitRange{Int}}
     atom_intervals::Vector{UnitRange{Int}}
@@ -34,10 +34,10 @@ end
 
 mutable struct UHFLifecycleWorkspace
     prepared::FastUHFPreparedCenter
-    builder::UHFBlockBuildWorkspace
+    builder::_IndependentSpinEntryBuildWorkspace
     alpha_root::RHFRootWorkspace
     beta_root::RHFRootWorkspace
-    empty::UHFOuterBlock
+    empty::UHFEntryBlock
     maximum_alpha::Int
     maximum_beta::Int
 end
@@ -49,21 +49,19 @@ function UHFLifecycleWorkspace(one_body::BandedOneBody,
         "UHF state capacities must be nonnegative"))
     center_alpha = 2UNIT_CELL_WIDTH + 2maximum_alpha
     center_beta = 2UNIT_CELL_WIDTH + 2maximum_beta
-    channels = _maximum_channel_rank(operator)
     prepared = FastUHFPreparedCenter(center_alpha, center_beta, operator;
-        maximum_rhs=max(maximum_rhs, channels),
+        maximum_rhs=max(maximum_rhs, _maximum_channel_rank(operator)),
         maximum_alpha_side=maximum_alpha,
         maximum_beta_side=maximum_beta)
-    builder = UHFBlockBuildWorkspace(max(UNIT_CELL_WIDTH + maximum_alpha,
-            UNIT_CELL_WIDTH), max(UNIT_CELL_WIDTH + maximum_beta,
-            UNIT_CELL_WIDTH), channels)
+    builder = _IndependentSpinEntryBuildWorkspace(maximum_alpha,
+        maximum_beta, UNIT_CELL_WIDTH, operator)
     provenance = UInt(0)
     UHFLifecycleWorkspace(prepared, builder,
         RHFRootWorkspace(Matrix{Float64}(undef, center_alpha, center_alpha),
             Matrix{Float64}(undef, center_alpha, center_alpha)),
         RHFRootWorkspace(Matrix{Float64}(undef, center_beta, center_beta),
             Matrix{Float64}(undef, center_beta, center_beta)),
-        _empty_uhf_block(operator, provenance), center_alpha, center_beta)
+        _empty_uhf_entry(operator, provenance), center_alpha, center_beta)
 end
 
 function _uhf_neel_fragments(one_body::BandedOneBody, atom_intervals)
@@ -83,13 +81,6 @@ function _uhf_neel_fragments(one_body::BandedOneBody, atom_intervals)
         push!(isodd(index) ? alpha : beta, fragment)
     end
     alpha, beta
-end
-
-function _uhf_physical_block(one_body::BandedOneBody,
-        operator::UnitCellInteraction, cell::Int, rows::UnitRange{Int},
-        provenance::UInt; reflected::Bool=false)
-    seed_uhf_interval_block(one_body, operator, cell, rows; provenance,
-        reflected)
 end
 
 function initialize_uhf_neel_lifecycle(one_body::BandedOneBody,
@@ -112,14 +103,12 @@ function initialize_uhf_neel_lifecycle(one_body::BandedOneBody,
         control.alpha.maximum_active, control.alpha.cutoff,
         control.alpha.exact, control.beta.maximum_active,
         control.beta.cutoff, control.beta.exact, spin_swapped))
-    empty = _empty_uhf_block(operator, provenance)
-    collection = Vector{UHFOuterBlock}(undef, cells - 1)
+    empty = _empty_uhf_entry(operator, provenance)
+    collection = Vector{UHFEntryBlock}(undef, cells - 1)
     current = empty
     if forward
         collection[1] = empty
         for cell = cells:-1:3
-            physical = _uhf_physical_block(one_body, operator, cell,
-                intervals[cell], provenance)
             alpha_ids, alpha_parent, alpha_cross = _fragment_parent(
                 alpha_cursor, intervals[cell], current.alpha.rank, true)
             beta_ids, beta_parent, beta_cross = _fragment_parent(beta_cursor,
@@ -131,8 +120,9 @@ function initialize_uhf_neel_lifecycle(one_body::BandedOneBody,
             beta_link = _factor_state_link(beta_parent * transpose(beta_parent),
                 length(intervals[cell]), current.beta.rank, control.beta;
                 cross=beta_cross, maximum_occupied=length(beta_ids))
-            current = build_uhf_outer_block(physical, current, alpha_link,
-                beta_link, one_body, operator, workspace.builder)
+            current = _build_independent_spin_entry!(workspace.builder,
+                current, alpha_link, beta_link, intervals[cell], one_body,
+                operator, false, provenance)
             collection[cell-1] = current
             _advance_fragment_cursor!(alpha_cursor, alpha_ids, alpha_parent,
                 alpha_link)
@@ -142,8 +132,6 @@ function initialize_uhf_neel_lifecycle(one_body::BandedOneBody,
     else
         collection[cells-1] = empty
         for cell = 1:cells-2
-            physical = _uhf_physical_block(one_body, operator, cell,
-                intervals[cell], provenance; reflected=true)
             alpha_ids, alpha_parent, alpha_cross = _fragment_parent(
                 alpha_cursor, intervals[cell], current.alpha.rank, false)
             beta_ids, beta_parent, beta_cross = _fragment_parent(beta_cursor,
@@ -155,9 +143,9 @@ function initialize_uhf_neel_lifecycle(one_body::BandedOneBody,
             beta_link = _factor_state_link(beta_parent * transpose(beta_parent),
                 current.beta.rank, length(intervals[cell]), control.beta;
                 cross=beta_cross, maximum_occupied=length(beta_ids))
-            current = build_uhf_outer_block(current, physical, alpha_link,
-                beta_link, one_body, operator, workspace.builder)
-            current.alpha.reflected = true; current.beta.reflected = true
+            current = _build_independent_spin_entry!(workspace.builder,
+                current, alpha_link, beta_link, intervals[cell], one_body,
+                operator, true, provenance)
             collection[cell] = current
             _advance_fragment_cursor!(alpha_cursor, alpha_ids, alpha_parent,
                 alpha_link)
@@ -226,7 +214,7 @@ end
 
 function _uhf_build_candidate!(root::UHFMovingRoot,
         lifecycle::UHFFixedLifecycle,
-        left::UHFOuterBlock, right::UHFOuterBlock,
+        left::UHFEntryBlock, right::UHFEntryBlock,
         one_body::BandedOneBody, operator::UnitCellInteraction,
         control::UHFStateControl, workspace::UHFLifecycleWorkspace,
         alpha_workspace::RHFRootWorkspace=workspace.alpha_root,
@@ -250,10 +238,9 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
             cross=@view(beta_root.covariance[1:beta_local,
                 beta_local+1:beta_root.rank]),
             maximum_occupied=beta_root.occupied)
-        physical = _uhf_physical_block(one_body, operator, cell,
-            lifecycle.intervals[cell], lifecycle.provenance)
-        block = build_uhf_outer_block(left, physical, alpha_link, beta_link,
-            one_body, operator, workspace.builder)
+        block = _build_independent_spin_entry!(workspace.builder, left,
+            alpha_link, beta_link, lifecycle.intervals[cell], one_body,
+            operator, true, lifecycle.provenance)
         _close_root!(alpha_root, alpha_link, alpha_local, true,
             alpha_workspace; exact=control.alpha.exact)
         _close_root!(beta_root, beta_link, beta_local, true,
@@ -279,11 +266,9 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
             cross=transpose(@view(beta_root.covariance[1:beta_start-1,
                 beta_start:beta_root.rank])),
             maximum_occupied=beta_root.occupied)
-        physical = _uhf_physical_block(one_body, operator, cell+1,
-            lifecycle.intervals[cell+1], lifecycle.provenance; reflected=true)
-        block = build_uhf_outer_block(physical, right, alpha_link, beta_link,
-            one_body, operator, workspace.builder)
-        block.alpha.reflected = true; block.beta.reflected = true
+        block = _build_independent_spin_entry!(workspace.builder, right,
+            alpha_link, beta_link, lifecycle.intervals[cell+1], one_body,
+            operator, false, lifecycle.provenance)
         _close_root!(alpha_root, alpha_link, alpha_local, false,
             alpha_workspace; exact=control.alpha.exact)
         _close_root!(beta_root, beta_link, beta_local, false,
@@ -318,11 +303,9 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
             cross=transpose(@view(beta_root.covariance[1:beta_start-1,
                 beta_start:beta_root.rank])),
             maximum_occupied=beta_root.occupied)
-        physical = _uhf_physical_block(one_body, operator, cell+1,
-            lifecycle.intervals[cell+1], lifecycle.provenance; reflected=true)
-        block = build_uhf_outer_block(physical, right, alpha_link, beta_link,
-            one_body, operator, workspace.builder)
-        block.alpha.reflected = true; block.beta.reflected = true
+        block = _build_independent_spin_entry!(workspace.builder, right,
+            alpha_link, beta_link, lifecycle.intervals[cell+1], one_body,
+            operator, false, lifecycle.provenance)
         _close_root!(alpha_root, alpha_link, alpha_local, false,
             alpha_workspace; exact=control.alpha.exact)
         _close_root!(beta_root, beta_link, beta_local, false,
@@ -346,10 +329,9 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
             cross=@view(beta_root.covariance[1:beta_local,
                 beta_local+1:beta_root.rank]),
             maximum_occupied=beta_root.occupied)
-        physical = _uhf_physical_block(one_body, operator, cell,
-            lifecycle.intervals[cell], lifecycle.provenance)
-        block = build_uhf_outer_block(left, physical, alpha_link, beta_link,
-            one_body, operator, workspace.builder)
+        block = _build_independent_spin_entry!(workspace.builder, left,
+            alpha_link, beta_link, lifecycle.intervals[cell], one_body,
+            operator, true, lifecycle.provenance)
         _close_root!(alpha_root, alpha_link, alpha_local, true,
             alpha_workspace; exact=control.alpha.exact)
         _close_root!(beta_root, beta_link, beta_local, true,
@@ -371,7 +353,7 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
         next_center=next_center,
         turned=next_forward != forward, alpha_selection=alpha_link.selection,
         beta_selection=beta_link.selection,
-        published_bytes=uhf_block_storage_bytes(block))
+        published_bytes=uhf_entry_storage_bytes(block))
 end
 
 function _publish_uhf_advance_candidate!(lifecycle::UHFFixedLifecycle,
@@ -389,7 +371,7 @@ function _publish_uhf_advance_candidate!(lifecycle::UHFFixedLifecycle,
 end
 
 function _transactional_uhf_advance!(lifecycle::UHFFixedLifecycle,
-        left::UHFOuterBlock, right::UHFOuterBlock,
+        left::UHFEntryBlock, right::UHFEntryBlock,
         one_body::BandedOneBody, operator::UnitCellInteraction,
         control::UHFStateControl, workspace::UHFLifecycleWorkspace)
     alpha, beta = lifecycle.root.alpha, lifecycle.root.beta
@@ -564,16 +546,15 @@ function reconstruct_uhf_terminal!(alpha_output::AbstractMatrix{Float64},
     alpha_output, beta_output
 end
 
-function spin_swap_uhf_block(block::UHFOuterBlock,
+function spin_swap_uhf_block(block::UHFEntryBlock,
         operator::UnitCellInteraction)
     alpha = deepcopy(block.beta); beta = deepcopy(block.alpha)
-    left_core = alpha.left_core; right_core = alpha.right_core
-    beta.left_core = left_core; beta.right_core = right_core
     record = UHFCrossHartree(copy(block.cross_hartree.beta),
         copy(block.cross_hartree.alpha), copy(block.cross_hartree.weight),
         alpha.rank, beta.rank)
-    output = UHFOuterBlock(alpha, beta, record, block.provenance)
-    _validate_uhf_block(output, operator)
+    output = UHFEntryBlock(alpha, beta, record, copy(block.hartree_channel),
+        block.core_energy, block.provenance)
+    _validate_uhf_entry(output, operator)
     output
 end
 
@@ -581,7 +562,7 @@ function _spin_swap_uhf_lifecycle!(lifecycle::UHFFixedLifecycle,
         operator::UnitCellInteraction)
     _check_uhf_root(lifecycle.root)
     for block in lifecycle.collection
-        _validate_uhf_block(block, operator)
+        _validate_uhf_entry(block, operator)
     end
     for block in lifecycle.collection
         block.alpha, block.beta = block.beta, block.alpha
@@ -597,7 +578,7 @@ end
 
 function uhf_lifecycle_storage_bytes(lifecycle::UHFFixedLifecycle,
         operator::UnitCellInteraction, workspace::UHFLifecycleWorkspace)
-    (collection=sum(uhf_block_storage_bytes, lifecycle.collection),
+    (collection=sum(uhf_entry_storage_bytes, lifecycle.collection),
         root=sizeof(lifecycle.root.alpha.covariance) +
             sizeof(lifecycle.root.beta.covariance),
         static_operator=sizeof(operator.tail_transfer) +

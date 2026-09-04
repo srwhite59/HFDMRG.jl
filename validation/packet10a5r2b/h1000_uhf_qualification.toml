@@ -1,0 +1,90 @@
+accepted_represented_energy = -2282.2570732618196
+atoms = 1000
+blas_threads = 4
+center_workspace_bytes = 7076072
+collection_count = 1
+collection_summary_bytes = 34843736
+converged = true
+energy_tolerance = 1.0e-11
+fixture_seconds = 6.419448875
+fragment_ingestions = 1000
+fresh_frozen_ppp_nonlinear_seconds = 95.051920417
+full_sweep_changes = [-1.2219459433022166, -0.010470699213328771, -3.5055332773481496e-5, -3.155987542413641e-7, -6.794834916945547e-9, -1.4365468814503402e-9, -4.1382008930668235e-11, -2.091837814077735e-11, -2.7284841053187847e-12, -1.3642420526593924e-12]
+global_hf_minimum_claim = false
+half_sweeps = 12
+initialization = "atomic_neel"
+initialization_allocation_bytes = 81969584
+initialization_seconds = 1.600956125
+julia_version = "1.12.6"
+later_dense_row_reads = 0
+maximum_alpha_discarded_squared_weight = 4.1588954502458364e-13
+maximum_alpha_pair_rank = 15
+maximum_alpha_rank = 5
+maximum_beta_discarded_squared_weight = 3.0309088572266774e-13
+maximum_beta_pair_rank = 15
+maximum_beta_rank = 5
+maximum_raw_published_energy_increase = 2.2737367544323206e-12
+nonlinear_allocation_bytes = 3987260688
+nonlinear_seconds = 133.340498042
+nonlinear_workspace_summary_bytes = 30951760
+peak_rss_bytes = 1260371968
+performance_target_passed = false
+producer_audit_performed = false
+producer_residual_evaluated = false
+reason = "energy_converged"
+recipient_to_ppp_time_ratio = 1.4028175070742928
+represented_energy = -2282.2570732618124
+represented_energy_error = 7.275957614183426e-12
+root_count = 1
+root_summary_bytes = 74208
+schema = "hfdmrg-packet10a5r2b-h1000-uhf-v1"
+sites = 18003
+state_cutoff = 1.0e-12
+state_maxdim = 16
+
+[call_counts]
+center_preparations = 23990
+eigensolutions = 23978
+fock_constructions = 12001
+publications = 11989
+transactions = 11989
+true_energy_evaluations = 11989
+visited_centers = 11989
+
+[fixed_physical_reflected_replay]
+allocation_bytes = 394915952
+first_energy_change = 2.7284841053187847e-12
+first_visits = 999
+physical_or_reflected_first = "physical"
+second_energy_change = 4.547473508864641e-13
+second_visits = 999
+seconds = 14.749060667
+total_energy_change = 3.183231456205249e-12
+
+[lifecycle_storage_bytes]
+collection = 33411776
+reusable_workspace = 30358712
+root = 73984
+static_operator = 35472
+
+[spin_swapped_stationary_replay]
+allocation_bytes = 1374184224
+converged = true
+ending_energy = -2282.2570732618137
+energy_change = -1.3642420526593924e-12
+full_sweep_changes = [-2.2737367544323206e-12, -4.547473508864641e-13]
+half_sweeps = 4
+seconds = 46.081032042
+spin_swapped = true
+starting_energy = -2282.2570732618124
+
+[stationary_nonlinear_replay]
+allocation_bytes = 1374184224
+converged = true
+ending_energy = -2282.257073261817
+energy_change = -4.547473508864641e-12
+full_sweep_changes = [4.092726157978177e-12, -2.2737367544323206e-12]
+half_sweeps = 4
+seconds = 46.298692208
+spin_swapped = false
+starting_energy = -2282.2570732618124

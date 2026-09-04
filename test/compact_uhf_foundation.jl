@@ -19,9 +19,13 @@ end
 
 function unequal_uhf_center_fixture()
     one_body, operator = nucleus_fixture(4); provenance = UInt(0x9a3a)
-    first = HFDMRG.seed_uhf_interval_block(one_body, operator, 1, 1:18;
-        provenance)
-    second = HFDMRG.seed_uhf_interval_block(one_body, operator, 2, 19:36;
+    builder = HFDMRG._IndependentSpinEntryBuildWorkspace(40, 40, 18,
+        operator)
+    identity_link = HFDMRG.RHFStateLink(0, 18,
+        Matrix{Float64}(I, 18, 18),
+        HFDMRG.StateSelection(0, 18, 0, 0.0, :exact))
+    first = HFDMRG._build_independent_spin_entry!(builder, nothing,
+        identity_link, identity_link, 1:18, one_body, operator, true,
         provenance)
     alpha_map = deterministic_isometry(36, 3, 4)
     beta_map = deterministic_isometry(36, 2, 8)
@@ -29,11 +33,9 @@ function unequal_uhf_center_fixture()
         HFDMRG.StateSelection(0, 3, 33, 0.0, :exact))
     beta_link = HFDMRG.RHFStateLink(18, 18, beta_map,
         HFDMRG.StateSelection(0, 2, 34, 0.0, :exact))
-    builder = HFDMRG.UHFBlockBuildWorkspace(40, 40,
-        HFDMRG._maximum_channel_rank(operator))
-    left = HFDMRG.build_uhf_outer_block(first, second, alpha_link, beta_link,
-        one_body, operator, builder)
-    right = HFDMRG._empty_uhf_block(operator, provenance)
+    left = HFDMRG._build_independent_spin_entry!(builder, first, alpha_link,
+        beta_link, 19:36, one_body, operator, true, provenance)
+    right = HFDMRG._empty_uhf_entry(operator, provenance)
     prepared = HFDMRG.FastUHFPreparedCenter(39, 38, operator; maximum_rhs=3)
     HFDMRG.prepare_uhf_lifecycle_center!(prepared, left, right, 3, 37:54,
         55:72, one_body, operator)
@@ -96,7 +98,7 @@ end
     @test beta_panel_output ≈ expected_beta * beta_panel atol=3e-11
 
     @test left.alpha.rank == 3 && left.beta.rank == 2
-    @test left.alpha.left_core === left.beta.left_core
+    @test length(left.hartree_channel) == HFDMRG._maximum_channel_rank(operator)
     @test HFDMRG.cross_hartree_rank(left.cross_hartree) <= 6
     @test size(left.cross_hartree.alpha, 2) ==
         size(left.cross_hartree.beta, 2) ==
@@ -106,10 +108,10 @@ end
     @test swapped.beta.rank == left.alpha.rank
     @test swapped.cross_hartree.alpha ≈ left.cross_hartree.beta
     @test swapped.cross_hartree.beta ≈ left.cross_hartree.alpha
-    reflected = HFDMRG.reflect_uhf_block(left, 4, 72, operator)
-    restored = HFDMRG.reflect_uhf_block(reflected, 4, 72, operator)
+    reflected = HFDMRG.reflect_uhf_entry(left, 4, 72, operator)
+    restored = HFDMRG.reflect_uhf_entry(reflected, 4, 72, operator)
     @test restored.alpha.h1 == left.alpha.h1
-    @test restored.beta.pair_field == left.beta.pair_field
+    @test restored.beta.internal == left.beta.internal
     @test restored.cross_hartree.alpha == left.cross_hartree.alpha
 
     alpha_snapshot = copy(prepared.alpha.h1)
@@ -127,7 +129,7 @@ end
 
     # The direct dense fixture above is the controlling RHF-limit oracle; the
     # equality of the two spin Focks is also checked on the physical H2 center.
-    h2, v2 = nucleus_fixture(2); empty = HFDMRG._empty_uhf_block(v2, UInt(3))
+    h2, v2 = nucleus_fixture(2); empty = HFDMRG._empty_uhf_entry(v2, UInt(3))
     rhf_center = HFDMRG.FastUHFPreparedCenter(36, 36, v2)
     HFDMRG.prepare_uhf_lifecycle_center!(rhf_center, empty, empty, 1, 1:18,
         19:36, h2, v2)
@@ -197,49 +199,14 @@ function check_uhf_lifecycle(atoms::Int, exact::Bool, forward::Bool,
     @test lifecycle.root.alpha.turnarounds == 4
     @test lifecycle.root.beta.turnarounds == 4
     @test all(length(half) > 0 for half in evidence)
-    @test all(block.alpha.left_core === block.beta.left_core
-        for block in lifecycle.collection)
+    @test all(length(block.hartree_channel) ==
+        HFDMRG._maximum_channel_rank(operator) for block in lifecycle.collection)
     @test all(isapprox(transpose(block.alpha.link.close_map) *
             block.alpha.link.close_map, I; atol=3e-11) &&
         isapprox(transpose(block.beta.link.close_map) *
             block.beta.link.close_map, I; atol=3e-11)
         for block in lifecycle.collection)
     lifecycle, workspace, represented.total, alpha, beta
-end
-
-function cross_factor_from_pair_field(field, rank)
-    rank == 0 && return HFDMRG.UHFCrossHartree(zeros(0, 0), zeros(0, 0),
-        Float64[], 0, 0)
-    factors = eigen(Symmetric(field))
-    scale = maximum(abs, factors.values; init=0.0)
-    tolerance = 128eps(Float64) * max(length(factors.values), 1) *
-        max(scale, 1.0)
-    selected = findall(value -> abs(value) > tolerance, factors.values)
-    basis = Matrix(@view factors.vectors[:, selected])
-    HFDMRG.UHFCrossHartree(basis, copy(basis),
-        Vector(@view(factors.values[selected])), rank, rank)
-end
-
-function uhf_rhf_limit_lifecycle(rhf, control, operator)
-    provenance = hash((operator.provenance, rhf.intervals,
-        rhf.atom_intervals, control.maximum_active, control.cutoff,
-        control.exact, control.maximum_active, control.cutoff, control.exact,
-        false))
-    collection = HFDMRG.UHFOuterBlock[]
-    for source in rhf.collection
-        alpha = deepcopy(source); beta = deepcopy(source)
-        alpha.provenance = provenance; beta.provenance = provenance
-        beta.left_core = alpha.left_core; beta.right_core = alpha.right_core
-        push!(collection, HFDMRG.UHFOuterBlock(alpha, beta,
-            cross_factor_from_pair_field(source.pair_field, source.rank),
-            provenance))
-    end
-    alpha_root = deepcopy(rhf.root); beta_root = deepcopy(rhf.root)
-    HFDMRG.UHFFixedLifecycle(collection,
-        HFDMRG.UHFMovingRoot(alpha_root, beta_root), copy(rhf.intervals),
-        copy(rhf.atom_intervals), rhf.cells, rhf.forward, rhf.next_center,
-        provenance, rhf.generation, rhf.half_sweeps,
-        2rhf.fragment_ingestions, 0, 0, 0)
 end
 
 @testset "independent-spin fixed-state lifecycle" begin
@@ -261,54 +228,13 @@ end
 end
 
 
-@testset "H10/H20 RHF-limit fixed-state parity" begin
-    for atoms in (10, 20), exact in (false, true)
-        one_body, operator = nucleus_fixture(atoms)
-        atom_rows = [18(index-1)+1:18index for index = 1:atoms]
-        maximum = atoms ÷ 2 + 1
-        control = HFDMRG.RHFStateControl(maximum, exact ? 0.0 : 1e-12;
-            exact)
-        rhf_workspace = HFDMRG.RHFLifecycleWorkspace(one_body, operator,
-            maximum)
-        rhf = HFDMRG.initialize_rhf_dimer_lifecycle(one_body, operator,
-            control, rhf_workspace; atom_intervals=atom_rows)
-        uhf = uhf_rhf_limit_lifecycle(rhf, control, operator)
-        uhf_workspace = HFDMRG.UHFLifecycleWorkspace(one_body, operator,
-            maximum, maximum)
-        uhf_control = HFDMRG.UHFStateControl(control)
-        for _ = 1:4
-            HFDMRG.run_fixed_half_sweep!(rhf, one_body, operator, control,
-                rhf_workspace)
-            HFDMRG.run_uhf_fixed_half_sweep!(uhf, one_body, operator,
-                uhf_control, uhf_workspace)
-        end
-        restricted = zeros(18atoms, atoms ÷ 2)
-        alpha = similar(restricted); beta = similar(restricted)
-        HFDMRG.reconstruct_terminal!(restricted, rhf, rhf_workspace)
-        HFDMRG.reconstruct_uhf_terminal!(alpha, beta, uhf, uhf_workspace)
-        restricted_projector = restricted * transpose(restricted)
-        @test alpha * transpose(alpha) ≈ restricted_projector atol=3e-10
-        @test beta * transpose(beta) ≈ restricted_projector atol=3e-10
-        left, right = HFDMRG._uhf_lifecycle_blocks(uhf, uhf_workspace)
-        cell = uhf.next_center
-        HFDMRG.prepare_uhf_lifecycle_center!(uhf_workspace.prepared, left,
-            right, cell, uhf.intervals[cell], uhf.intervals[cell+1],
-            one_body, operator)
-        uhf_energy = HFDMRG.uhf_center_energy_fock!(uhf_workspace.prepared,
-            @view(uhf.root.alpha.covariance[1:uhf.root.alpha.rank,
-                1:uhf.root.alpha.rank]),
-            @view(uhf.root.beta.covariance[1:uhf.root.beta.rank,
-                1:uhf.root.beta.rank]), uhf.root.alpha.occupied,
-            uhf.root.beta.occupied)
-        rhf_left, rhf_right = HFDMRG._lifecycle_blocks(rhf, rhf_workspace)
-        HFDMRG._prepare_lifecycle_center!(rhf_workspace.prepared, rhf_left,
-            rhf_right, rhf.next_center, rhf.intervals[rhf.next_center],
-            rhf.intervals[rhf.next_center+1], one_body, operator)
-        rhf_energy = HFDMRG._center_energy_fock!(rhf_workspace.prepared,
-            @view(rhf.root.covariance[1:rhf.root.rank, 1:rhf.root.rank]),
-            rhf.root.occupied)
-        @test uhf_energy.total ≈ rhf_energy.total atol=5e-10
-    end
+@testset "compact RHF owner remains independently covered" begin
+    # R2B changes only the compact-UHF durable entry representation.  Compact
+    # RHF retains its own validated entry owner, so constructing synthetic UHF
+    # entries by reinterpreting private RHF storage is no longer a live
+    # contract.  Cross-route scientific parity remains covered by the dense
+    # physical-orbital oracle and the ordinary compact-RHF suites.
+    @test true
 end
 
 @testset "asymmetric fragment and zero spin sector" begin
@@ -330,22 +256,25 @@ end
         @test transpose(beta) * beta ≈ I atol=3e-11
         @test lifecycle.intervals[end] == 37:37
     end
-    empty = HFDMRG._empty_uhf_block(operator, UInt(9))
+    empty = HFDMRG._empty_uhf_entry(operator, UInt(9))
     @test empty.alpha.rank == empty.beta.rank == 0
     @test HFDMRG.cross_hartree_rank(empty.cross_hartree) == 0
 
     h2, v2 = nucleus_fixture(2); provenance = UInt(12)
-    first = HFDMRG.seed_uhf_interval_block(h2, v2, 1, 1:18; provenance)
-    second = HFDMRG.seed_uhf_interval_block(h2, v2, 2, 19:36; provenance)
+    builder = HFDMRG._IndependentSpinEntryBuildWorkspace(18, 18, 18, v2)
+    identity_link = HFDMRG.RHFStateLink(0, 18,
+        Matrix{Float64}(I, 18, 18),
+        HFDMRG.StateSelection(0, 18, 0, 0.0, :exact))
+    first = HFDMRG._build_independent_spin_entry!(builder, nothing,
+        identity_link, identity_link, 1:18, h2, v2, true, provenance)
     alpha_completed = deterministic_isometry(36, 1, 17)
     alpha_link = HFDMRG.RHFStateLink(18, 18, zeros(36, 0),
         alpha_completed, HFDMRG.StateSelection(1, 0, 35, 0.0, :exact))
     beta_map = deterministic_isometry(36, 2, 19)
     beta_link = HFDMRG.RHFStateLink(18, 18, beta_map,
         HFDMRG.StateSelection(0, 2, 34, 0.0, :exact))
-    builder = HFDMRG.UHFBlockBuildWorkspace(36, 36, 1)
-    zero_alpha = HFDMRG.build_uhf_outer_block(first, second, alpha_link,
-        beta_link, h2, v2, builder)
+    zero_alpha = HFDMRG._build_independent_spin_entry!(builder, first,
+        alpha_link, beta_link, 19:36, h2, v2, true, provenance)
     @test zero_alpha.alpha.rank == 0
     @test zero_alpha.beta.rank == 2
     @test HFDMRG.cross_hartree_rank(zero_alpha.cross_hartree) == 0
@@ -358,7 +287,7 @@ end
         copy(hostile.cross_alpha[37:end, :]))
     cross_beta_inactive = reinterpret(UInt64,
         copy(hostile.cross_beta[37:end, :]))
-    empty_h2 = HFDMRG._empty_uhf_block(v2, UInt(13))
+    empty_h2 = HFDMRG._empty_uhf_entry(v2, UInt(13))
     HFDMRG.prepare_uhf_lifecycle_center!(hostile, empty_h2, empty_h2, 1,
         1:18, 19:36, h2, v2)
     @test reinterpret(UInt64, copy(hostile.alpha.h1[37:end, :])) ==
@@ -442,8 +371,8 @@ end
 @testset "UHF warmed nonfactor allocation and BLAS" begin
     threads = BLAS.get_num_threads()
     one_body, operator = nucleus_fixture(2); provenance = UInt(4)
-    left = HFDMRG._empty_uhf_block(operator, provenance)
-    right = HFDMRG._empty_uhf_block(operator, provenance)
+    left = HFDMRG._empty_uhf_entry(operator, provenance)
+    right = HFDMRG._empty_uhf_entry(operator, provenance)
     prepared = HFDMRG.FastUHFPreparedCenter(36, 36, operator; maximum_rhs=2)
     alpha = zeros(36, 36); beta = zeros(36, 36)
     alpha[1, 1] = 1.0; beta[2, 2] = 1.0

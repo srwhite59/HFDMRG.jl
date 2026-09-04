@@ -366,7 +366,7 @@ function _fast_block_block_hartree!(J, left::RHFOuterBlock,
     nothing
 end
 
-function _fast_block_physical_exchange!(K, density, block::RHFOuterBlock,
+function _fast_block_physical_exchange!(K, density, block,
         block_offset::Int, physical_offset::Int, center_offset::Int,
         rows::UnitRange{Int}, exchange)
     @inbounds for physical in eachindex(rows), a = 1:block.rank
@@ -382,8 +382,8 @@ function _fast_block_physical_exchange!(K, density, block::RHFOuterBlock,
     nothing
 end
 
-function _fast_block_block_exchange!(K, density, left::RHFOuterBlock,
-        right::RHFOuterBlock, right_offset::Int, exchange)
+function _fast_block_block_exchange!(K, density, left, right,
+        right_offset::Int, exchange)
     @inbounds for b = 1:right.rank, a = 1:left.rank
         value = 0.0
         for d = 1:right.rank, c = 1:left.rank
