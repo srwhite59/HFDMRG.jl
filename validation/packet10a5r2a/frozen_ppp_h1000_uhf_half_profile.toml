@@ -1,0 +1,66 @@
+atoms = 1000
+blas_threads = 4
+collection_bytes = 20085100
+eigensolutions = 2000
+fock_builds = 1000
+frozen_ppp_commit = "0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c"
+full_steps = 1000
+geodesic_steps = 0
+half_sweep_allocation_bytes = 1605834480
+half_sweep_seconds = 6.414744
+initialization_seconds = 1.233620292
+julia_version = "1.12.6"
+no_variational_updates = 0
+peak_rss_bytes = 1423785984
+production_source_changed = false
+schema = "hfdmrg-packet10a5r2a-frozen-ppp-h1000-half-profile-v1"
+sites = 18003
+terminal_energy = -2280.9434417084403
+true_energy_trials = 3000
+visits = 1000
+workspace_bytes = 43626665
+
+[timing."UHF Fock"]
+call_count = 4000
+inclusive_seconds = 0.11303666999999988
+self_seconds = 0.11303666999999988
+
+[timing."independent-spin two-sided center"]
+call_count = 8000
+inclusive_seconds = 1.146515433000002
+self_seconds = 0.011265505000000299
+
+[timing."local eigensolution"]
+call_count = 2000
+inclusive_seconds = 0.22780595099999984
+self_seconds = 0.22780595099999984
+
+[timing."mixed-center H1 assembly"]
+call_count = 8000
+inclusive_seconds = 0.05027318000000038
+self_seconds = 0.05027318000000038
+
+[timing."periodic core complement"]
+call_count = 3996
+inclusive_seconds = 1.051477511
+self_seconds = 1.051477511
+
+[timing.preparation]
+call_count = 4000
+inclusive_seconds = 1.0222132579999987
+self_seconds = 1.0222132579999987
+
+[timing."state-block absorption"]
+call_count = 3996
+inclusive_seconds = 0.01127537299999994
+self_seconds = 0.01127537299999994
+
+[timing."state-block factorization"]
+call_count = 11988
+inclusive_seconds = 0.6949770100000041
+self_seconds = 0.6949770100000041
+
+[timing."stored nonlinear local update"]
+call_count = 1000
+inclusive_seconds = 5.955434207999998
+self_seconds = 3.069915310999999

@@ -1,0 +1,28 @@
+atoms = 1000
+blas_threads = 4
+collection_bytes = 22719872
+half_sweep_allocation_bytes = 6035817984
+half_sweep_seconds_with_sampling = 21.77583775
+initialization_seconds = 14.128935416
+julia_version = "1.12.6"
+peak_rss_bytes = 1496170496
+production_source_changed = false
+profile_path = "/tmp/hfdmrg_packet10a5r2a_recipient_profile.txt"
+profile_sha256 = "bdcb925bcf2f97e5615425a0d221e49647a3626fe477b9bebb769fbed73edf09"
+schema = "hfdmrg-packet10a5r2a-recipient-h1000-half-profile-v1"
+sites = 18003
+terminal_energy = -2281.0350922563384
+visits = 1000
+workspace_bytes = 54437184
+
+[phase_seconds]
+candidate_center_preparation = 2.1026180260000014
+candidate_true_energy = 0.2773586129999999
+factor_entry_build_and_root_move = 16.584861334999996
+incoming_center_preparation = 2.090850703
+incoming_fock_and_energy = 0.27365963999999976
+preflight_and_block_lookup = 0.13091163800000008
+proposal_copies_and_eigensolutions = 0.30844513899999976
+publication = 0.0018541730000000026
+terminal_invariant = 0.002827125
+trial_root_copy = 0.0018415849999999984

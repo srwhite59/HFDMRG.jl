@@ -1,0 +1,91 @@
+accepted_producer_energy = -425.61104061524975
+accepted_represented_energy = -2227.1283869230083
+atoms = 1000
+blas_threads = 4
+center_workspace_bytes = 3495160
+collection_count = 1
+collection_summary_bytes = 103615656
+converged = true
+energy_tolerance = 1.0e-11
+fixture_seconds = 6.355756208
+fragment_ingestions = 500
+frozen_ppp_nonlinear_seconds = 72.99095425
+full_sweep_changes = [-1.0726062706335142, -0.00817424992828819, -1.3826047052134527e-5, -3.9959559217095375e-8, -1.4097167877480388e-10, 2.2737367544323206e-12, 4.547473508864641e-13]
+global_hf_minimum_claim = false
+half_sweeps = 9
+initialization = "dimer"
+initialization_allocation_bytes = 55695424
+initialization_seconds = 1.966914208
+julia_version = "1.12.6"
+later_dense_row_reads = 0
+maximum_active_rank = 9
+maximum_discarded_squared_weight = 9.92761428619815e-13
+maximum_pair_rank = 45
+maximum_raw_published_energy_increase = 2.2737367544323206e-12
+nonlinear_allocation_bytes = 2471450464
+nonlinear_seconds = 88.900259333
+nonlinear_workspace_summary_bytes = 14275200
+peak_rss_bytes = 2023112704
+performance_target_passed = true
+producer_energy = -425.61104061526885
+producer_energy_error = -1.9099388737231493e-11
+producer_error_envelope = 6.95733755272552e-9
+producer_evaluation_allocation_bytes = 160
+producer_evaluation_seconds = 11.704978917
+producer_hamiltonian_stationarity_claim = false
+producer_projector_block_reads = 500500
+producer_residual_evaluated = false
+producer_state_hash_after = "75672d443a3d7c81be1e7f7804cf1ee2e5c847688879bbef6da21a4de0a02400"
+producer_state_hash_before = "75672d443a3d7c81be1e7f7804cf1ee2e5c847688879bbef6da21a4de0a02400"
+producer_state_mutated = false
+producer_workspace_bytes = 2590368
+producer_workspace_seconds = 5.5041e-5
+reason = "energy_converged"
+recipient_to_ppp_time_ratio = 1.2179626947814564
+represented_energy = -2227.128386923008
+represented_energy_error = 4.547473508864641e-13
+root_count = 1
+root_summary_bytes = 37096
+schema = "hfdmrg-packet10a5r2-h1000-v1"
+sites = 18003
+spin = "rhf"
+state_cutoff = 1.0e-12
+state_maxdim = 16
+
+[call_counts]
+center_preparations = 17993
+eigensolutions = 8992
+fock_constructions = 9001
+publications = 8992
+transactions = 8992
+true_energy_evaluations = 8992
+visited_centers = 8992
+
+[fixed_physical_reflected_replay]
+allocation_bytes = 428937088
+first_energy_change = -3.183231456205249e-12
+first_visits = 999
+physical_or_reflected_first = "reflected"
+second_energy_change = 3.637978807091713e-12
+second_visits = 999
+seconds = 15.312042375
+total_energy_change = 4.547473508864641e-13
+
+[lifecycle_storage_bytes]
+collection = 102935664
+reusable_workspace = 13978664
+root = 36992
+static_operator = 35472
+
+[spin_swapped_stationary_replay]
+performed = false
+
+[stationary_nonlinear_replay]
+allocation_bytes = 1237392528
+converged = true
+ending_energy = -2227.1283869230065
+energy_change = 1.3642420526593924e-12
+full_sweep_changes = [2.7284841053187847e-12, 4.547473508864641e-13]
+half_sweeps = 4
+seconds = 43.959180416
+starting_energy = -2227.128386923008

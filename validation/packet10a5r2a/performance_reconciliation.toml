@@ -1,0 +1,114 @@
+schema = "hfdmrg-packet10a5r2a-performance-reconciliation-v1"
+classification = "confirmed_algorithmic_entry_build_regression"
+public_transfer_ready = false
+production_source_changed = false
+recipient_h1000_rerun = false
+frozen_ppp_commit = "0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c"
+julia_version = "1.12.6"
+blas_threads = 4
+
+[full_trajectory]
+recipient_seconds = 289.4156635
+recipient_half_sweeps = 12
+recipient_visits = 11989
+recipient_seconds_per_half_sweep = 24.11797195833333
+recipient_seconds_per_visit = 0.024140100383685043
+recipient_represented_energy = -2282.2570732618165
+fresh_ppp_seconds = 95.051920417
+fresh_ppp_half_sweeps = 10
+fresh_ppp_visits = 10000
+fresh_ppp_seconds_per_half_sweep = 9.5051920417
+fresh_ppp_seconds_per_visit = 0.0095051920417
+fresh_ppp_represented_energy = -2282.257073261816
+recipient_to_fresh_ppp_ratio = 3.0448165826667304
+schedule_visit_ratio = 1.1989
+normalized_seconds_per_visit_ratio = 2.539675187811102
+normalized_seconds_per_half_sweep_ratio = 2.5373471522222752
+hard_stop_ratio = 1.5
+decision = "retain_performance_stop"
+
+[proposal_counts]
+recipient_focks_per_visit = 1.0
+recipient_eigensolutions_per_spin_per_visit = 1.0
+recipient_true_energies_per_visit = 1.0
+recipient_publications_per_visit = 1.0
+fresh_ppp_focks_per_visit = 1.0
+fresh_ppp_eigensolutions_per_spin_per_visit = 1.0
+fresh_ppp_true_energies_per_visit = 3.0
+fresh_ppp_publications_per_visit = 1.0
+proposal_count_explains_regression = false
+
+[single_half_probe]
+recipient_seconds_with_sampling = 21.77583775
+recipient_allocation_bytes = 6035817984
+recipient_visits = 1000
+fresh_ppp_seconds = 6.414744
+fresh_ppp_allocation_bytes = 1605834480
+fresh_ppp_visits = 1000
+time_ratio = 3.394654213792476
+allocation_ratio = 3.758680025353547
+
+[recipient_half_phase_seconds]
+preflight_and_block_lookup = 0.13091163800000008
+incoming_center_preparation = 2.090850703
+incoming_fock_and_energy = 0.27365963999999976
+proposal_copies_and_eigensolutions = 0.30844513899999976
+trial_root_copy = 0.0018415849999999984
+factor_entry_build_and_root_move = 16.584861334999996
+candidate_center_preparation = 2.1026180260000014
+candidate_true_energy = 0.2773586129999999
+publication = 0.0018541730000000026
+terminal_invariant = 0.002827125
+
+[fresh_ppp_half_phase_seconds]
+preparation = 1.0222132579999987
+uhf_fock = 0.11303666999999988
+local_eigensolution = 0.22780595099999984
+state_block_factorization = 0.6949770100000041
+periodic_core_complement = 1.051477511
+state_block_absorption = 0.01127537299999994
+stored_nonlinear_local_update_inclusive = 5.955434207999998
+stored_nonlinear_local_update_self = 3.069915310999999
+
+[rank_and_ownership_scaling]
+recipient_h100_maximum_alpha_rank = 5
+recipient_h100_maximum_beta_rank = 5
+recipient_h100_maximum_pair_rank = 15
+fresh_ppp_h1000_maximum_alpha_rank = 5
+fresh_ppp_h1000_maximum_beta_rank = 5
+fresh_ppp_h1000_maximum_pair_rank = 15
+recipient_h100_workspace_bytes = 50909088
+recipient_h1000_half_workspace_bytes = 54437184
+fresh_ppp_h100_workspace_bytes = 41844243
+fresh_ppp_h1000_workspace_bytes = 43630755
+chi_growth_explains_regression = false
+
+[root_cause]
+recipient_entry = "_uhf_build_candidate! -> _uhf_physical_block -> seed_uhf_interval_block + build_uhf_outer_block"
+recipient_dense_self_pair_work = "_fill_merged! + _spin_publication reconstruct and transform per-spin packed pair_field matrices"
+recipient_cross_work = "build_uhf_outer_block recompresses transformed cross-Hartree factors by SVD"
+ppp_entry = "_prepare_independent_move! -> _build_independent_spin_entry! -> _independent_interaction_projection!"
+ppp_ownership = "reusable _IndependentSpinEntryBuildWorkspace with separated exchange internal/connector and cross-Hartree capacities"
+dominant_recipient_phase_fraction = 0.7616176022894918
+smallest_correction_seam = "replace UHFOuterBlock/RHFOuterBlock entry publication inside _uhf_build_candidate! with the PPP reusable separated-record entry projection and exact-sized durable publication; retain the accepted center, facade, schedule, and transaction"
+
+[scope]
+recipient_full_h1000_solves = 0
+fresh_ppp_full_h1000_solves = 1
+recipient_single_half_h1000_probes = 1
+fresh_ppp_single_half_h1000_probes = 1
+h100_h200_h500_scaling_runs = 0
+rhf_runs = 0
+producer_audits = 0
+package_suites = 0
+correction_implemented = false
+
+[raw_evidence]
+fresh_ppp_log_path = "/tmp/hfdmrg_packet10a5r2a_ppp_h1000_uhf.log"
+fresh_ppp_log_sha256 = "1a04003005a66036532965ad49d79a75a758b1730c1cc59303daad2f45d1a065"
+recipient_half_log_path = "/tmp/hfdmrg_packet10a5r2a_recipient_half.log"
+recipient_half_log_sha256 = "8dcc0c2e30a6eb40dfb4ea061a00b1326a0e37dc07b538abc09edc9fdbe22b02"
+recipient_profile_path = "/tmp/hfdmrg_packet10a5r2a_recipient_profile.txt"
+recipient_profile_sha256 = "bdcb925bcf2f97e5615425a0d221e49647a3626fe477b9bebb769fbed73edf09"
+fresh_ppp_half_log_path = "/tmp/hfdmrg_packet10a5r2a_ppp_half.log"
+fresh_ppp_half_log_sha256 = "007ef3ea7bb5c667a8e9f4b81704966358f31725c9a8abf651000deb9c6357f0"
