@@ -10,6 +10,10 @@ mutable struct RHFNonlinearWorkspace
     proposal::Matrix{Float64}
     geodesic::Matrix{Float64}
     first_fock::Matrix{Float64}
+    transaction_calls::Int
+    eigensolution_calls::Int
+    trial_energy_calls::Int
+    publication_calls::Int
 end
 
 function RHFNonlinearWorkspace(one_body::BandedOneBody,
@@ -21,7 +25,7 @@ function RHFNonlinearWorkspace(one_body::BandedOneBody,
     baseline = RHFMovingRoot(matrix(), 0, 0, 0, 0, 0, 0)
     root_work = RHFRootWorkspace(matrix(), matrix())
     RHFNonlinearWorkspace(lifecycle, trial, baseline, root_work, matrix(),
-        matrix(), matrix(), matrix())
+        matrix(), matrix(), matrix(), 0, 0, 0, 0)
 end
 
 struct RHFCompactState
@@ -100,7 +104,7 @@ function _candidate_energy!(candidate, lifecycle::RHFFixedLifecycle,
     _prepare_lifecycle_center!(workspace.prepared, left, right,
         candidate.next_center, lifecycle.intervals[candidate.next_center],
         lifecycle.intervals[candidate.next_center + 1], one_body, operator)
-    _center_energy_fock!(workspace.prepared,
+    _center_true_energy!(workspace.prepared,
         @view(root.covariance[1:root.rank, 1:root.rank]), root.occupied).total
 end
 
@@ -116,6 +120,7 @@ function _trial_advance!(trial::RHFMovingRoot, source::RHFMovingRoot,
         workspace.trial_work)
     energy = _candidate_energy!(candidate, lifecycle, one_body, operator,
         workspace.lifecycle)
+    workspace.trial_energy_calls += 1
     candidate, energy
 end
 
@@ -188,6 +193,7 @@ function _monotone_center_transaction!(lifecycle::RHFFixedLifecycle,
         one_body::BandedOneBody, operator::UnitCellInteraction,
         control::RHFStateControl, workspace::RHFNonlinearWorkspace)
     _preflight_nonlinear(lifecycle, one_body, operator, control, workspace)
+    workspace.transaction_calls += 1
     localwork = workspace.lifecycle
     left, right = _lifecycle_blocks(lifecycle, localwork)
     cell, forward = lifecycle.next_center, lifecycle.forward
@@ -204,27 +210,30 @@ function _monotone_center_transaction!(lifecycle::RHFFixedLifecycle,
         @view(localwork.prepared.fock[1:rank, 1:rank]))
     _lowest_projector!(workspace.proposal, workspace.first_fock, rank,
         root.occupied)
+    workspace.eigensolution_calls += 1
     self_change = _projector_distance(workspace.incoming,
         workspace.proposal, rank)
 
-    baseline, baseline_energy = _trial_advance!(workspace.baseline_root, root,
-        lifecycle, left, right, @view(workspace.incoming[1:rank, 1:rank]),
-        one_body, operator, control, workspace)
     full, proposal_energy = _trial_advance!(workspace.trial_root, root,
         lifecycle, left, right, @view(workspace.proposal[1:rank, 1:rank]),
         one_body, operator, control, workspace)
-    envelope = _rhf_energy_envelope(baseline_energy, rank)
-    if proposal_energy <= baseline_energy + envelope
+    envelope = _rhf_energy_envelope(incoming_energy, rank)
+    if proposal_energy <= incoming_energy + envelope
         _publish_advance_candidate!(lifecycle, full)
+        workspace.publication_calls += 1
         lifecycle.center_visits += 1
         return (cell=cell, forward=forward, incoming_energy=incoming_energy,
-            baseline_energy=baseline_energy, proposal_energy=proposal_energy,
+            baseline_energy=incoming_energy, proposal_energy=proposal_energy,
             published_energy=proposal_energy, step=1.0, status=:accepted_full,
             self_change=self_change, discarded=full.selection.discarded_squared_weight,
             rank=full.block.rank, center_rank=rank,
             pair_rank=pair_dimension(full.block.rank))
     end
 
+    baseline, baseline_energy = _trial_advance!(workspace.baseline_root, root,
+        lifecycle, left, right, @view(workspace.incoming[1:rank, 1:rank]),
+        one_body, operator, control, workspace)
+    envelope = _rhf_energy_envelope(baseline_energy, rank)
     for step in _RHF_GEODESIC_STEPS
         _geodesic_projector!(workspace.geodesic, workspace.incoming,
             workspace.proposal, rank, root.occupied, step)
@@ -233,6 +242,7 @@ function _monotone_center_transaction!(lifecycle::RHFFixedLifecycle,
             operator, control, workspace)
         if energy <= baseline_energy + envelope
             _publish_advance_candidate!(lifecycle, trial)
+            workspace.publication_calls += 1
             lifecycle.center_visits += 1
             return (cell=cell, forward=forward,
                 incoming_energy=incoming_energy, baseline_energy=baseline_energy,
@@ -245,6 +255,7 @@ function _monotone_center_transaction!(lifecycle::RHFFixedLifecycle,
         end
     end
     _publish_advance_candidate!(lifecycle, baseline)
+    workspace.publication_calls += 1
     lifecycle.center_visits += 1
     (cell=cell, forward=forward, incoming_energy=incoming_energy,
         baseline_energy=baseline_energy, proposal_energy=proposal_energy,

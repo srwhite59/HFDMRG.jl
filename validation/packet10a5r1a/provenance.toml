@@ -1,0 +1,37 @@
+schema = "hfdmrg-packet10a5r1a-provenance-v1"
+recipient_base = "8ff0a88a21222d3ccd22be06245dcb40b06c79b4"
+donor_commit = "0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c"
+
+[[algorithmic_family]]
+name = "separated periodic RHF center"
+donor_file = "src/PeriodicInteractionCenters.jl"
+donor_functions = ["_panels!", "_core_fields!", "_prepare_common!", "prepare_rhf_periodic_interaction_center!", "_rhf_fock_core!", "rhf_periodic_interaction_center_fock!"]
+donor_line_range = "470:930"
+donor_range_sha256 = "95c6edae94ef508bfc9175aa3c44e548ec5706d5c4fd60303ed8aa5eba6db519"
+recipient_file = "src/fast_rhf_centers.jl"
+recipient_sha256 = "e025a552b858933106de90bb8613703598b7d2a5918f8f91f84db7f10772bb6d"
+transfer = "adapted"
+adaptations = ["flattened PPP module boundaries into HFDMRG", "mapped periodic state blocks to RHFOuterBlock records", "retained the simpler recipient two-group center schedule", "prepared reusable cross-exchange maps without a total-center packed-pair matrix", "adapted represented-energy and Fock result contracts", "made the unchanged baseline lazy on the accepted-full path, matching donor one-Fock transaction ordering"]
+
+[gate]
+status = "passed_bounded_rhf_replacement"
+recipient_h100_seconds = 5.845225791
+ppp_h100_seconds_low = 13.913151458
+ppp_h100_seconds_high = 15.136047125
+recipient_half_sweeps = 9
+ppp_half_sweeps = 8
+recipient_accepted_centers = 892
+ppp_visits = 800
+recipient_preparations_per_center = 2.0
+recipient_focks_per_center = 1.0
+recipient_eigensolutions_per_center = 1.0
+recipient_true_energies_per_center = 1.0
+recipient_publications_per_center = 1.0
+whole_trajectory_count_identity_required = false
+reason = "adapted donor center algorithms pass numerical, per-center efficiency, ownership, replay, and performance gates in the simpler recipient schedule"
+
+[validation_artifacts]
+h100_record = "validation/packet10a5r1a/h100_rhf.toml"
+h100_record_sha256 = "9b5f629123a99d338c78f9ebf139285157c8ff448283c092450b98be0b59cb68"
+h100_runner = "validation/packet10a5r1a/run_h100_rhf.jl"
+h100_runner_sha256 = "c651cf9afc5b512c8069853db0aa9ad770a740ebb6f6da7f878a2d84aa373dd2"

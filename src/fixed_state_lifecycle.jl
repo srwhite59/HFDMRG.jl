@@ -74,7 +74,7 @@ end
     length(lifecycle.intervals[cell]) + length(lifecycle.intervals[cell + 1])
 
 mutable struct RHFLifecycleWorkspace
-    prepared::PreparedRHFCenter
+    prepared::FastRHFPreparedCenter
     builder::BlockBuildWorkspace
     root::RHFRootWorkspace
     physical::RHFOuterBlock
@@ -89,7 +89,7 @@ function RHFLifecycleWorkspace(one_body::BandedOneBody,
         "state capacity must be nonnegative"))
     maximum_rank = 2UNIT_CELL_WIDTH + 2maximum_active
     channels = _maximum_channel_rank(operator)
-    prepared = PreparedRHFCenter(maximum_rank, channels;
+    prepared = FastRHFPreparedCenter(maximum_rank, operator;
         maximum_rhs=max(maximum_rhs, channels))
     builder = BlockBuildWorkspace(max(UNIT_CELL_WIDTH + maximum_active,
         UNIT_CELL_WIDTH), channels)
