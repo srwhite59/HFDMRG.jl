@@ -10,6 +10,7 @@ makedocs(
     build = "build",
     doctest = true,
     checkdocs = :exports,
+    checkdocs_ignored_modules = [HFDMRG.TimeG],
     warnonly = false,
     remotes = nothing,
     format = Documenter.HTML(

@@ -13,3 +13,10 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test", "Random", "Serialization"]
+
+[compat]
+julia = "1.12"
+LinearAlgebra = "1.12"
+Random = "1.11"
+Serialization = "1.11"
+Test = "1.11"

@@ -21,7 +21,17 @@ own results. Run them from the repository root in this order:
    julia --project=. examples/basic_uhf.jl
    ```
 
-3. **Sweep observation and restart** -- `examples/observer_checkpoint.jl`
+3. **Compact unit-cell UHF** -- `examples/compact_uhf.jl`
+
+   Uses the typed unit-cell facade and block-native atomic-Neel start. It
+   returns compact state and convergence diagnostics rather than global
+   occupied-coefficient matrices.
+
+   ```sh
+   julia --project=. examples/compact_uhf.jl
+   ```
+
+4. **Sweep observation and restart** -- `examples/observer_checkpoint.jl`
 
    Records complete-sweep history, writes an atomic local checkpoint, requests
    a clean stop, verifies readback, and performs a one-sweep restart. Julia
@@ -32,7 +42,7 @@ own results. Run them from the repository root in this order:
    julia --project=. examples/observer_checkpoint.jl
    ```
 
-4. **Target-space residual UHF** -- `examples/target_residual.jl`
+5. **Target-space residual UHF** -- `examples/target_residual.jl`
 
    Builds a signed residual in a two-orbital target space and exercises the
    target-residual backend without a global four-index tensor.
@@ -41,7 +51,7 @@ own results. Run them from the repository root in this order:
    julia --project=. examples/target_residual.jl
    ```
 
-5. **Cached sliced RHF** -- `examples/cached_sliced.jl`
+6. **Cached sliced RHF** -- `examples/cached_sliced.jl`
 
    Constructs a symmetric fixed-slice tensor, aligns the physical partition,
    and explicitly selects the cached production backend.
@@ -50,7 +60,7 @@ own results. Run them from the repository root in this order:
    julia --project=. examples/cached_sliced.jl
    ```
 
-6. **Compact producer-energy audit** -- `examples/compact_producer_energy.jl`
+7. **Compact producer-energy audit** -- `examples/compact_producer_energy.jl`
 
    Solves a small typed unit-cell RHF problem, then evaluates the same compact
    determinant with an explicit uncompressed producer Hamiltonian. It prints

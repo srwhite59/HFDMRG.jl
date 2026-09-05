@@ -1,0 +1,145 @@
+blas_threads = 4
+candidate_hfdmrg_commit = "f6b2a24d3bbc96713146c2228dd54666ab20a6bc"
+candidate_hfdmrg_source = "/private/tmp/hfdmrg-10a6b-candidate-f6b2a2/src/HFDMRG.jl"
+clean_hfdmrg_commit = "19e11fc2b12a142138dc3324f585d8aa92d46098"
+clean_hfdmrg_source = "/private/tmp/hfdmrg-10a6b-clean-19e11f/src/HFDMRG.jl"
+gausslet_commit = "891bf3e84653197b90b930d7d5787be17d8fb998"
+gausslet_root = "/private/tmp/hfdmrg-10a6b-gausslet-891bf3"
+generated_at = "2026-09-04T17:40:21.330"
+julia_threads = 4
+julia_version = "1.12.6"
+schema = "hfdmrg-packet10a6b-pinned-gausslet-v1"
+
+[basis]
+family = "G10"
+lmax = 2
+mapping_c = 0.15
+mapping_s = 0.15
+nuclear_charge = 2.0
+odd_even_kmax = 2
+quadrature_accuracy = "medium"
+quadrature_rmax = 12.0
+radial_count = 6
+reference_spacing = 1.0
+tails = 3
+xgaussian_alpha = 0.2
+
+[cases.rhf.candidate]
+energy = 13.02625601311897
+projector_dn_sha256 = "2097178e4c8e9085ed0c1f9166d002f69ff452dcddd3942e5e7766b4cbe7d51c"
+projector_up_sha256 = "2097178e4c8e9085ed0c1f9166d002f69ff452dcddd3942e5e7766b4cbe7d51c"
+psidn_sha256 = "18eaf7d26c6cc0d30b09dcdf64eb6412ea2457fb79af00968c60a789ed666dae"
+psidn_size = [840, 1]
+psiup_sha256 = "18eaf7d26c6cc0d30b09dcdf64eb6412ea2457fb79af00968c60a789ed666dae"
+psiup_size = [840, 1]
+
+    [cases.rhf.candidate.method]
+    file = "/private/tmp/hfdmrg-10a6b-candidate-f6b2a2/src/core.jl"
+    line = 1256
+    signature = "Tuple{Main.Packet10A6BCandidate.HFDMRG.var\"#solve_hfdmrg\", Any, Any, Any}"
+
+[cases.rhf.clean]
+energy = 13.02625601311897
+projector_dn_sha256 = "2097178e4c8e9085ed0c1f9166d002f69ff452dcddd3942e5e7766b4cbe7d51c"
+projector_up_sha256 = "2097178e4c8e9085ed0c1f9166d002f69ff452dcddd3942e5e7766b4cbe7d51c"
+psidn_sha256 = "18eaf7d26c6cc0d30b09dcdf64eb6412ea2457fb79af00968c60a789ed666dae"
+psidn_size = [840, 1]
+psiup_sha256 = "18eaf7d26c6cc0d30b09dcdf64eb6412ea2457fb79af00968c60a789ed666dae"
+psiup_size = [840, 1]
+
+    [cases.rhf.clean.method]
+    file = "/private/tmp/hfdmrg-10a6b-clean-19e11f/src/core.jl"
+    line = 1256
+    signature = "Tuple{Main.Packet10A6BClean.HFDMRG.var\"#solve_hfdmrg\", Any, Any, Any}"
+
+[cases.rhf.comparison]
+alpha_coefficients_equal = true
+alpha_projector_frobenius = 0.0
+alpha_projectors_equal = true
+beta_coefficients_equal = true
+beta_projector_frobenius = 0.0
+beta_projectors_equal = true
+energy_difference = 0.0
+
+[cases.rhf.controls]
+blocksize = 16
+cutoff = 0.0
+maxiter = 1
+nblockcenter = 1
+scf_cutoff = +inf
+verbose = false
+
+[cases.rhf.fixture]
+ndn = 1
+nup = 1
+solver_mode = "restricted_closed_shell"
+
+[cases.rhf.inputs]
+H_sha256 = "a0a66610e632b6eaeb2aaf4fd017191ce788228c9d98149fdbfa6e66f454ff1b"
+H_size = [840, 840]
+V_sha256 = "374609e29e37707fd2d1c48ff05bb61c17b0c8edb46f41c40aa176e35a6eb73e"
+V_size = [840, 840]
+psidn0_sha256 = "91f17a234571bbc4ec0a2c040cad5666a17295d1a5fc868e1420797af73d6c5c"
+psidn0_size = [840, 1]
+psiup0_sha256 = "91f17a234571bbc4ec0a2c040cad5666a17295d1a5fc868e1420797af73d6c5c"
+psiup0_size = [840, 1]
+
+[cases.uhf.candidate]
+energy = 39.38381696539275
+projector_dn_sha256 = "33583f1789a11331371b27caf0b6cbe765086d005498baa95599594a8812f763"
+projector_up_sha256 = "8b5962d490a8111f6a5db31da150559345e2f0cda1fc979251979ffb97f028e2"
+psidn_sha256 = "ff581ed3cb202415015acc84cb5e82234610edf899427e8067970d41df384142"
+psidn_size = [840, 1]
+psiup_sha256 = "d1a523da1a809592f4b5812896cf90e868bf97c0c56967de4909e75cb23efb24"
+psiup_size = [840, 2]
+
+    [cases.uhf.candidate.method]
+    file = "/private/tmp/hfdmrg-10a6b-candidate-f6b2a2/src/core.jl"
+    line = 1271
+    signature = "Tuple{Main.Packet10A6BCandidate.HFDMRG.var\"#solve_hfdmrg\", Vararg{Any, 4}}"
+
+[cases.uhf.clean]
+energy = 39.38381696539275
+projector_dn_sha256 = "33583f1789a11331371b27caf0b6cbe765086d005498baa95599594a8812f763"
+projector_up_sha256 = "8b5962d490a8111f6a5db31da150559345e2f0cda1fc979251979ffb97f028e2"
+psidn_sha256 = "ff581ed3cb202415015acc84cb5e82234610edf899427e8067970d41df384142"
+psidn_size = [840, 1]
+psiup_sha256 = "d1a523da1a809592f4b5812896cf90e868bf97c0c56967de4909e75cb23efb24"
+psiup_size = [840, 2]
+
+    [cases.uhf.clean.method]
+    file = "/private/tmp/hfdmrg-10a6b-clean-19e11f/src/core.jl"
+    line = 1271
+    signature = "Tuple{Main.Packet10A6BClean.HFDMRG.var\"#solve_hfdmrg\", Vararg{Any, 4}}"
+
+[cases.uhf.comparison]
+alpha_coefficients_equal = true
+alpha_projector_frobenius = 0.0
+alpha_projectors_equal = true
+beta_coefficients_equal = true
+beta_projector_frobenius = 0.0
+beta_projectors_equal = true
+energy_difference = 0.0
+
+[cases.uhf.controls]
+blocksize = 64
+cutoff = 0.0
+maxiter = 1
+nblockcenter = 1
+scf_cutoff = +inf
+verbose = false
+
+[cases.uhf.fixture]
+ndn = 1
+nup = 2
+solver_mode = "unrestricted"
+
+[cases.uhf.inputs]
+H_sha256 = "a0a66610e632b6eaeb2aaf4fd017191ce788228c9d98149fdbfa6e66f454ff1b"
+H_size = [840, 840]
+V_sha256 = "374609e29e37707fd2d1c48ff05bb61c17b0c8edb46f41c40aa176e35a6eb73e"
+V_size = [840, 840]
+psidn0_sha256 = "91f17a234571bbc4ec0a2c040cad5666a17295d1a5fc868e1420797af73d6c5c"
+psidn0_size = [840, 1]
+psiup0_sha256 = "80508a226e3449b284192a68f593e94bafa49d3ad0a07d8b5d34ae06e7b9736c"
+psiup0_size = [840, 2]

@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - name: Test isolated package with bounds checks
+        run: >-
+          julia --startup-file=no -e
+          'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path=pwd());
+          Pkg.test("HFDMRG"; julia_args=["--check-bounds=yes"])'
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - name: Instantiate documentation environment
+        run: julia --startup-file=no --project=docs -e 'using Pkg; Pkg.instantiate()'
+      - name: Build strict documentation
+        run: julia --startup-file=no --project=docs docs/make.jl

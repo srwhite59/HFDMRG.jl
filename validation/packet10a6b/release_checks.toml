@@ -1,0 +1,50 @@
+schema = "hfdmrg-packet10a6b-release-checks-v1"
+generated_at = "2026-09-04T17:48:13-07:00"
+base_commit = "698d18e98967b7e1de18a57c2f65397de2b111f8"
+audit_commit = "f6b2a24d3bbc96713146c2228dd54666ab20a6bc"
+julia_version = "1.12.6"
+package_uuid = "47a4102e-5223-4fb2-9ef6-33cce25f1843"
+package_version = "0.1.0"
+root_manifest_absent = true
+production_source_changed = false
+test_source_changed = false
+method_count = 19
+ambiguity_count = 0
+export_count = 8
+
+[compact_uhf_example]
+passed = true
+wall_seconds = 5.67
+represented_energy = -0.4578580427590566
+half_sweeps = 5
+maximum_alpha_rank = 1
+maximum_beta_rank = 1
+command = "julia --startup-file=no --project=. examples/compact_uhf.jl"
+
+[documentation]
+passed = true
+strict = true
+doctest = true
+checkdocs = "exports"
+wall_seconds = 9.69
+command = "julia --startup-file=no --project=docs docs/make.jl"
+
+[isolated_checked_bounds_suite]
+passed = true
+wall_seconds = 263.8
+temporary_project = true
+check_bounds = true
+command = "julia --startup-file=no -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path=pwd()); Pkg.test(\"HFDMRG\"; julia_args=[\"--check-bounds=yes\"])'"
+
+[gausslet_handshake]
+passed = true
+gausslet_commit = "891bf3e84653197b90b930d7d5787be17d8fb998"
+clean_hfdmrg_commit = "19e11fc2b12a142138dc3324f585d8aa92d46098"
+candidate_hfdmrg_commit = "f6b2a24d3bbc96713146c2228dd54666ab20a6bc"
+rhf_energy = 13.02625601311897
+uhf_energy = 39.38381696539275
+energy_differences_zero = true
+coefficient_hashes_equal = true
+projector_hashes_equal = true
+source_paths_verified = true
+record = "validation/packet10a6b/pinned_gausslet_handshake.toml"

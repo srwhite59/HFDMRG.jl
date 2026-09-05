@@ -189,6 +189,7 @@ The recommended sequence is:
 ```sh
 julia --project=. examples/quickstart.jl
 julia --project=. examples/basic_uhf.jl
+julia --project=. examples/compact_uhf.jl
 julia --project=. examples/observer_checkpoint.jl
 julia --project=. examples/target_residual.jl
 julia --project=. examples/cached_sliced.jl
@@ -196,8 +197,10 @@ julia --project=. examples/compact_producer_energy.jl
 ```
 
 The [Examples](docs/src/examples/index.md) page explains what each workflow
-demonstrates. The basic UHF example independently reconstructs the physical
-Focks, energy, residuals, gaps, and Aufbau projectors.
+demonstrates. The basic UHF example exercises the historical global-coefficient
+contract and independently reconstructs the physical Focks, energy, residuals,
+gaps, and Aufbau projectors. The compact UHF example exercises the typed
+unit-cell contract and retains only compact state and diagnostics.
 
 ## Tests and developer checks
 
@@ -213,5 +216,5 @@ rather than copying the sweep engine or adding a global four-index interaction.
 
 Private history acceleration is documented for maintainers but has no public
 calling syntax. Frozen-occupied operation is not presented as a recommended
-general optimization. License, citation metadata, CI, hosted documentation,
-and a public acceleration interface remain separate release decisions.
+general optimization. License, citation metadata, hosted documentation, and a
+public acceleration interface remain separate release decisions.

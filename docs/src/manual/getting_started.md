@@ -87,3 +87,13 @@ seed. After the solve, it reconstructs both full-physical-basis density and
 Fock matrices, independently evaluates the electronic energy, and checks
 separate Gram errors, occupied--virtual residuals, positive gaps, and Aufbau
 projectors. The example uses only the public `solve_hfdmrg` route.
+
+For the typed unit-cell UHF route and its compact result contract, run:
+
+```sh
+julia --project=. examples/compact_uhf.jl
+```
+
+That example uses the block-native atomic-Neel start and returns a
+`UHFDMRGResult`. It reports represented working energy, sweep diagnostics, and
+retained ranks without constructing global occupied-coefficient matrices.
