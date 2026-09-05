@@ -216,5 +216,9 @@ rather than copying the sweep engine or adding a global four-index interaction.
 
 Private history acceleration is documented for maintainers but has no public
 calling syntax. Frozen-occupied operation is not presented as a recommended
-general optimization. License, citation metadata, hosted documentation, and a
-public acceleration interface remain separate release decisions.
+general optimization. Citation metadata, hosted documentation, and a public
+acceleration interface remain separate release decisions.
+
+## License
+
+HFDMRG is distributed under the [MIT License](LICENSE).
