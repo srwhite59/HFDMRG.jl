@@ -73,6 +73,9 @@ With `spin=:rhf` it returns `HFDMRGResult`; with `spin=:uhf` it returns
 diagnostics, and a compact block/root state handle. Neither materializes
 global occupied coefficients. The compact represented energy and the
 historical dense/sliced electronic energy are distinct result contracts.
+Compact results also report the user-requested `energy_tolerance`, the
+`effective_energy_tolerance` used for extensive-energy stopping, and a
+`stopping_tolerance_reason` explaining any Float64 roundoff floor.
 
 ## Supported routes
 
@@ -170,11 +173,13 @@ Especially useful pages are:
 - [Getting started](docs/src/manual/getting_started.md)
 - [Solver controls](docs/src/manual/solver_controls.md)
 - [Numerical conventions](docs/src/manual/numerical_conventions.md)
+- [Paper-release reproducibility](docs/src/manual/reproducibility.md)
 - [Moving-window sweep](docs/src/algorithms/sweep.md)
 - [Local RHF and UHF](docs/src/algorithms/local_scf.md)
 - [Interaction backends](docs/src/algorithms/interaction_backends.md)
 - [Private/provisional history acceleration](docs/src/algorithms/history_acceleration.md)
 - [Backend architecture](docs/src/developer/backend_architecture.md)
+- [Final release checklist](docs/src/developer/release_checklist.md)
 
 Build the site locally; no deployment is configured:
 
@@ -194,6 +199,10 @@ julia --project=. examples/observer_checkpoint.jl
 julia --project=. examples/target_residual.jl
 julia --project=. examples/cached_sliced.jl
 julia --project=. examples/compact_producer_energy.jl
+julia --project=. examples/physical_hydrogen_chain.jl h10 rhf
+julia --project=. examples/physical_hydrogen_chain.jl h10 uhf
+julia --project=. examples/physical_hydrogen_chain.jl h20 rhf
+julia --project=. examples/physical_hydrogen_chain.jl h20 uhf
 ```
 
 The [Examples](docs/src/examples/index.md) page explains what each workflow
@@ -201,6 +210,14 @@ demonstrates. The basic UHF example exercises the historical global-coefficient
 contract and independently reconstructs the physical Focks, energy, residuals,
 gaps, and Aufbau projectors. The compact UHF example exercises the typed
 unit-cell contract and retains only compact state and diagnostics.
+
+The physical hydrogen-chain example loads the distributed, checksummed H10 or
+H20 primitive-array fixture. It uses no PPP or GaussletBases import at run
+time, supplies the recorded physical atom partition explicitly, and prints
+represented electronic energy separately from the producer total energy and
+nuclear offset. See the
+[paper-release reproducibility guide](docs/src/manual/reproducibility.md) for
+the pinned construction provenance and reference boundary.
 
 ## Tests and developer checks
 

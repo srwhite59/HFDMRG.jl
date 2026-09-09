@@ -2458,6 +2458,7 @@ try
     include("compact_stopping_policy.jl")
     include("compact_timing.jl")
     include("compact_producer_energy.jl")
+    include("physical_hydrogen_fixture.jl")
 finally
     empty!(LOAD_PATH)
     append!(LOAD_PATH, old_load_path)

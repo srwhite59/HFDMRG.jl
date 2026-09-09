@@ -1,0 +1,52 @@
+blas_threads = 4
+case = "h10"
+julia_version = "1.12.6"
+producer_allocation_bytes = 174538416
+producer_seconds = 0.588766667
+represented_minus_producer_ha = -2.55491463541091e-7
+represented_total_with_nuclear_ha = -4.2015409365127425
+schema = "hfdmrg-physical-hydrogen-result-v1"
+solver_allocation_bytes = 1028142416
+solver_seconds = 4.919863167
+spin = "rhf"
+
+[producer]
+constant_ha = 5.358245149911816
+error_envelope_ha = 6.952477358194951e-11
+exchange_alpha_ha = -1.2580531477375732
+exchange_beta_ha = -1.2580531477375732
+hartree_ha = 9.031543426047628
+one_body_alpha_ha = -8.037611480752789
+one_body_beta_ha = -8.037611480752789
+projector_block_reads = 55
+total_ha = -4.201540681021279
+
+[reference.rhf]
+ppp_energy_tolerance_ha = 2.0e-8
+ppp_packet6a4_total_ha = -4.2015409365128
+ppp_record_generation_commit = "507cd8493d87e8bd4f1b1f02c618e321860aae2f"
+ppp_record_path = "validation/packet6a4/h10_rhf.toml"
+
+[reference.uhf]
+ppp_energy_tolerance_ha = 2.0e-8
+ppp_packet6a4_total_ha = -4.751294669000901
+ppp_record_generation_commit = "507cd8493d87e8bd4f1b1f02c618e321860aae2f"
+ppp_record_path = "validation/packet6a4/h10_uhf.toml"
+
+[result]
+accepted_fallback = 0
+accepted_full = 82
+converged = true
+effective_energy_tolerance_ha = 1.0e-11
+half_sweeps = 9
+maximum_discarded_squared_weight = 9.596767824859853e-13
+maximum_pair_rank = 15
+maximum_state_rank = 5
+projector_envelope = 3.918603803456539e-6
+reason = "energy_converged"
+rejected_updates = 0
+replay_energy_change_ha = 1.7763568394002505e-15
+replay_projector_change = 3.9942243556407255e-11
+represented_energy_ha = -9.559786086424559
+requested_energy_tolerance_ha = 1.0e-11
+stopping_tolerance_reason = "requested_energy_tolerance"

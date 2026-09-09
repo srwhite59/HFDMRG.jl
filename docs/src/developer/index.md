@@ -16,6 +16,8 @@ convention, ownership rules, scaling expectations, and validation ladder.
 - `src/slice_layout.jl`: fixed/ragged physical slice layout.
 - `src/history_accelerated_*.jl`: private provisional history research paths.
 - `examples/`: executable user workflows.
+- `examples/data/hydrogen_chains_v1/`: bounded primitive-array H10/H20
+  physical inputs, schema, checksums, and construction provenance.
 - `test/`: compact numerical and end-to-end regression tests.
 - `scripts/`: engineering benchmarks and cached/projection verification.
 
@@ -29,7 +31,8 @@ julia --project=docs docs/make.jl
 
 The Makefile provides corresponding `make test`, `make verify`, and benchmark
 conveniences. Heavy fixtures and logs belong in machine-local scratch rather
-than the repository.
+than the repository. The approximately 1.4 MiB H10/H20 fixture is the explicit
+bounded exception: it is a public reproducibility input, not raw run output.
 
 ## Documentation policy
 
@@ -40,5 +43,10 @@ advertise a public call. Avoid undifferentiated API dumps; add a type or method
 to the reference only when users need it to select or observe a supported
 route.
 
-This local Documenter site is not deployed. License, citation metadata, CI, and
-a hosted documentation workflow remain separate release decisions.
+This local Documenter site is not deployed. CI configuration and the package
+license are checked in; citation metadata and hosted documentation remain
+separate release decisions.
+
+Use the [Final release checklist](@ref) to separate checks already established
+in the candidate worktree from checks that still require a clean public
+checkout or an explicitly authorized publication action.

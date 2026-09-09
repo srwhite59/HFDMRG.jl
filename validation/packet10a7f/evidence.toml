@@ -1,0 +1,65 @@
+base_commit = "68364562d78c80da31ae351417bddc88138f155f"
+blas_threads = 4
+clean_candidate_checkout = true
+clean_candidate_contains_git_metadata = false
+coefficient_checkpoints_used = false
+fixture_license_authorized = true
+julia_version = "1.12.6"
+pinned_source_entry_parity = true
+producer_input_parity = true
+public_execution_imported_gausslet_bases = false
+public_execution_imported_ppp = false
+reference_results_used_as_inputs = false
+schema = "hfdmrg-packet10a7f-physical-reproduction-v1"
+
+[cases.h10_rhf]
+conservative_interaction_energy_bound_ha = 0.00012329070097002375
+effective_energy_tolerance_ha = 1.0e-11
+half_sweeps = 9
+producer_representation_gap_ha = 2.55491463541091e-7
+producer_seconds = 0.588766667
+producer_total_ha = -4.201540681021279
+represented_energy_ha = -9.559786086424559
+represented_total_reference_delta_ha = 5.773159728050814e-14
+requested_energy_tolerance_ha = 1.0e-11
+solver_seconds = 4.919863167
+stopping_tolerance_reason = "requested_energy_tolerance"
+
+[cases.h10_uhf]
+conservative_interaction_energy_bound_ha = 0.00012329070097002375
+effective_energy_tolerance_ha = 1.0e-11
+half_sweeps = 12
+producer_representation_gap_ha = 9.899627073650663e-8
+producer_seconds = 0.5798105
+producer_total_ha = -4.751294570003836
+represented_energy_ha = -10.109539818911923
+represented_total_reference_delta_ha = 7.94031507211912e-13
+requested_energy_tolerance_ha = 1.0e-11
+solver_seconds = 5.397396292
+stopping_tolerance_reason = "requested_energy_tolerance"
+
+[cases.h20_rhf]
+conservative_interaction_energy_bound_ha = 0.0001738994521066628
+effective_energy_tolerance_ha = 1.0e-11
+half_sweeps = 8
+producer_representation_gap_ha = 1.1987685226699796e-6
+producer_seconds = 0.620604667
+producer_total_ha = -8.458419731998816
+represented_energy_ha = -22.890307914898905
+represented_total_reference_delta_ha = 6.52633502795652e-12
+requested_energy_tolerance_ha = 1.0e-11
+solver_seconds = 5.458462458
+stopping_tolerance_reason = "requested_energy_tolerance"
+
+[cases.h20_uhf]
+conservative_interaction_energy_bound_ha = 0.0001738994521066628
+effective_energy_tolerance_ha = 1.0e-11
+half_sweeps = 12
+producer_representation_gap_ha = 1.3721067748662108e-6
+producer_seconds = 0.5747595
+producer_total_ha = -9.55925914860868
+represented_energy_ha = -23.99114750484702
+represented_total_reference_delta_ha = 1.1688428003253648e-12
+requested_energy_tolerance_ha = 1.0e-11
+solver_seconds = 6.400876542
+stopping_tolerance_reason = "requested_energy_tolerance"

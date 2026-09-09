@@ -14,8 +14,13 @@ The recommended reading order is:
 1. [Getting started](@ref)
 2. [Solver controls](@ref)
 3. [Numerical conventions](@ref)
-4. [Interaction backends](@ref)
+4. [Paper-release reproducibility](@ref)
+5. [Interaction backends](@ref)
 
 For the internal algorithm, continue with [Moving-window sweep](@ref). For
 extension work, read [Backend architecture](@ref) before changing an
 interaction route.
+
+For a self-contained physical compact calculation, run the distributed H10 or
+H20 hydrogen-chain fixture described in [Paper-release reproducibility](@ref).
+It requires no PPP or GaussletBases checkout at execution time.

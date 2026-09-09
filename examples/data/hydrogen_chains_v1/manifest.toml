@@ -1,0 +1,179 @@
+binary_format = "contiguous-f64le-v1"
+license = "MIT; Copyright (c) 2026 Steven R. White"
+schema = "hfdmrg-physical-hydrogen-chain-v1"
+
+[cases.h10]
+atom_starts = [1, 21, 39, 57, 75, 93, 111, 129, 147, 165]
+atom_stops = [20, 38, 56, 74, 92, 110, 128, 146, 164, 183]
+atoms = 10
+byte_order = "little"
+data_bytes = 323976
+data_file = "h10.f64le"
+data_sha256 = "deec5f641062e4d96f0be6643d0f20187c9f2053c8ed5ab079bf788711999df1"
+element_type = "Float64"
+nuclear_repulsion_ha = 5.358245149911816
+occupied_per_spin = 5
+phase_at_first = 9
+sites = 183
+
+    [[cases.h10.arrays]]
+    dimensions = [22, 183]
+    element_count = 4026
+    name = "one_body_bands"
+    offset_bytes = 0
+    sha256 = "29120fc2f2447c7edc463322c8a9377e01ae18feed842b3f25ef02ab05fb9cca"
+    [[cases.h10.arrays]]
+    dimensions = [62]
+    element_count = 62
+    name = "tail_transfer"
+    offset_bytes = 32208
+    sha256 = "f82ce0774a2d11a34197c55cd037638fa22f5230c2998c5633e6a9a64a3538a2"
+    [[cases.h10.arrays]]
+    dimensions = [11, 11]
+    element_count = 121
+    name = "residual_transfer"
+    offset_bytes = 32704
+    sha256 = "a9ad56ca2319e99db2e05010c74ddc4ff9b060b56fce9c0186b1499151857dca"
+    [[cases.h10.arrays]]
+    dimensions = [18, 73]
+    element_count = 1314
+    name = "phase_source"
+    offset_bytes = 33672
+    sha256 = "5ebf5315784f34447e8a8dd832b4e8fa19fa18cbe01b554d12d901f73dfe9be6"
+    [[cases.h10.arrays]]
+    dimensions = [73, 18]
+    element_count = 1314
+    name = "phase_sink"
+    offset_bytes = 44184
+    sha256 = "3dd6ac27375e5918eeeaa3c4dd2dc7c5e8a0e4701d04e4f03e52115fbc8248ae"
+    [[cases.h10.arrays]]
+    dimensions = [171]
+    element_count = 171
+    name = "local_triangle"
+    offset_bytes = 54696
+    sha256 = "9d76bed072e89344f802c794c2ca3f38c96f67f5e6864e557a938f1b22448f6c"
+    [[cases.h10.arrays]]
+    dimensions = [183, 183]
+    element_count = 33489
+    name = "producer_vee"
+    offset_bytes = 56064
+    sha256 = "1c40656978dec4e6fe475c92e6b65e85b212bc168f670259c367a5494d36b9b4"
+
+    [cases.h10.compact_operator]
+    finite_chain_frobenius_error = 5.687538295156244e-5
+    maximum_entry_error = 2.241649108545886e-6
+    requested_accuracy = 1.0e-5
+    residual_rank = 11
+    tail_rank = 62
+    training_sites = 183
+
+    [cases.h10.references.rhf]
+    ppp_energy_tolerance_ha = 2.0e-8
+    ppp_packet6a4_total_ha = -4.2015409365128
+    ppp_record_generation_commit = "507cd8493d87e8bd4f1b1f02c618e321860aae2f"
+    ppp_record_path = "validation/packet6a4/h10_rhf.toml"
+
+    [cases.h10.references.uhf]
+    ppp_energy_tolerance_ha = 2.0e-8
+    ppp_packet6a4_total_ha = -4.751294669000901
+    ppp_record_generation_commit = "507cd8493d87e8bd4f1b1f02c618e321860aae2f"
+    ppp_record_path = "validation/packet6a4/h10_uhf.toml"
+
+[cases.h20]
+atom_starts = [1, 21, 39, 57, 75, 93, 111, 129, 147, 165, 183, 201, 219, 237, 255, 273, 291, 309, 327, 345]
+atom_stops = [20, 38, 56, 74, 92, 110, 128, 146, 164, 182, 200, 218, 236, 254, 272, 290, 308, 326, 344, 363]
+atoms = 20
+byte_order = "little"
+data_bytes = 1142960
+data_file = "h20.f64le"
+data_sha256 = "28db3add9400afe663b5f113b6e8cfc005b19f4bfded624a091eec9a14ffa957"
+element_type = "Float64"
+nuclear_repulsion_ha = 14.431886984131566
+occupied_per_spin = 10
+phase_at_first = 9
+sites = 363
+
+    [[cases.h20.arrays]]
+    dimensions = [22, 363]
+    element_count = 7986
+    name = "one_body_bands"
+    offset_bytes = 0
+    sha256 = "ec9a52d3609087c64830a1e39487a2b6fc8248c52f3a9520086cca147e4058a4"
+    [[cases.h20.arrays]]
+    dimensions = [64]
+    element_count = 64
+    name = "tail_transfer"
+    offset_bytes = 63888
+    sha256 = "20e435313a360e3e5f7d0d64effc9992b46df7307d2bb7f333db1fe2254d9516"
+    [[cases.h20.arrays]]
+    dimensions = [12, 12]
+    element_count = 144
+    name = "residual_transfer"
+    offset_bytes = 64400
+    sha256 = "319081c7d6071a9a9ecf110520b97646d2b37f8588e1f508ecd5813f75597547"
+    [[cases.h20.arrays]]
+    dimensions = [18, 76]
+    element_count = 1368
+    name = "phase_source"
+    offset_bytes = 65552
+    sha256 = "7aab8fd904afc59dbf0a17b76a966cd3c2b3572fd5aa8b24c9fac450f92c2d16"
+    [[cases.h20.arrays]]
+    dimensions = [76, 18]
+    element_count = 1368
+    name = "phase_sink"
+    offset_bytes = 76496
+    sha256 = "c0e702a08eb045bd34f5b649e34cb9659c28724c4b8fb1fbd8fbfc16410fef7a"
+    [[cases.h20.arrays]]
+    dimensions = [171]
+    element_count = 171
+    name = "local_triangle"
+    offset_bytes = 87440
+    sha256 = "9d76bed072e89344f802c794c2ca3f38c96f67f5e6864e557a938f1b22448f6c"
+    [[cases.h20.arrays]]
+    dimensions = [363, 363]
+    element_count = 131769
+    name = "producer_vee"
+    offset_bytes = 88808
+    sha256 = "252636fd61e2ad31fca3b2ae8b51c68a07db2583ca91da90ceefd284e7015967"
+
+    [cases.h20.compact_operator]
+    finite_chain_frobenius_error = 3.999483983772096e-5
+    maximum_entry_error = 8.280926290793467e-7
+    requested_accuracy = 1.0e-5
+    residual_rank = 12
+    tail_rank = 64
+    training_sites = 363
+
+    [cases.h20.references.rhf]
+    ppp_energy_tolerance_ha = 2.0e-8
+    ppp_packet6a4_total_ha = -8.458420930773865
+    ppp_record_generation_commit = "507cd8493d87e8bd4f1b1f02c618e321860aae2f"
+    ppp_record_path = "validation/packet6a4/h20_rhf.toml"
+
+    [cases.h20.references.uhf]
+    ppp_energy_tolerance_ha = 2.0e-8
+    ppp_packet6a4_total_ha = -9.559260520716624
+    ppp_record_generation_commit = "507cd8493d87e8bd4f1b1f02c618e321860aae2f"
+    ppp_record_path = "validation/packet6a4/h20_uhf.toml"
+
+[provenance]
+basis_fingerprint = "73cc87798a9c78e7cc0f41ec56fc078bf8ccb8500fa6acb9655da8941bc788c7"
+energy_unit = "hartree"
+gausslet_commit = "c680bbbcce5e7ff9ef6405c60fec0d3c2fabb2f0"
+generated_data_terms = "HFDMRG MIT distribution"
+interaction_tolerance = 1.0e-5
+length_unit = "bohr"
+one_body_tolerance = 1.0e-8
+ppp_oracle_commit = "0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c"
+
+    [provenance.geometry]
+    alignment = "atom_centered"
+    basis = "H/STO-6G"
+    boundary = "open"
+    left_padding_bohr = 2.0
+    phase_bohr = 0.0
+    right_padding_bohr = 2.0
+    separation_bohr = 3.6
+    sites_per_atom = 18
+    spacing_bohr = 0.2
+    transverse_mode = "periodic_template"

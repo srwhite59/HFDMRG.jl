@@ -71,8 +71,24 @@ own results. Run them from the repository root in this order:
    julia --project=. examples/compact_producer_energy.jl
    ```
 
+8. **Physical compact hydrogen chains** -- `examples/physical_hydrogen_chain.jl`
+
+   Loads the distributed, checksummed H10 or H20 primitive-array fixture and
+   runs compact RHF or UHF without PPP, GaussletBases, or a coefficient
+   checkpoint at runtime. The output keeps represented electronic energy,
+   nuclear offset, and producer total energy distinct.
+
+   ```sh
+   julia --project=. examples/physical_hydrogen_chain.jl h10 rhf
+   julia --project=. examples/physical_hydrogen_chain.jl h10 uhf
+   julia --project=. examples/physical_hydrogen_chain.jl h20 rhf
+   julia --project=. examples/physical_hydrogen_chain.jl h20 uhf
+   ```
+
 ## Scope
 
 These examples demonstrate package mechanics rather than benchmark claims.
-They use small self-contained fixtures and omit private research controls,
-heavyweight consumer artifacts, and production datasets.
+The H10/H20 physical fixture is a bounded distributable research input with
+explicit provenance; the other examples use small self-contained fixtures.
+Paper-scale H100/H1000 inputs, private checkpoints, and raw benchmark logs are
+not distributed.

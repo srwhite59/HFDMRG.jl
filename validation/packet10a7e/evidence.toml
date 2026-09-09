@@ -1,0 +1,75 @@
+schema = "hfdmrg-packet10a7e-public-physical-input-audit-v1"
+audit_date = "2026-09-09"
+recipient_commit = "68364562d78c80da31ae351417bddc88138f155f"
+recipient_branch = "packet10a7a-recovered-c5c21cf"
+source_free = true
+numerical_commands_run = false
+production_or_test_files_changed = false
+recommended_route = "versioned primitive-array H10/H20 fixture"
+public_construction_currently_self_contained = false
+owner_data_distribution_authorization_required = true
+
+[producer]
+gausslet_commit = "c680bbbcce5e7ff9ef6405c60fec0d3c2fabb2f0"
+gausslet_license = "MIT; Copyright (c) 2026 Steven R. White"
+ppp_oracle_commit = "0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c"
+basis_fingerprint = "73cc87798a9c78e7cc0f41ec56fc078bf8ccb8500fa6acb9655da8941bc788c7"
+separation_bohr = 3.6
+sites_per_atom = 18
+spacing_bohr = 0.2
+left_padding_bohr = 2.0
+right_padding_bohr = 2.0
+one_body_tolerance = 1.0e-8
+interaction_tolerance = 1.0e-5
+boundary = "open"
+transverse_mode = "periodic_template"
+
+[h10]
+atoms = 10
+sites = 183
+occupied_per_spin = 5
+tail_rank = 62
+residual_rank = 11
+maximum_scalar_rank = 82
+nuclear_repulsion_ha = 5.358245149911816
+ppp_total_rhf_ha = -4.2015409365128
+ppp_total_uhf_ha = -4.751294669000901
+
+[h20]
+atoms = 20
+sites = 363
+occupied_per_spin = 10
+tail_rank = 64
+residual_rank = 12
+maximum_scalar_rank = 85
+nuclear_repulsion_ha = 14.431886984131566
+ppp_total_rhf_ha = -8.458420930773865
+ppp_total_uhf_ha = -9.559260520716624
+recipient_uhf_represented_ha = -23.991147504847028
+
+[source_blobs.recipient]
+one_body = "d517fbf391689c7d9747990ff96820378c3933e2"
+unit_cell_interaction = "41ba5e8f39ff8e7dad4ff822cb17032ba6493f94"
+nonlinear_rhf = "2bc111e2fb076a42cca3774240011e63010bc76a"
+nonlinear_uhf = "e6a5b3025839fccf8e9a08483290faf8925309d3"
+producer_energy = "28c5b70e2e81213a5086d4b3b5a653b5d2b046b8"
+
+[source_blobs.ppp]
+project = "0933f812f58b9ac100880c9b12211ab4556dc3b0"
+sliced_hydrogen_adapter = "bfd7977df6aea718b01854efe38146a698198f34"
+physical_fixture_runner = "e379bc5d96d55d4b2465bf673cee462adac4f28a"
+block_native_runner = "00a3b74ee3eef2248ee42042dc49da6151e06e0e"
+h10_rhf_record = "2c6eac28b6e92674646c4d809ef8ebffceed374e"
+h10_uhf_record = "351212783855f25368da4915efc67bbaecaf0213"
+h20_rhf_record = "70cf9f7373ae3a9f05d12bc2dc6aa99e7b499a36"
+h20_uhf_record = "89f811af36393d2177131945b35b3ce9a8b961a0"
+
+[source_blobs.gausslet]
+sliced_hydrogen_chain = "2fdb13549ee3f0d3edf758e32fe629f8af35b383"
+license = "f97712aa5eab9502f17bc520b0af4f19efd98621"
+
+[preservation]
+packet10a6d_files_modified = false
+external_repositories_modified = false
+stale_primary_modified = false
+main_modified = false

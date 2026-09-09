@@ -1,0 +1,57 @@
+blas_threads = 4
+case = "h10"
+julia_version = "1.12.6"
+producer_allocation_bytes = 174937376
+producer_seconds = 0.5798105
+represented_minus_producer_ha = -9.899627073650663e-8
+represented_total_with_nuclear_ha = -4.7512946690001066
+schema = "hfdmrg-physical-hydrogen-result-v1"
+solver_allocation_bytes = 1061014944
+solver_seconds = 5.397396292
+spin = "uhf"
+
+[producer]
+constant_ha = 5.358245149911816
+error_envelope_ha = 6.908929787833237e-11
+exchange_alpha_ha = -1.791016554710169
+exchange_beta_ha = -1.7910165532339994
+hartree_ha = 9.107256461077544
+one_body_alpha_ha = -7.817381523100345
+one_body_beta_ha = -7.817381549948682
+projector_block_reads = 110
+total_ha = -4.751294570003836
+
+[reference.rhf]
+ppp_energy_tolerance_ha = 2.0e-8
+ppp_packet6a4_total_ha = -4.2015409365128
+ppp_record_generation_commit = "507cd8493d87e8bd4f1b1f02c618e321860aae2f"
+ppp_record_path = "validation/packet6a4/h10_rhf.toml"
+
+[reference.uhf]
+ppp_energy_tolerance_ha = 2.0e-8
+ppp_packet6a4_total_ha = -4.751294669000901
+ppp_record_generation_commit = "507cd8493d87e8bd4f1b1f02c618e321860aae2f"
+ppp_record_path = "validation/packet6a4/h10_uhf.toml"
+
+[result]
+accepted_fallback = 0
+accepted_full = 109
+alpha_projector_envelope = 2.587220106524388e-6
+beta_projector_envelope = 2.1949503719655907e-6
+converged = true
+effective_energy_tolerance_ha = 1.0e-11
+half_sweeps = 12
+maximum_alpha_discarded_squared_weight = 4.18332035678759e-13
+maximum_alpha_pair_rank = 15
+maximum_alpha_rank = 5
+maximum_beta_discarded_squared_weight = 3.0109248427834245e-13
+maximum_beta_pair_rank = 15
+maximum_beta_rank = 5
+reason = "energy_converged"
+rejected_updates = 0
+replay_alpha_projector_change = 1.6395746218906336e-10
+replay_beta_projector_change = 3.2801417496481884e-11
+replay_energy_change_ha = 7.105427357601002e-15
+represented_energy_ha = -10.109539818911923
+requested_energy_tolerance_ha = 1.0e-11
+stopping_tolerance_reason = "requested_energy_tolerance"

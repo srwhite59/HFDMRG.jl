@@ -25,6 +25,7 @@ makedocs(
             "Getting started" => "manual/getting_started.md",
             "Solver controls" => "manual/solver_controls.md",
             "Numerical conventions" => "manual/numerical_conventions.md",
+            "Reproducibility" => "manual/reproducibility.md",
         ],
         "Algorithms" => [
             "Overview" => "algorithms/index.md",
@@ -42,6 +43,7 @@ makedocs(
         "Developer Notes" => [
             "Overview" => "developer/index.md",
             "Backend architecture" => "developer/backend_architecture.md",
+            "Final release checklist" => "developer/release_checklist.md",
         ],
     ],
 )
