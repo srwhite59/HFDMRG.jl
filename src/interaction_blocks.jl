@@ -61,6 +61,9 @@ mutable struct BlockBuildWorkspace
     transfer_scratch::Matrix{Float64}
     left_core::Vector{Float64}
     right_core::Vector{Float64}
+    channel_transfer_calls::Int
+    residual_transfer_steps::Int
+    maximum_transfer_power::Int
 end
 
 function BlockBuildWorkspace(maximum_rank::Int, channel_rank::Int)
@@ -73,7 +76,17 @@ function BlockBuildWorkspace(maximum_rank::Int, channel_rank::Int)
         zeros(pairs, pairs), zeros(pairs, pairs),
         zeros(maximum_rank, maximum_rank), zeros(channel_rank, channel_rank),
         zeros(channel_rank, channel_rank), zeros(channel_rank),
-        zeros(channel_rank))
+        zeros(channel_rank), 0, 0, 0)
+end
+
+@inline function _record_channel_transfer!(workspace::BlockBuildWorkspace,
+        operator::UnitCellInteraction, power::Int)
+    workspace.channel_transfer_calls += 1
+    size(operator.residual_transfer, 1) > 0 &&
+        (workspace.residual_transfer_steps += power)
+    workspace.maximum_transfer_power = max(workspace.maximum_transfer_power,
+        power)
+    nothing
 end
 
 function _channel_transfer!(output, scratch, operator::UnitCellInteraction,
@@ -250,7 +263,16 @@ end
 
 function _fill_merged!(workspace::BlockBuildWorkspace, left::RHFOuterBlock,
         right::RHFOuterBlock, one_body::BandedOneBody,
-        operator::UnitCellInteraction)
+        operator::UnitCellInteraction, required_face::Symbol=:both)
+    # Algorithmic donor: PPP 0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c,
+    # PeriodicInteractionStateBlocks.jl `_absorb!` and
+    # PeriodicInteractionCenters.jl `_transfer_vector!`. PPP's side-specific
+    # state owner advances its sole inward channel by one absorbed cell.
+    # HFDMRG adapts that ownership to its bidirectional block record: compact
+    # lifecycle publication requests one face, while :both remains the dense
+    # block oracle used to verify the same arithmetic.
+    required_face in (:left, :right, :both) || throw(ArgumentError(
+        "required interaction face must be :left, :right, or :both"))
     if !isempty(left.cells) && !isempty(right.cells)
         last(left.cells) + 1 == first(right.cells) || throw(ArgumentError(
             "blocks must be physically adjacent"))
@@ -280,25 +302,37 @@ function _fill_merged!(workspace::BlockBuildWorkspace, left::RHFOuterBlock,
     fill!(@view(workspace.pair_field[1:pairs, 1:pairs]), 0.0)
     fill!(@view(workspace.feature_left[1:pairs, :]), 0.0)
     fill!(@view(workspace.feature_right[1:pairs, :]), 0.0)
+    if required_face !== :right
+        for j = 1:rank_left, i = 1:j
+            destination = pair_index(i, j)
+            source = pair_index(i, j)
+            @inbounds for channel = 1:size(left.left_feature, 2)
+                workspace.feature_left[destination, channel] =
+                    left.left_feature[source, channel]
+            end
+        end
+    end
     for j = 1:rank_left, i = 1:j
         destination = pair_index(i, j)
         source = pair_index(i, j)
-        @inbounds for channel = 1:size(left.left_feature, 2)
-            workspace.feature_left[destination, channel] =
-                left.left_feature[source, channel]
-        end
         for l = 1:rank_left, k = 1:l
             workspace.pair_field[destination, pair_index(k, l)] =
                 left.pair_field[source, pair_index(k, l)]
         end
     end
+    if required_face !== :left
+        for j = 1:rank_right, i = 1:j
+            destination = pair_index(rank_left + i, rank_left + j)
+            source = pair_index(i, j)
+            @inbounds for channel = 1:size(right.right_feature, 2)
+                workspace.feature_right[destination, channel] =
+                    right.right_feature[source, channel]
+            end
+        end
+    end
     for j = 1:rank_right, i = 1:j
         destination = pair_index(rank_left + i, rank_left + j)
         source = pair_index(i, j)
-        @inbounds for channel = 1:size(right.right_feature, 2)
-            workspace.feature_right[destination, channel] =
-                right.right_feature[source, channel]
-        end
         for l = 1:rank_right, k = 1:l
             workspace.pair_field[destination,
                 pair_index(rank_left + k, rank_left + l)] =
@@ -309,8 +343,10 @@ function _fill_merged!(workspace::BlockBuildWorkspace, left::RHFOuterBlock,
     fill!(@view(workspace.left_core[1:channels]), 0.0)
     fill!(@view(workspace.right_core[1:channels]), 0.0)
     @inbounds for channel = 1:channels
-        workspace.left_core[channel] = left.left_core[channel]
-        workspace.right_core[channel] = right.right_core[channel]
+        required_face !== :right &&
+            (workspace.left_core[channel] = left.left_core[channel])
+        required_face !== :left &&
+            (workspace.right_core[channel] = right.right_core[channel])
     end
     constant = left.constant_energy + right.constant_energy
     @inbounds for channel = 1:channels
@@ -342,50 +378,56 @@ function _fill_merged!(workspace::BlockBuildWorkspace, left::RHFOuterBlock,
         workspace.h1[i, j] += 2.0value / scale
         i != j && (workspace.h1[j, i] += 2.0value / scale)
     end
-    transfer_right = _channel_transfer!(workspace.transfer,
-        workspace.transfer_scratch, operator,
-        length(right.cells))
-    @inbounds for pair = 1:pair_dimension(rank_left), outgoing = 1:channels
-        value = 0.0
-        for incoming = 1:channels
-            value = muladd(left.right_feature[pair, incoming],
-                transfer_right[incoming, outgoing], value)
-        end
-        workspace.feature_right[pair, outgoing] = value
-    end
-    @inbounds for outgoing = 1:channels
-        value = right.right_core[outgoing]
-        for incoming = 1:channels
-            value = muladd(left.right_core[incoming],
-                transfer_right[incoming, outgoing], value)
-        end
-        workspace.right_core[outgoing] = value
-    end
-    transfer_left = _channel_transfer!(workspace.transfer,
-        workspace.transfer_scratch, operator,
-        length(left.cells))
-    # The destination rows are noncontiguous in the enlarged packed ordering,
-    # so propagate each exact row without constructing a gathered panel.
-    source = 0
-    @inbounds for j = 1:rank_right, i = 1:j
-        source += 1
-        destination = pair_index(rank_left + i, rank_left + j)
-        for channel = 1:channels
+    if required_face !== :left
+        power = length(right.cells)
+        transfer_right = _channel_transfer!(workspace.transfer,
+            workspace.transfer_scratch, operator, power)
+        _record_channel_transfer!(workspace, operator, power)
+        @inbounds for pair = 1:pair_dimension(rank_left), outgoing = 1:channels
             value = 0.0
-            for old_channel = 1:channels
-                value = muladd(right.left_feature[source, old_channel],
-                    transfer_left[channel, old_channel], value)
+            for incoming = 1:channels
+                value = muladd(left.right_feature[pair, incoming],
+                    transfer_right[incoming, outgoing], value)
             end
-            workspace.feature_left[destination, channel] = value
+            workspace.feature_right[pair, outgoing] = value
+        end
+        @inbounds for outgoing = 1:channels
+            value = right.right_core[outgoing]
+            for incoming = 1:channels
+                value = muladd(left.right_core[incoming],
+                    transfer_right[incoming, outgoing], value)
+            end
+            workspace.right_core[outgoing] = value
         end
     end
-    @inbounds for channel = 1:channels
-        value = left.left_core[channel]
-        for old_channel = 1:channels
-            value = muladd(transfer_left[channel, old_channel],
-                right.left_core[old_channel], value)
+    if required_face !== :right
+        power = length(left.cells)
+        transfer_left = _channel_transfer!(workspace.transfer,
+            workspace.transfer_scratch, operator, power)
+        _record_channel_transfer!(workspace, operator, power)
+        # The destination rows are noncontiguous in the enlarged packed
+        # ordering, so propagate each exact row without a gathered panel.
+        source = 0
+        @inbounds for j = 1:rank_right, i = 1:j
+            source += 1
+            destination = pair_index(rank_left + i, rank_left + j)
+            for channel = 1:channels
+                value = 0.0
+                for old_channel = 1:channels
+                    value = muladd(right.left_feature[source, old_channel],
+                        transfer_left[channel, old_channel], value)
+                end
+                workspace.feature_left[destination, channel] = value
+            end
         end
-        workspace.left_core[channel] = value
+        @inbounds for channel = 1:channels
+            value = left.left_core[channel]
+            for old_channel = 1:channels
+                value = muladd(transfer_left[channel, old_channel],
+                    right.left_core[old_channel], value)
+            end
+            workspace.left_core[channel] = value
+        end
     end
     for jl = 1:rank_left, il = 1:jl, jr = 1:rank_right, ir = 1:jr
         lp = pair_index(il, jl)
@@ -404,12 +446,13 @@ end
 
 function build_outer_block(left::RHFOuterBlock, right::RHFOuterBlock,
         link::RHFStateLink, one_body::BandedOneBody,
-        operator::UnitCellInteraction, workspace::BlockBuildWorkspace)
+        operator::UnitCellInteraction, workspace::BlockBuildWorkspace;
+        required_face::Symbol=:both)
     _validate_block(left, operator); _validate_block(right, operator)
     left.provenance == right.provenance || throw(ArgumentError(
         "block provenance is inconsistent"))
     old_rank, old_pairs, constant, completed_before = _fill_merged!(workspace,
-        left, right, one_body, operator)
+        left, right, one_body, operator, required_face)
     old_rank == link.old_rank + link.physical_width || throw(DimensionMismatch(
         "link does not describe the merged block"))
     new_rank = link.active_rank
@@ -446,13 +489,15 @@ function build_outer_block(left::RHFOuterBlock, right::RHFOuterBlock,
             for j = 1:old_rank, i = 1:j
                 packed = pair_scale(i, j) * completed_density[i, j]
                 pair = pair_index(i, j)
-                left_value = muladd(packed,
-                    workspace.feature_left[pair, channel], left_value)
-                right_value = muladd(packed,
-                    workspace.feature_right[pair, channel], right_value)
+                required_face !== :right && (left_value = muladd(packed,
+                    workspace.feature_left[pair, channel], left_value))
+                required_face !== :left && (right_value = muladd(packed,
+                    workspace.feature_right[pair, channel], right_value))
             end
-            workspace.left_core[channel] = left_value
-            workspace.right_core[channel] = right_value
+            required_face !== :right &&
+                (workspace.left_core[channel] = left_value)
+            required_face !== :left &&
+                (workspace.right_core[channel] = right_value)
         end
     end
     transform = _pair_transform!(workspace.pair_map, link.close_map,
@@ -468,11 +513,11 @@ function build_outer_block(left::RHFOuterBlock, right::RHFOuterBlock,
     pair_field = Matrix{Float64}(undef, new_pairs, new_pairs)
     mul!(pair_field, transpose(transform), scratch)
     channels = _maximum_channel_rank(operator)
-    left_feature = Matrix{Float64}(undef, new_pairs, channels)
-    right_feature = Matrix{Float64}(undef, new_pairs, channels)
-    mul!(left_feature, transpose(transform),
+    left_feature = zeros(new_pairs, channels)
+    right_feature = zeros(new_pairs, channels)
+    required_face !== :right && mul!(left_feature, transpose(transform),
         @view(workspace.feature_left[1:old_pairs, 1:channels]))
-    mul!(right_feature, transpose(transform),
+    required_face !== :left && mul!(right_feature, transpose(transform),
         @view(workspace.feature_right[1:old_pairs, 1:channels]))
     rows = isempty(left.rows) ? right.rows : isempty(right.rows) ?
         left.rows : first(left.rows):last(right.rows)

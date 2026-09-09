@@ -1,0 +1,90 @@
+packet = "10A7C"
+date = "2026-09-08"
+base_commit = "c5c21cf5aca72d9650387141b989a9bb8feaa489"
+branch = "packet10a7a-recovered-c5c21cf"
+donor_commit = "0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c"
+julia_version = "1.12.6"
+blas_threads = 4
+staged = false
+committed = false
+full_suite_run = false
+large_physical_run = false
+
+[[donor_slice]]
+file = "src/PeriodicInteractionStateBlocks.jl"
+function = "_absorb!"
+lines = "408-440"
+mode = "adapted"
+source_range_sha256 = "25c63f82cccaa8fa64532562a8f8a0a406559aaf4edf04dad56d4abd1570511c"
+contract = "side-specific owner advances inherited Hartree channel once per absorbed cell"
+
+[[donor_slice]]
+file = "src/PeriodicInteractionCenters.jl"
+function = "_transfer_vector!"
+lines = "452-468"
+mode = "adapted"
+source_range_sha256 = "e3053ac58c85e9d3c188a07296e7fda2bbd3981786a3e4a8586aebc112056d2f"
+contract = "one-step orientation-dependent tail and residual transfer"
+
+[[test_run]]
+mode = "ordinary"
+scope = "RHF foundation/lifecycle, terminal fragments, 10A7B, 10A7C"
+passed = 622
+failed = 0
+
+[[test_run]]
+mode = "checked-bounds"
+scope = "RHF foundation/lifecycle, terminal fragments, 10A7B, 10A7C"
+passed = 622
+failed = 0
+
+[[test_run]]
+mode = "ordinary"
+scope = "RHF foundation/lifecycle and nonlinear RHF"
+passed = 286
+failed = 0
+
+[[test_run]]
+mode = "checked-bounds"
+scope = "RHF foundation/lifecycle and nonlinear RHF"
+passed = 286
+failed = 0
+
+[[scaling_case]]
+groups = 10
+sites = 165
+half_sweeps = 12
+visits = 96
+channel_transfer_calls = 96
+residual_transfer_steps = 96
+legacy_formula_steps = 432
+maximum_transfer_power = 1
+maximum_block_rank = 1
+seconds = 0.066592834
+bytes = 3475488
+seconds_per_visit = 0.0006936753541666667
+bytes_per_visit = 36203.0
+
+[[scaling_case]]
+groups = 20
+sites = 345
+half_sweeps = 12
+visits = 216
+channel_transfer_calls = 216
+residual_transfer_steps = 216
+legacy_formula_steps = 2052
+maximum_transfer_power = 1
+maximum_block_rank = 1
+seconds = 0.152667542
+bytes = 7920800
+seconds_per_visit = 0.0007067941759259259
+bytes_per_visit = 36670.37037037037
+
+[boundaries]
+synthetic_fixture = true
+producer_residual_evaluated = false
+h100_run = false
+h1000_run = false
+full_isolated_suite_run = false
+uhf_changed = false
+historical_backend_changed = false

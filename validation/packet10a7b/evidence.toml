@@ -1,0 +1,35 @@
+schema = "hfdmrg-packet10a7b-v1"
+base_commit = "c5c21cf5aca72d9650387141b989a9bb8feaa489"
+branch = "packet10a7a-recovered-c5c21cf"
+julia_version = "1.12.6"
+blas_threads_changed = false
+production_algorithm_changed = false
+historical_routes_changed = false
+complete_package_suite_run = false
+large_chain_run = false
+older_untracked_diagnostics_present_at_recovery = false
+older_untracked_diagnostics_cause_verified = false
+older_untracked_diagnostics_reconstructed = false
+pending_packet10a6d_preserved = true
+
+[focused_occupation_defaults]
+command = "/Users/srw/.juliaup/bin/julialauncher +release --startup-file=no --project=. -e 'using Test, LinearAlgebra, HFDMRG; include(\"test/compact_occupation_defaults.jl\")'"
+passed = 74
+total = 74
+seconds = 5.7
+
+[focused_occupation_defaults_checked_bounds]
+command = "/Users/srw/.juliaup/bin/julialauncher +release --startup-file=no --check-bounds=yes --project=. -e 'using Test, LinearAlgebra, HFDMRG; include(\"test/compact_occupation_defaults.jl\")'"
+passed = 74
+total = 74
+seconds = 11.0
+
+[initialization_regressions]
+command = "/Users/srw/.juliaup/bin/julialauncher +release --startup-file=no --project=. -e 'using Test, LinearAlgebra, Random, HFDMRG; include(\"test/compact_rhf_foundation.jl\"); include(\"test/compact_rhf_lifecycle.jl\"); include(\"test/compact_terminal_fragments.jl\"); include(\"test/compact_uhf_foundation.jl\")'"
+passed = 761
+total = 761
+
+[public_solver_regressions]
+command = "/Users/srw/.juliaup/bin/julialauncher +release --startup-file=no --project=. -e 'using Test, LinearAlgebra, Random, HFDMRG; include(\"test/compact_rhf_foundation.jl\"); include(\"test/compact_rhf_lifecycle.jl\"); include(\"test/compact_nonlinear_rhf.jl\"); include(\"test/compact_uhf_foundation.jl\"); include(\"test/compact_nonlinear_uhf.jl\")'"
+passed = 689
+total = 689

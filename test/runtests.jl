@@ -2449,10 +2449,13 @@ try
     include("compact_rhf_foundation.jl")
     include("compact_rhf_lifecycle.jl")
     include("compact_terminal_fragments.jl")
+    include("compact_occupation_defaults.jl")
+    include("compact_rhf_residual_transfer.jl")
     include("compact_nonlinear_rhf.jl")
     include("compact_rhf_compatibility.jl")
     include("compact_uhf_foundation.jl")
     include("compact_nonlinear_uhf.jl")
+    include("compact_stopping_policy.jl")
     include("compact_timing.jl")
     include("compact_producer_energy.jl")
 finally

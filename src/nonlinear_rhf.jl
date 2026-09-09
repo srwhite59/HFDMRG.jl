@@ -48,12 +48,56 @@ struct HFDMRGResult
     replay_energy_change::Float64
     replay_projector_change::Float64
     projector_envelope::Float64
+    requested_energy_tolerance::Float64
+    effective_energy_tolerance::Float64
+    stopping_tolerance_reason::Symbol
     state::RHFCompactState
 end
+
+HFDMRGResult(converged, reason, represented_energy, half_sweeps,
+        accepted_full, accepted_fallback, rejected_updates,
+        maximum_state_rank, maximum_pair_rank,
+        maximum_discarded_squared_weight, full_sweep_changes,
+        replay_energy_change, replay_projector_change, projector_envelope,
+        state::RHFCompactState) = HFDMRGResult(converged, reason,
+    represented_energy, half_sweeps, accepted_full, accepted_fallback,
+    rejected_updates, maximum_state_rank, maximum_pair_rank,
+    maximum_discarded_squared_weight, full_sweep_changes,
+    replay_energy_change, replay_projector_change, projector_envelope,
+    NaN, NaN, :not_applicable, state)
 
 @inline function _rhf_energy_envelope(energy::Float64, dimension::Int)
     256eps(Float64) * max(abs(energy), 1.0) * sqrt(max(dimension, 1))
 end
+
+"""
+Return the extensive represented-energy stopping threshold.
+
+Algorithmic donor: frozen PPP 0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c,
+`validation/packet8f8c1/run_official_h34000_uhf.jl`, lines 157--163.
+Adapted into the recipient solver for both compact spins. Unlike the local
+optimizer envelope, this policy uses terminal represented energy and durable
+realized state rank; it does not use center dimension or producer energy.
+"""
+function _energy_stopping_threshold(requested::Float64,
+        represented_energy::Float64, realized_state_rank::Int)
+    isfinite(requested) && requested > 0.0 || throw(ArgumentError(
+        "requested energy tolerance must be positive and finite"))
+    isfinite(represented_energy) || throw(ArgumentError(
+        "represented stopping energy must be finite"))
+    realized_state_rank >= 0 || throw(ArgumentError(
+        "realized state rank must be nonnegative"))
+    floor = _rhf_energy_envelope(represented_energy, realized_state_rank)
+    if floor > requested
+        return (requested=requested, effective=floor,
+            reason=:float64_extensive_energy_floor)
+    end
+    (requested=requested, effective=requested,
+        reason=:requested_energy_tolerance)
+end
+
+@inline _energy_change_is_quiet(change::Float64, threshold::Float64) =
+    isfinite(change) && abs(change) <= threshold
 
 function _copy_moving_root!(destination::RHFMovingRoot,
         source::RHFMovingRoot)
@@ -300,6 +344,8 @@ function _solver_loop!(lifecycle, one_body, operator, state_control,
     quiet = 0
     converged = false
     reason = :maximum_half_sweeps
+    stopping = (requested=energy_tolerance, effective=energy_tolerance,
+        reason=:requested_energy_tolerance)
     all_updates = NamedTuple[]
     for half = 1:maximum_half_sweeps
         updates, energy = _nonlinear_half_sweep!(lifecycle, one_body,
@@ -317,10 +363,13 @@ function _solver_loop!(lifecycle, one_body, operator, state_control,
                     update.center_rank) ||
                 error("published optimizer update violates monotonicity")
         end
+        stopping = _energy_stopping_threshold(energy_tolerance, energy,
+            maximum_rank)
         if half >= 3
             change = energy - energies[end-2]
             push!(changes, change)
-            quiet = abs(change) <= energy_tolerance ? quiet + 1 : 0
+            quiet = _energy_change_is_quiet(change, stopping.effective) ?
+                quiet + 1 : 0
             if quiet >= 2
                 converged = true; reason = :energy_converged
                 break
@@ -328,7 +377,8 @@ function _solver_loop!(lifecycle, one_body, operator, state_control,
         end
     end
     (converged, reason, energies, changes, full, fallback, rejected,
-        maximum_rank, maximum_pair, maximum_discarded, all_updates)
+        maximum_rank, maximum_pair, maximum_discarded, all_updates,
+        stopping.requested, stopping.effective, stopping.reason)
 end
 
 function solve_hfdmrg(one_body::BandedOneBody,
@@ -356,14 +406,13 @@ function solve_hfdmrg(one_body::BandedOneBody,
         "RHF currently requires dimer initialization"))
     !spin_swapped || throw(ArgumentError(
         "spin-swapped initialization applies only to UHF"))
+    _, atoms = _compact_occupation_partitions(operator, atom_intervals)
     control = RHFStateControl(state_maxdim, Float64(state_cutoff); exact)
-    atoms = atom_intervals === nothing ?
-        length(_traversal_intervals(operator)) : length(atom_intervals)
-    capacity = exact ? max(state_maxdim, atoms ÷ 2) : state_maxdim
+    capacity = exact ? max(state_maxdim, length(atoms) ÷ 2) : state_maxdim
     workspace = RHFNonlinearWorkspace(one_body, operator, capacity)
     lifecycle = initialize_rhf_dimer_lifecycle(one_body, operator, control,
         workspace.lifecycle; forward=starting_orientation === :physical,
-        atom_intervals)
+        atom_intervals=atoms)
     outcome = _solver_loop!(lifecycle, one_body, operator, control,
         Float64(energy_tolerance), maximum_half_sweeps, workspace)
 
@@ -402,5 +451,6 @@ function solve_hfdmrg(one_body::BandedOneBody,
     HFDMRGResult(converged, reason, replay_after, length(outcome[3]),
         outcome[5], outcome[6], outcome[7], outcome[8], outcome[9],
         outcome[10], outcome[4], replay_energy, replay_projector,
-        projector_envelope, RHFCompactState(lifecycle))
+        projector_envelope, outcome[12], outcome[13], outcome[14],
+        RHFCompactState(lifecycle))
 end

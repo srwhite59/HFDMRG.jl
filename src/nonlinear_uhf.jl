@@ -62,8 +62,28 @@ struct UHFDMRGResult
     replay_beta_projector_change::Float64
     alpha_projector_envelope::Float64
     beta_projector_envelope::Float64
+    requested_energy_tolerance::Float64
+    effective_energy_tolerance::Float64
+    stopping_tolerance_reason::Symbol
     state::UHFCompactState
 end
+
+UHFDMRGResult(converged, reason, represented_energy, half_sweeps,
+        accepted_full, accepted_fallback, rejected_updates,
+        maximum_alpha_rank, maximum_beta_rank, maximum_alpha_pair_rank,
+        maximum_beta_pair_rank, maximum_alpha_discarded_squared_weight,
+        maximum_beta_discarded_squared_weight, full_sweep_changes,
+        replay_energy_change, replay_alpha_projector_change,
+        replay_beta_projector_change, alpha_projector_envelope,
+        beta_projector_envelope, state::UHFCompactState) = UHFDMRGResult(
+    converged, reason, represented_energy, half_sweeps, accepted_full,
+    accepted_fallback, rejected_updates, maximum_alpha_rank,
+    maximum_beta_rank, maximum_alpha_pair_rank, maximum_beta_pair_rank,
+    maximum_alpha_discarded_squared_weight,
+    maximum_beta_discarded_squared_weight, full_sweep_changes,
+    replay_energy_change, replay_alpha_projector_change,
+    replay_beta_projector_change, alpha_projector_envelope,
+    beta_projector_envelope, NaN, NaN, :not_applicable, state)
 
 function _copy_uhf_root!(destination::UHFMovingRoot, source::UHFMovingRoot)
     _copy_moving_root!(destination.alpha, source.alpha)
@@ -300,6 +320,8 @@ function _uhf_solver_loop!(lifecycle, one_body, operator, state_control,
     max_alpha = max_beta = max_alpha_pair = max_beta_pair = 0
     max_alpha_discarded = max_beta_discarded = 0.0
     quiet = 0; converged = false; reason = :maximum_half_sweeps
+    stopping = (requested=energy_tolerance, effective=energy_tolerance,
+        reason=:requested_energy_tolerance)
     for half = 1:maximum_half_sweeps
         updates, energy = _uhf_nonlinear_half_sweep!(lifecycle, one_body,
             operator, state_control, workspace)
@@ -321,10 +343,13 @@ function _uhf_solver_loop!(lifecycle, one_body, operator, state_control,
                     update.alpha_center_rank + update.beta_center_rank) ||
                 error("published UHF optimizer update violates monotonicity")
         end
+        stopping = _energy_stopping_threshold(energy_tolerance, energy,
+            max(max_alpha, max_beta))
         if half >= 3
             change = energy - energies[end-2]
             push!(changes, change)
-            quiet = abs(change) <= energy_tolerance ? quiet + 1 : 0
+            quiet = _energy_change_is_quiet(change, stopping.effective) ?
+                quiet + 1 : 0
             if quiet >= 2
                 converged = true; reason = :energy_converged
                 break
@@ -336,7 +361,10 @@ function _uhf_solver_loop!(lifecycle, one_body, operator, state_control,
         max_alpha=max_alpha, max_beta=max_beta,
         max_alpha_pair=max_alpha_pair, max_beta_pair=max_beta_pair,
         max_alpha_discarded=max_alpha_discarded,
-        max_beta_discarded=max_beta_discarded, updates=all_updates)
+        max_beta_discarded=max_beta_discarded, updates=all_updates,
+        requested_energy_tolerance=stopping.requested,
+        effective_energy_tolerance=stopping.effective,
+        stopping_tolerance_reason=stopping.reason)
 end
 
 function _solve_uhf_hfdmrg(one_body::BandedOneBody,
@@ -344,19 +372,19 @@ function _solve_uhf_hfdmrg(one_body::BandedOneBody,
         state_cutoff::Real, energy_tolerance::Real,
         maximum_half_sweeps::Int, starting_orientation::Symbol,
         exact::Bool, atom_intervals, spin_swapped::Bool)
+    _, atoms = _compact_occupation_partitions(operator, atom_intervals)
     control = UHFStateControl(RHFStateControl(state_maxdim,
         Float64(state_cutoff); exact))
-    atoms = atom_intervals === nothing ?
-        length(_traversal_intervals(operator)) : length(atom_intervals)
-    alpha_total = spin_swapped ? atoms ÷ 2 : (atoms + 1) ÷ 2
-    beta_total = atoms - alpha_total
+    atom_count = length(atoms)
+    alpha_total = spin_swapped ? atom_count ÷ 2 : (atom_count + 1) ÷ 2
+    beta_total = atom_count - alpha_total
     alpha_capacity = exact ? max(state_maxdim, alpha_total) : state_maxdim
     beta_capacity = exact ? max(state_maxdim, beta_total) : state_maxdim
     workspace = UHFNonlinearWorkspace(one_body, operator, alpha_capacity,
         beta_capacity)
     lifecycle = initialize_uhf_neel_lifecycle(one_body, operator, control,
         workspace.lifecycle; forward=starting_orientation === :physical,
-        atom_intervals, spin_swapped)
+        atom_intervals=atoms, spin_swapped)
     outcome = _uhf_solver_loop!(lifecycle, one_body, operator, control,
         Float64(energy_tolerance), maximum_half_sweeps, workspace)
 
@@ -402,5 +430,7 @@ function _solve_uhf_hfdmrg(one_body::BandedOneBody,
         outcome.max_beta_pair, outcome.max_alpha_discarded,
         outcome.max_beta_discarded, outcome.changes, replay_energy,
         alpha_projector, beta_projector, alpha_envelope, beta_envelope,
+        outcome.requested_energy_tolerance, outcome.effective_energy_tolerance,
+        outcome.stopping_tolerance_reason,
         UHFCompactState(lifecycle))
 end

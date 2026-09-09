@@ -65,16 +65,7 @@ function UHFLifecycleWorkspace(one_body::BandedOneBody,
 end
 
 function _uhf_neel_fragments(one_body::BandedOneBody, atom_intervals)
-    atoms = Vector{UnitRange{Int}}(atom_intervals)
-    !isempty(atoms) || throw(ArgumentError("atomic product requires atoms"))
-    previous = 0
-    for interval in atoms
-        !isempty(interval) && first(interval) == previous + 1 ||
-            throw(ArgumentError("atom intervals must be ordered and contiguous"))
-        previous = last(interval)
-    end
-    previous == h1_sites(one_body) || throw(ArgumentError(
-        "atom intervals must partition the complete one-body range"))
+    atoms = _check_atom_intervals(atom_intervals, h1_sites(one_body))
     alpha = _RHFLocalFragment[]; beta = _RHFLocalFragment[]
     for (index, rows) in enumerate(atoms)
         fragment = _RHFLocalFragment(rows, _dimer_orbital(one_body, rows))
@@ -89,10 +80,8 @@ function initialize_uhf_neel_lifecycle(one_body::BandedOneBody,
         atom_intervals=nothing, spin_swapped::Bool=false)
     h1_sites(one_body) == operator.sites || throw(DimensionMismatch(
         "H1 and interaction lengths disagree"))
-    intervals = _check_traversal_intervals(_traversal_intervals(operator),
-        operator.sites)
-    atoms = atom_intervals === nothing ? intervals :
-        Vector{UnitRange{Int}}(atom_intervals)
+    intervals, atoms = _compact_occupation_partitions(operator,
+        atom_intervals)
     alpha_fragments, beta_fragments = _uhf_neel_fragments(one_body, atoms)
     spin_swapped && ((alpha_fragments, beta_fragments) =
         (beta_fragments, alpha_fragments))

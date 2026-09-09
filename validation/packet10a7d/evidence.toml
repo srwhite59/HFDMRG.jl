@@ -1,0 +1,72 @@
+packet = "10A7D"
+date = "2026-09-08"
+base_commit = "c5c21cf5aca72d9650387141b989a9bb8feaa489"
+branch = "packet10a7a-recovered-c5c21cf"
+donor_commit = "0bcd4f11831a98ae4bf4fb3d09eac5968df9d96c"
+julia_version = "1.12.6"
+staged = false
+committed = false
+manifest_in_repository = false
+physical_reproduction_run = false
+large_benchmark_run = false
+
+[[donor_slice]]
+file = "src/_ControlledMonotoneLocalUpdates.jl"
+lines = "1-10"
+mode = "adapted"
+source_range_sha256 = "10a3d71bfa83f96c265c02676b1c98cfe20d5ea8ce138798423c37a997cdcd6b"
+contract = "Float64 energy envelope"
+
+[[donor_slice]]
+file = "src/_ControlledStoredNonlinearSweeps.jl"
+lines = "616-676"
+mode = "adapted"
+source_range_sha256 = "c8b1f061e1be289b9105177890fdbc76eb564b4faf903252cee853ddce3c4f8a"
+contract = "same-orientation energy reference and consecutive quiet halves"
+
+[[donor_slice]]
+file = "src/_IndependentSpinStoredNonlinear.jl"
+lines = "234-285"
+mode = "adapted"
+source_range_sha256 = "841aa59d4cec806af519fa725d9db960df01ce15f45ae67081b8676cd1199e61"
+contract = "independent-spin stopping orchestration"
+
+[[donor_slice]]
+file = "validation/packet8f8c1/run_official_h34000_uhf.jl"
+lines = "125-198"
+mode = "adapted"
+source_range_sha256 = "dc0e7502056f185a260cee6c5cae3a8cebb6def9d37f2994fe65784329950343"
+contract = "accepted extensive-energy effective threshold"
+
+[[test_run]]
+kind = "focused"
+mode = "ordinary"
+passed = 1210
+failed = 0
+
+[[test_run]]
+kind = "focused"
+mode = "checked-bounds"
+passed = 1210
+failed = 0
+
+[[test_run]]
+kind = "fresh temporary-environment complete package suite"
+mode = "checked-bounds"
+passed = 2195
+failed = 0
+command = "/Users/srw/.juliaup/bin/julialauncher +release --startup-file=no --compiled-modules=no -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path=pwd()); Pkg.test(\"HFDMRG\"; julia_args=[\"--check-bounds=yes\", \"--compiled-modules=no\"])'"
+
+[policy]
+energy_reference = "terminal represented energy from the previous half-sweep in the same orientation"
+consecutive_quiet_halves = 2
+effective_formula = "max(requested, 256*eps(Float64)*max(abs(energy),1)*sqrt(max(realized_state_rank,1)))"
+rank_reference_rhf = "maximum durable realized RHF state rank"
+rank_reference_uhf = "maximum of durable realized alpha and beta state ranks"
+producer_energy_used = false
+residual_required = false
+projector_convergence_required = false
+finite_replay_guard_changed = false
+optimizer_monotonicity_changed = false
+schedule_changed = false
+historical_backend_changed = false

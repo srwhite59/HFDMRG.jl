@@ -70,6 +70,40 @@ function _check_traversal_intervals(intervals, sites::Int)
     owned
 end
 
+function _check_atom_intervals(atom_intervals, sites::Int)
+    atoms = Vector{UnitRange{Int}}(atom_intervals)
+    !isempty(atoms) || throw(ArgumentError(
+        "atom_intervals must contain at least one physical atom"))
+    previous = 0
+    for interval in atoms
+        !isempty(interval) && first(interval) == previous + 1 ||
+            throw(ArgumentError(
+                "atom_intervals must be ordered and contiguous"))
+        previous = last(interval)
+    end
+    previous == sites || throw(ArgumentError(
+        "atom_intervals must partition the complete one-body range"))
+    atoms
+end
+
+function _compact_occupation_partitions(operator::UnitCellInteraction,
+        atom_intervals)
+    intervals = _check_traversal_intervals(_traversal_intervals(operator),
+        operator.sites)
+    if atom_intervals === nothing
+        ambiguous = operator.phase_at_first != 1 ||
+            any(interval -> length(interval) != UNIT_CELL_WIDTH, intervals)
+        ambiguous && throw(ArgumentError(
+            "atom_intervals is required when the compact geometry has a " *
+            "partial prefix or suffix or a nontrivial first phase; pass " *
+            "ordered contiguous physical-atom ranges that partition " *
+            "1:$(operator.sites), assigning every terminal fragment to its " *
+            "physical atom"))
+        return intervals, copy(intervals)
+    end
+    intervals, _check_atom_intervals(atom_intervals, operator.sites)
+end
+
 @inline _center_width(lifecycle::RHFFixedLifecycle, cell::Int) =
     length(lifecycle.intervals[cell]) + length(lifecycle.intervals[cell + 1])
 
@@ -462,17 +496,9 @@ struct _RHFLocalFragment
 end
 
 function _rhf_dimer_fragments(one_body::BandedOneBody, atom_intervals)
-    atoms = Vector{UnitRange{Int}}(atom_intervals)
+    atoms = _check_atom_intervals(atom_intervals, h1_sites(one_body))
     iseven(length(atoms)) && !isempty(atoms) || throw(ArgumentError(
         "RHF dimer initialization requires an even atom count"))
-    previous = 0
-    for interval in atoms
-        !isempty(interval) && first(interval) == previous + 1 ||
-            throw(ArgumentError("atom intervals must be ordered and contiguous"))
-        previous = last(interval)
-    end
-    previous == h1_sites(one_body) || throw(ArgumentError(
-        "atom intervals must partition the complete one-body range"))
     [_RHFLocalFragment(first(atoms[index]):last(atoms[index + 1]),
         _dimer_orbital(one_body,
             first(atoms[index]):last(atoms[index + 1])))
@@ -589,10 +615,8 @@ function initialize_rhf_dimer_lifecycle(one_body::BandedOneBody,
         atom_intervals=nothing)
     h1_sites(one_body) == operator.sites || throw(DimensionMismatch(
         "H1 and interaction lengths disagree"))
-    intervals = _check_traversal_intervals(_traversal_intervals(operator),
-        operator.sites)
-    atoms = atom_intervals === nothing ? intervals :
-        Vector{UnitRange{Int}}(atom_intervals)
+    intervals, atoms = _compact_occupation_partitions(operator,
+        atom_intervals)
     fragments = _rhf_dimer_fragments(one_body, atoms)
     cells = length(intervals)
     provenance = hash((operator.provenance, intervals, atoms,
@@ -614,7 +638,7 @@ function initialize_rhf_dimer_lifecycle(one_body::BandedOneBody,
                 current.rank, control; cross,
                 maximum_occupied=length(ids))
             current = build_outer_block(physical, current, link, one_body,
-                operator, workspace.builder)
+                operator, workspace.builder; required_face=:left)
             collection[cell-1] = current
             _advance_fragment_cursor!(cursor, ids, parent, link)
         end
@@ -630,7 +654,7 @@ function initialize_rhf_dimer_lifecycle(one_body::BandedOneBody,
                 length(intervals[cell]), control; cross,
                 maximum_occupied=length(ids))
             current = build_outer_block(current, physical, link, one_body,
-                operator, workspace.builder)
+                operator, workspace.builder; required_face=:right)
             current.reflected = true
             collection[cell] = current
             _advance_fragment_cursor!(cursor, ids, parent, link)
@@ -701,7 +725,7 @@ function _build_advance_candidate!(root::RHFMovingRoot,
             lifecycle.intervals[cell], one_body, operator,
             lifecycle.provenance)
         candidate = build_outer_block(left, physical, link,
-            one_body, operator, workspace.builder)
+            one_body, operator, workspace.builder; required_face=:right)
         _close_root!(root, link, local_rows, true, root_workspace;
             exact=control.exact)
         _open_root!(root, right.link, false, root_workspace)
@@ -718,7 +742,7 @@ function _build_advance_candidate!(root::RHFMovingRoot,
             lifecycle.intervals[cell + 1], one_body, operator,
             lifecycle.provenance; reflected=true)
         candidate = build_outer_block(physical, right, link,
-            one_body, operator, workspace.builder)
+            one_body, operator, workspace.builder; required_face=:left)
         candidate.reflected = true
         _close_root!(root, link, local_rows, false, root_workspace;
             exact=control.exact)
@@ -740,7 +764,7 @@ function _build_advance_candidate!(root::RHFMovingRoot,
             lifecycle.intervals[cell + 1], one_body, operator,
             lifecycle.provenance; reflected=true)
         candidate = build_outer_block(physical, right, link,
-            one_body, operator, workspace.builder)
+            one_body, operator, workspace.builder; required_face=:left)
         candidate.reflected = true
         _close_root!(root, link, local_rows, false, root_workspace;
             exact=control.exact)
@@ -758,7 +782,7 @@ function _build_advance_candidate!(root::RHFMovingRoot,
             lifecycle.intervals[cell], one_body, operator,
             lifecycle.provenance)
         candidate = build_outer_block(left, physical, link,
-            one_body, operator, workspace.builder)
+            one_body, operator, workspace.builder; required_face=:right)
         _close_root!(root, link, local_rows, true, root_workspace;
             exact=control.exact)
         lifecycle.cells == 2 ?
