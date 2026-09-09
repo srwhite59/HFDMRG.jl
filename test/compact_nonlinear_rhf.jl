@@ -59,23 +59,36 @@ end
 end
 
 @testset "H20 finite convergence and matched publication" begin
-    results = HFDMRG.HFDMRGResult[]
     for orientation in (:physical, :reflected)
         result, one_body, operator = solve_fixture(20, orientation;
             sweeps=60, tolerance=1.0e-7)
         @test result.converged
-        @test result.replay_energy_change <= 1.0e-7
-        push!(results, result)
+        @test result.reason == :energy_converged
+        @test result.requested_energy_tolerance == 1.0e-7
+        @test result.effective_energy_tolerance == 1.0e-7
+        @test result.stopping_tolerance_reason == :requested_energy_tolerance
+        @test length(result.full_sweep_changes) >= 2
+        # The terminal threshold is not retrospectively applied to earlier
+        # steps. This fixture independently satisfies the stricter request on
+        # both changes which caused the two-step quiet decision.
+        @test all(abs.(result.full_sweep_changes[end-1:end]) .<=
+            result.requested_energy_tolerance)
         lifecycle = result.state.lifecycle
+        replay_before = result.represented_energy - result.replay_energy_change
+        replay_limit = result.requested_energy_tolerance +
+            HFDMRG._rhf_energy_envelope(replay_before, lifecycle.root.rank)
+        @test abs(result.replay_energy_change) <= replay_limit
         @test lifecycle.original_rows_read == 0
         @test length(lifecycle.collection) == 19
         @test lifecycle.root.total_occupied == 10
+        workspace = HFDMRG.RHFLifecycleWorkspace(one_body, operator, 4)
+        coefficients = zeros(operator.sites, lifecycle.root.total_occupied)
+        HFDMRG.reconstruct_terminal!(coefficients, lifecycle, workspace)
+        density, energy, _ = dense_rhf_state(one_body, operator, coefficients)
+        @test energy ≈ result.represented_energy atol=2e-10
+        @test norm(transpose(coefficients)*coefficients-I, Inf) <= 2e-11
+        @test norm(density*density-density, Inf) <= 2e-11
     end
-    # Each independently started finite solve certifies its own 1e-7 working-
-    # energy envelope.  Their crossed comparison therefore has the sum of the
-    # two certified envelopes; exact-mode orientation parity is tested below.
-    @test abs(results[1].represented_energy-results[2].represented_energy) <=
-        2.0e-7
 
     one_body, operator = nucleus_fixture(10)
     control = HFDMRG.RHFStateControl(4, 1.0e-12)
