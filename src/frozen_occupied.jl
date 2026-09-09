@@ -588,6 +588,7 @@ function _frozen_local!(p, li, ri, left, cra, right, Hup, Hdn, win, lambda,
     psiup, psidn = Zup * Uup, Zdn * Udn
     energies, rises = Float64[], Int[]
     energy, lastenergy, converged, nit = ef, 1e10, false, 0
+    evaluated_damping = one(lambda)
     if nup == 0 && ndn == 0
         converged = true
     else
@@ -600,6 +601,7 @@ function _frozen_local!(p, li, ri, left, cra, right, Hup, Hdn, win, lambda,
             @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
         end
         for s = 1:4
+            evaluated_damping = lambda
             if p.restricted
                 nup > 0 && (Uup = eigsym(Zup' * Fup * Zup)[2][:, 1:nup])
                 psiup = Zup * Uup
@@ -628,6 +630,20 @@ function _frozen_local!(p, li, ri, left, cra, right, Hup, Hdn, win, lambda,
                 abs(lastenergy - energy) < scf_cutoff
             (converged || s == 4) && break
             lastenergy = energy
+        end
+    end
+    if evaluated_damping < one(evaluated_damping)
+        rhoup = Zup * (Uup * Uup') * Zup'
+        Fup = copy(Heffup)
+        if p.restricted
+            @timeg "Fock build" vee_add_fock_r!(Fup, rhoup, win)
+            energy = ef + tr(rhoup * (Fup + Heffup))
+        else
+            rhodn = Zdn * (Udn * Udn') * Zdn'
+            Fdn = copy(Heffdn)
+            @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+            energy = ef + 0.5tr(rhoup * (Fup + Heffup)) +
+                0.5tr(rhodn * (Fdn + Heffdn))
         end
     end
     p.currentup, p.currentdn = Cfu, Cfd

@@ -158,10 +158,17 @@ try
             result = run(counted, diagnostics, scf)
             oracle = run(density, HFDMRG._RunDiagnostics(), scf)
             iterations = getproperty.(diagnostics.windows, :local_iterations)
+            publication_focks = count(diagnostics.windows) do window
+                prior_rises = count(<(window.local_iterations), window.rise_updates)
+                window.local_iterations > 0 &&
+                    window.damping_before * 0.5^prior_rises < 1
+            end
             @test result == oracle
-            @test counted.calls == sum(n == 0 ? 0 : n + 1 for n in iterations)
+            @test counted.calls ==
+                sum(n == 0 ? 0 : n + 1 for n in iterations) + publication_focks
             @test scf == 0 ? all(==(4), iterations) : all(<=(1), iterations)
-            @test counted.calls == (scf == 0 ? 5 : 2) * counted.windows
+            @test counted.calls ==
+                (scf == 0 ? 5 : 2) * counted.windows + publication_focks
         end
     end
 
@@ -513,8 +520,11 @@ try
             @test [sum(r.frozen_up for r in rows) / length(rows)
                 for rows in families] == [0.5, 0.5, 0.5]
             @test all(rows -> count(r -> r.frozen_up > 0, rows) == 3, families)
-            baseline = -4.336808689964836e-19
-            @test abs(result[3] - baseline) < 2e-32
+            energy_roundoff = 256N * eps(Float64) * max(1, opnorm(H))
+            returned_energy =
+                physical_energy(H, H, zeros(N, N), result[1], result[2])
+            @test abs(result[3]) <= energy_roundoff
+            @test abs(result[3] - returned_energy) <= energy_roundoff
             @test HFDMRG._thin_projector_error(result[1], target) < 2e-12
             @test diagnostics.frozen_rebuilds == 0
             @test diagnostics.frozen_transition_rebuilds == 0
@@ -584,6 +594,34 @@ try
         @test any(w -> w.damping_after < 1, diagnostics.windows)
         @test norm((result[1] * result[1]')^2 - result[1] * result[1]') < 2e-13
         @test abs(result[3] - physical_energy(H, H, V, result[1], result[2])) < 2e-13
+
+        @testset "Damped frozen publication energy" begin
+            for (restricted, seed, interaction_scale) in
+                    ((true, 4, 0.2), (false, 9, 0.05))
+                rng = MersenneTwister(seed); N = 12
+                A = randn(rng, N, N); H = 0.2 * (A + A')
+                A = randn(rng, N, N); V = interaction_scale * (A + A')
+                Q = Matrix(qr(randn(rng, N, restricted ? 2 : 4)).Q)
+                diagnostics = HFDMRG._RunDiagnostics()
+                result = restricted ? solve_hfdmrg(H, V, Q; maxiter = 3,
+                    blocksize = 2, cutoff = 0.0, scf_cutoff = 0.0,
+                    frozen_occupied = :roundoff_exact,
+                    frozen_leakage_schedule = f2c_schedule,
+                    _diagnostics = diagnostics, verbose = false) :
+                    solve_hfdmrg(H, V, Q[:, 1:2], Q[:, 3:4]; maxiter = 3,
+                        blocksize = 2, cutoff = 0.0, scf_cutoff = 0.0,
+                        frozen_occupied = :roundoff_exact,
+                        frozen_leakage_schedule = f2c_schedule,
+                        _diagnostics = diagnostics, verbose = false)
+                final_window = last(diagnostics.windows)
+                returned_energy =
+                    physical_energy(H, H, V, result[1], result[2])
+                @test final_window.damping_before < 1
+                @test abs(final_window.local_energies[end] - result[3]) > 1e-10
+                @test final_window.final_energy == result[3]
+                @test abs(result[3] - returned_energy) < 2e-13
+            end
+        end
 
         N = 16; h = collect(1.0:N); h[2] = 0; h[14] = 0.1
         H = Matrix(Diagonal(h)); V = zeros(N, N)
