@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use HFDMRG.jl, please cite the software using this metadata."
+title: "HFDMRG.jl"
+type: software
+authors:
+  - family-names: "White"
+    given-names: "Steven R."
+repository-code: "https://github.com/srwhite59/HFDMRG.jl"
+url: "https://github.com/srwhite59/HFDMRG.jl"
+license: MIT
+version: "0.1.0"
