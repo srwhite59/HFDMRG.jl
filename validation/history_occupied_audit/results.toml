@@ -1,0 +1,107 @@
+baseline_commit = "b6af4140e8aece644bd045613fc44b738438f588"
+date = "2026-09-17"
+julia = "1.12.6"
+blas_threads = 4
+
+[focused]
+ordinary_command = "julia --compiled-modules=no --project=. --startup-file=no test/history_occupied_audit.jl"
+ordinary_assertions = 50
+ordinary_passed = true
+checked_command = "julia --compiled-modules=no --check-bounds=yes --project=. --startup-file=no test/history_occupied_audit.jl"
+checked_assertions = 50
+checked_passed = true
+
+[complete]
+command = "julia --compiled-modules=no --check-bounds=yes --project=. --startup-file=no test/runtests.jl"
+assertions = 2297
+passed = true
+exact_final_tree = true
+
+[final_scope]
+baseline_commit = "b6af4140e8aece644bd045613fc44b738438f588"
+production_paths = ["src/history_accelerated_rhf.jl", "src/history_accelerated_uhf.jl", "src/history_accelerated_sliced.jl", "src/sliced_fock_audit.jl"]
+test_paths = ["test/runtests.jl", "test/history_occupied_audit.jl"]
+evidence_paths = ["notes/history_occupied_action_audit_2026-09-17.md", "validation/history_occupied_audit/benchmark.jl", "validation/history_occupied_audit/results.toml"]
+history_accelerated_rhf_sha256 = "39450c916d02a1fee03cacb823a1502db341b8656e29b4cba295fea995030121"
+history_accelerated_uhf_sha256 = "38204289d3ccb384aa455ef97edf8dfc3085fce0c69c9925bcd172aff88b6c8d"
+history_accelerated_sliced_sha256 = "c0698ef370f0900c7418218caf53cdb088c661f3d62dac50b6837ca3d1206458"
+sliced_fock_audit_sha256 = "908a566e021b04807aae1a37608d96738722b461bc576d1f51fbd9fb25d4ffc1"
+runtests_sha256 = "aa203c23b248a4db52e178a6ee1331db2f417278f4ef0cc596b6a6c9b98859a0"
+history_occupied_audit_test_sha256 = "a1ed85b61ec9363df97add1864eff4e7a1721dc78bc65dbe8ba1d940fe5eb6bc"
+benchmark_sha256 = "4eb6317f4731e0b8be71803fde52c36fb5ef8c54c47e30705687cca888ca53af"
+
+[matched_warmed]
+command = "julia --compiled-modules=no --project=. --startup-file=no validation/history_occupied_audit/benchmark.jl matched 600"
+acceptance_evidence = true
+dimension = 600
+alpha_occupations = 6
+beta_occupations = 5
+permanent_input_bytes = 8693080
+old_rhf_seconds = 0.001206875
+old_rhf_bytes = 14533264
+new_rhf_seconds = 0.001286
+new_rhf_bytes = 492832
+old_uhf_seconds = 0.002797458
+old_uhf_bytes = 29031008
+new_uhf_seconds = 0.00197675
+new_uhf_bytes = 933904
+rhf_energy_absolute_difference = 5.273559366969494e-16
+rhf_residual_absolute_difference = 2.220446049250313e-16
+uhf_energy_absolute_difference = 6.661338147750939e-16
+uhf_residual_absolute_difference = 2.220446049250313e-16
+
+[matched_sliced_before_action_only]
+command = "julia --compiled-modules=no --project=. --startup-file=no validation/history_occupied_audit/benchmark.jl matched_sliced 40"
+slices = 40
+physical_dimension = 80
+old_rhf_seconds = 0.000129916
+old_rhf_bytes = 210224
+context_history_rhf_seconds = 0.000578625
+context_history_rhf_bytes = 803600
+old_uhf_seconds = 0.000193042
+old_uhf_bytes = 483952
+context_history_uhf_seconds = 0.001116625
+context_history_uhf_bytes = 1604224
+
+[matched_sliced_action_only]
+command = "julia --compiled-modules=no --project=. --startup-file=no validation/history_occupied_audit/benchmark.jl matched_sliced 40"
+slices = 40
+physical_dimension = 80
+permanent_input_bytes = 315296
+old_rhf_seconds = 0.000127583
+old_rhf_bytes = 211488
+new_rhf_seconds = 0.000368792
+new_rhf_bytes = 397328
+old_uhf_seconds = 0.000195125
+old_uhf_bytes = 483952
+new_uhf_seconds = 0.000669834
+new_uhf_bytes = 775248
+energy_absolute_difference_rhf = 1.3322676295501878e-15
+residual_absolute_difference_rhf = 7.105427357601002e-15
+energy_absolute_difference_uhf = 8.881784197001252e-16
+residual_absolute_difference_uhf = 0.0
+
+[fresh_process_old_uhf]
+command = "julia --compiled-modules=no --project=. --startup-file=no validation/history_occupied_audit/benchmark.jl old_uhf 2400"
+acceptance_evidence = false
+dimension = 2400
+alpha_occupations = 6
+beta_occupations = 5
+permanent_input_bytes = 138451480
+audit_seconds_including_compilation = 0.531694625
+audit_bytes_including_compilation = 569504752
+process_peak_rss_bytes = 904298496
+
+[fresh_process_new_uhf]
+command = "julia --compiled-modules=no --project=. --startup-file=no validation/history_occupied_audit/benchmark.jl new_uhf 2400"
+acceptance_evidence = false
+dimension = 2400
+alpha_occupations = 6
+beta_occupations = 5
+permanent_input_bytes = 138451480
+audit_seconds_including_compilation = 0.81682075
+audit_bytes_including_compilation = 273527776
+process_peak_rss_bytes = 554188800
+
+[limitations]
+text = "Acceptance uses the small deterministic history/oracle tests, warmed N=600 density fixture, and 80-dimensional sliced fixture. Density allocation savings do not describe the sliced route: sliced scratch is block-local but cumulative allocation is quadratic, and a one-slice layout can make a block N by N. The earlier N=2400 synthetic fresh-process sample is optional context, not an acceptance gate. Its timing includes compilation and peak RSS includes Julia, input construction, compilation, and audit. No q9 or application calculation was run; no q9 memory saving is claimed or extrapolated here."

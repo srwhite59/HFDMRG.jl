@@ -37,14 +37,28 @@ function _history_inputs(H, V, C, policy)
     nothing
 end
 
+function _history_occupied_action(H, V, C, direct, X)
+    HX = H * X
+    FX = copy(HX)
+    FX .+= direct .* X
+    size(C, 2) == 0 && return FX, HX
+    rows_per_block = min(size(C, 1), 64)
+    pair = similar(X, rows_per_block, size(C, 1))
+    for first_row = 1:rows_per_block:size(C, 1)
+        rows = first_row:min(first_row + rows_per_block - 1, size(C, 1))
+        pair_rows = @view pair[1:length(rows), :]
+        mul!(pair_rows, @view(C[rows, :]), C')
+        pair_rows .*= @view V[rows, :]
+        mul!(@view(FX[rows, :]), pair_rows, X, -1, 1)
+    end
+    FX, HX
+end
+
 function _history_physical(H, V, C)
-    D = C * C'
-    d = diag(D)
-    J = V * d
-    F = H + 2Diagonal(J) - V .* D
-    FC = F * C
+    density = vec(sum(abs2, C; dims = 2))
+    FC, HC = _history_occupied_action(H, V, C, 2(V * density), C)
     R = FC - C * (C' * FC)
-    (; energy = 2dot(D, H) + 2dot(d, J) - sum(V .* D .* D),
+    (; energy = dot(C, FC + HC),
        residual = norm(R), gram = norm(C' * C - I))
 end
 

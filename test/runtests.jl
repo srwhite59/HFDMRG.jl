@@ -2498,6 +2498,7 @@ try
     include("compact_timing.jl")
     include("compact_producer_energy.jl")
     include("physical_hydrogen_fixture.jl")
+    include("history_occupied_audit.jl")
 finally
     empty!(LOAD_PATH)
     append!(LOAD_PATH, old_load_path)

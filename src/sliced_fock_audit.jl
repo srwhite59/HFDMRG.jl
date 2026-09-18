@@ -48,10 +48,8 @@ function _sliced_exchange(Vnm, Cn, Cm)
     end
     K
 end
-function _sliced_audit_data(H, backend, Cup, Cdn, spin)
-    layout, V = backend.layout, backend.V
+function _sliced_hartree_data(layout, V, Cup, Cdn)
     dims, offs, S = layout.dims, layout.offs, nslices(layout)
-    N, C = offs[end], spin === :up ? Cup : Cdn
     poffs = [0; cumsum(dims .^ 2)]; Jpack = zeros(Float64, poffs[end])
     Ttotal = [(@view Cup[offs[m] + 1:offs[m + 1], :]) *
         (@view Cup[offs[m] + 1:offs[m + 1], :])' +
@@ -64,6 +62,13 @@ function _sliced_audit_data(H, backend, Cup, Cdn, spin)
             Jn[a, b] += Vnm[a, b, cc, d] * Ttotal[m][cc, d]
         end
     end
+    Jpack, poffs
+end
+function _sliced_audit_data(H, backend, Cup, Cdn, spin)
+    layout, V = backend.layout, backend.V
+    dims, offs, S = layout.dims, layout.offs, nslices(layout)
+    N, C = offs[end], spin === :up ? Cup : Cdn
+    Jpack, poffs = _sliced_hartree_data(layout, V, Cup, Cdn)
     diagonal = [zeros(Float64, d, d) for d in dims]
     upper = [zeros(Float64, dims[n], dims[n + 1]) for n = 1:S - 1]
     lower = [zeros(Float64, dims[n + 1], dims[n]) for n = 1:S - 1]
@@ -111,22 +116,26 @@ function _SlicedFockAuditContext(H, backend, Cup, Cdn, spin)
         d.diag, d.scale, d.blocks, d.reason, timed.time, timed.bytes,
         d.values, d.pairs, 0, 0)
 end
-function _audit_action!(Y, c::_SlicedFockAuditContext, X)
-    c.actions += 1; c.rhs += size(X, 2); all(isfinite, X) || error("nonfinite physical Fock action input")
-    mul!(Y, c.H, X)
-    dims, offs, S = c.layout.dims, c.layout.offs, nslices(c.layout)
+function _sliced_occupied_action!(Y, H, V, layout, C, Jpack, poffs, X)
+    all(isfinite, X) || error("nonfinite physical Fock action input")
+    mul!(Y, H, X)
+    dims, offs, S = layout.dims, layout.offs, nslices(layout)
     for n = 1:S
         rn = offs[n] + 1:offs[n + 1]
-        Jn = reshape(@view(c.Jpack[c.poffs[n] + 1:c.poffs[n + 1]]), dims[n], dims[n])
+        Jn = reshape(@view(Jpack[poffs[n] + 1:poffs[n + 1]]), dims[n], dims[n])
         mul!(@view(Y[rn, :]), Jn, @view(X[rn, :]), 1.0, 1.0)
         for m = 1:S
             rm = offs[m] + 1:offs[m + 1]
-            K = _sliced_exchange(_slice_vee(c.V, n, m), @view(c.C[rn, :]), @view(c.C[rm, :]))
+            K = _sliced_exchange(_slice_vee(V, n, m), @view(C[rn, :]), @view(C[rm, :]))
             mul!(@view(Y[rn, :]), K, @view(X[rm, :]), -1.0, 1.0)
         end
     end
     all(isfinite, Y) || error("nonfinite physical Fock action output")
     Y
+end
+function _audit_action!(Y, c::_SlicedFockAuditContext, X)
+    c.actions += 1; c.rhs += size(X, 2)
+    _sliced_occupied_action!(Y, c.H, c.V, c.layout, c.C, c.Jpack, c.poffs, X)
 end
 _q(C, X) = X - C * (C' * X)
 _vnorm(X) = size(X, 2) == 0 ? 0.0 : opnorm(X)

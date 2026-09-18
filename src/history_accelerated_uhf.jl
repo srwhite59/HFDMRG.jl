@@ -31,15 +31,15 @@ function _history_uhf_inputs(Hup, Hdn, V, Cup, Cdn, policy)
     nothing
 end
 function _history_uhf_physical(Hup, Hdn, V, Cup, Cdn)
-    Dup, Ddn = Cup * Cup', Cdn * Cdn'
-    direct = V * (diag(Dup) + diag(Ddn))
-    Fup, Fdn = Hup + Diagonal(direct) - V .* Dup, Hdn + Diagonal(direct) - V .* Ddn
-    FupC, FdnC = Fup * Cup, Fdn * Cdn
+    density = vec(sum(abs2, Cup; dims = 2) + sum(abs2, Cdn; dims = 2))
+    direct = V * density
+    FupC, HupC = _history_occupied_action(Hup, V, Cup, direct, Cup)
+    FdnC, HdnC = _history_occupied_action(Hdn, V, Cdn, direct, Cdn)
     Rup, Rdn = FupC - Cup * (Cup' * FupC), FdnC - Cdn * (Cdn' * FdnC)
     rup, rdn = norm(Rup), norm(Rdn)
     K_alpha, K_beta = sqrt(2) * rup, sqrt(2) * rdn
     sz = (size(Cup, 2) - size(Cdn, 2)) / 2
-    (; energy = 0.5dot(Dup, Fup + Hup) + 0.5dot(Ddn, Fdn + Hdn),
+    (; energy = 0.5dot(Cup, FupC + HupC) + 0.5dot(Cdn, FdnC + HdnC),
        residual_up = rup, residual_dn = rdn, residual = max(rup, rdn),
        residual_rms = hypot(rup, rdn) / sqrt(2), K_alpha, K_beta,
        K = hypot(K_alpha, K_beta), gram_up = _history_gram(Cup), gram_dn = _history_gram(Cdn),

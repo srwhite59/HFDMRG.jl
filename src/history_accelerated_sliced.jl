@@ -289,23 +289,26 @@ function _history_uhf_model_metrics(model::NamedTuple{(:Hup, :Hdn, :G)}, Cup, Cd
 end
 
 function _history_physical(H, backend::_SlicedHistoryBackend, C)
-    D, F = C * C', copy(H)
-    sliced_add_fock_r!(F, D, backend.V, backend.layout)
-    FC = F * C
-    (; energy = dot(D, F + H), residual = norm(FC - C * (C' * FC)),
+    Jpack, poffs = _sliced_hartree_data(backend.layout, backend.V, C, C)
+    FC = _sliced_occupied_action!(similar(C), H, backend.V, backend.layout,
+        C, Jpack, poffs, C)
+    HC = H * C
+    (; energy = dot(C, FC + HC), residual = norm(FC - C * (C' * FC)),
        gram = norm(C' * C - I))
 end
 
 function _history_uhf_physical(Hup, Hdn, backend::_SlicedHistoryBackend, Cup, Cdn)
-    Dup, Ddn = Cup * Cup', Cdn * Cdn'
-    Fup, Fdn = copy(Hup), copy(Hdn)
-    sliced_add_fock_uhf!(Fup, Fdn, Dup, Ddn, backend.V, backend.layout)
-    FupC, FdnC = Fup * Cup, Fdn * Cdn
+    Jpack, poffs = _sliced_hartree_data(backend.layout, backend.V, Cup, Cdn)
+    FupC = _sliced_occupied_action!(similar(Cup), Hup, backend.V,
+        backend.layout, Cup, Jpack, poffs, Cup)
+    FdnC = _sliced_occupied_action!(similar(Cdn), Hdn, backend.V,
+        backend.layout, Cdn, Jpack, poffs, Cdn)
+    HupC, HdnC = Hup * Cup, Hdn * Cdn
     Rup, Rdn = FupC - Cup * (Cup' * FupC), FdnC - Cdn * (Cdn' * FdnC)
     rup, rdn = norm(Rup), norm(Rdn)
     K_alpha, K_beta = sqrt(2) * rup, sqrt(2) * rdn
     sz = (size(Cup, 2) - size(Cdn, 2)) / 2
-    (; energy = 0.5dot(Dup, Fup + Hup) + 0.5dot(Ddn, Fdn + Hdn),
+    (; energy = 0.5dot(Cup, FupC + HupC) + 0.5dot(Cdn, FdnC + HdnC),
        residual_up = rup, residual_dn = rdn, residual = max(rup, rdn),
        residual_rms = hypot(rup, rdn) / sqrt(2), K_alpha, K_beta,
        K = hypot(K_alpha, K_beta), gram_up = _history_gram(Cup),
