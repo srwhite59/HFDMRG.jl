@@ -212,7 +212,7 @@ function _state_spectral_clusters(values, envelope::Float64)
 end
 
 function _finite_rhf_selection(eigenvalues, rows::Int, maximum_occupied::Int,
-        control::RHFStateControl)
+        control::RHFStateControl; single_spin::Bool=false)
     explicit = min(rows, maximum_occupied)
     order = collect(length(eigenvalues):-1:length(eigenvalues)-explicit+1)
     singular = [sqrt(clamp(eigenvalues[index], 0.0, 1.0)) for index in order]
@@ -229,14 +229,17 @@ function _finite_rhf_selection(eigenvalues, rows::Int, maximum_occupied::Int,
         kept_end < completed && continue
         active = kept_end - completed
         active <= control.maximum_active || continue
-        fidelity = 1.0
+        retained_probability = 1.0
         @inbounds for index = 1:completed
-            fidelity *= max(0.0, 1.0 - right_weights[index])
+            retained_probability *= max(0.0, 1.0 - right_weights[index])
         end
         @inbounds for index = kept_end+1:explicit
-            fidelity *= max(0.0, 1.0 - left_weights[index])
+            retained_probability *= max(0.0, 1.0 - left_weights[index])
         end
-        discarded = max(0.0, 1.0 - fidelity^2)
+        # Each UHF spin owns its determinant probability. RHF represents
+        # two identical spin determinants and uses their joint probability.
+        probability = single_spin ? retained_probability : retained_probability^2
+        discarded = max(0.0, 1.0 - probability)
         candidate = (; completed, active, kept_end, discarded)
         if discarded <= control.cutoff && (best_meeting === nothing ||
                 active < best_meeting.active ||
@@ -263,7 +266,7 @@ end
 
 function _factor_state_link(local_density, left_rank::Int, right_rank::Int,
         control::RHFStateControl; cross=nothing,
-        maximum_occupied::Union{Nothing,Int}=nothing)
+        maximum_occupied::Union{Nothing,Int}=nothing, single_spin::Bool=false)
     rows = left_rank + right_rank
     size(local_density) == (rows, rows) || throw(DimensionMismatch(
         "local restriction has the wrong dimensions"))
@@ -327,7 +330,7 @@ function _factor_state_link(local_density, left_rank::Int, right_rank::Int,
     if !control.exact
         nominal = maximum_occupied === nothing ? rows : maximum_occupied
         completed, active, discarded, reason = _finite_rhf_selection(
-            factors.values, rows, nominal, control)
+            factors.values, rows, nominal, control; single_spin)
     end
     sort!(completed); sort!(active)
     completed_map = Matrix(factors.vectors[:, completed])

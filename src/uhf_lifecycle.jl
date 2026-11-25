@@ -5,6 +5,10 @@ end
 
 UHFStateControl(control::RHFStateControl) = UHFStateControl(control, control)
 
+_factor_uhf_state_link(density, left_rank, right_rank, control; kwargs...) =
+    _factor_state_link(density, left_rank, right_rank, control;
+        kwargs..., single_spin=true)
+
 mutable struct UHFMovingRoot
     alpha::RHFMovingRoot
     beta::RHFMovingRoot
@@ -102,11 +106,11 @@ function initialize_uhf_neel_lifecycle(one_body::BandedOneBody,
                 alpha_cursor, intervals[cell], current.alpha.rank, true)
             beta_ids, beta_parent, beta_cross = _fragment_parent(beta_cursor,
                 intervals[cell], current.beta.rank, true)
-            alpha_link = _factor_state_link(alpha_parent *
+            alpha_link = _factor_uhf_state_link(alpha_parent *
                 transpose(alpha_parent), length(intervals[cell]),
                 current.alpha.rank, control.alpha; cross=alpha_cross,
                 maximum_occupied=length(alpha_ids))
-            beta_link = _factor_state_link(beta_parent * transpose(beta_parent),
+            beta_link = _factor_uhf_state_link(beta_parent * transpose(beta_parent),
                 length(intervals[cell]), current.beta.rank, control.beta;
                 cross=beta_cross, maximum_occupied=length(beta_ids))
             current = _build_independent_spin_entry!(workspace.builder,
@@ -125,11 +129,11 @@ function initialize_uhf_neel_lifecycle(one_body::BandedOneBody,
                 alpha_cursor, intervals[cell], current.alpha.rank, false)
             beta_ids, beta_parent, beta_cross = _fragment_parent(beta_cursor,
                 intervals[cell], current.beta.rank, false)
-            alpha_link = _factor_state_link(alpha_parent *
+            alpha_link = _factor_uhf_state_link(alpha_parent *
                 transpose(alpha_parent), current.alpha.rank,
                 length(intervals[cell]), control.alpha; cross=alpha_cross,
                 maximum_occupied=length(alpha_ids))
-            beta_link = _factor_state_link(beta_parent * transpose(beta_parent),
+            beta_link = _factor_uhf_state_link(beta_parent * transpose(beta_parent),
                 current.beta.rank, length(intervals[cell]), control.beta;
                 cross=beta_cross, maximum_occupied=length(beta_ids))
             current = _build_independent_spin_entry!(workspace.builder,
@@ -215,13 +219,13 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
         width = length(lifecycle.intervals[cell])
         alpha_local = left.alpha.rank + width
         beta_local = left.beta.rank + width
-        alpha_link = _factor_state_link(
+        alpha_link = _factor_uhf_state_link(
             @view(alpha_root.covariance[1:alpha_local, 1:alpha_local]),
             left.alpha.rank, width, control.alpha;
             cross=@view(alpha_root.covariance[1:alpha_local,
                 alpha_local+1:alpha_root.rank]),
             maximum_occupied=alpha_root.occupied)
-        beta_link = _factor_state_link(
+        beta_link = _factor_uhf_state_link(
             @view(beta_root.covariance[1:beta_local, 1:beta_local]),
             left.beta.rank, width, control.beta;
             cross=@view(beta_root.covariance[1:beta_local,
@@ -243,13 +247,13 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
         beta_local = width + right.beta.rank
         alpha_start = alpha_root.rank-alpha_local+1
         beta_start = beta_root.rank-beta_local+1
-        alpha_link = _factor_state_link(@view(alpha_root.covariance[
+        alpha_link = _factor_uhf_state_link(@view(alpha_root.covariance[
                 alpha_start:alpha_root.rank, alpha_start:alpha_root.rank]),
             width, right.alpha.rank, control.alpha;
             cross=transpose(@view(alpha_root.covariance[1:alpha_start-1,
                 alpha_start:alpha_root.rank])),
             maximum_occupied=alpha_root.occupied)
-        beta_link = _factor_state_link(@view(beta_root.covariance[
+        beta_link = _factor_uhf_state_link(@view(beta_root.covariance[
                 beta_start:beta_root.rank, beta_start:beta_root.rank]),
             width, right.beta.rank, control.beta;
             cross=transpose(@view(beta_root.covariance[1:beta_start-1,
@@ -280,13 +284,13 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
         beta_local = width + right.beta.rank
         alpha_start = alpha_root.rank-alpha_local+1
         beta_start = beta_root.rank-beta_local+1
-        alpha_link = _factor_state_link(@view(alpha_root.covariance[
+        alpha_link = _factor_uhf_state_link(@view(alpha_root.covariance[
                 alpha_start:alpha_root.rank, alpha_start:alpha_root.rank]),
             width, right.alpha.rank, control.alpha;
             cross=transpose(@view(alpha_root.covariance[1:alpha_start-1,
                 alpha_start:alpha_root.rank])),
             maximum_occupied=alpha_root.occupied)
-        beta_link = _factor_state_link(@view(beta_root.covariance[
+        beta_link = _factor_uhf_state_link(@view(beta_root.covariance[
                 beta_start:beta_root.rank, beta_start:beta_root.rank]),
             width, right.beta.rank, control.beta;
             cross=transpose(@view(beta_root.covariance[1:beta_start-1,
@@ -306,13 +310,13 @@ function _uhf_build_candidate!(root::UHFMovingRoot,
         width = length(lifecycle.intervals[cell])
         alpha_local = left.alpha.rank + width
         beta_local = left.beta.rank + width
-        alpha_link = _factor_state_link(
+        alpha_link = _factor_uhf_state_link(
             @view(alpha_root.covariance[1:alpha_local, 1:alpha_local]),
             left.alpha.rank, width, control.alpha;
             cross=@view(alpha_root.covariance[1:alpha_local,
                 alpha_local+1:alpha_root.rank]),
             maximum_occupied=alpha_root.occupied)
-        beta_link = _factor_state_link(
+        beta_link = _factor_uhf_state_link(
             @view(beta_root.covariance[1:beta_local, 1:beta_local]),
             left.beta.rank, width, control.beta;
             cross=@view(beta_root.covariance[1:beta_local,

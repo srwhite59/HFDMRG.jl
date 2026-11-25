@@ -1,6 +1,8 @@
 # Solver controls
 
-All supported `solve_hfdmrg` routes use the same moving-window controls.
+## Historical dense and sliced routes
+
+The historical matrix-based `solve_hfdmrg` routes use these moving-window controls.
 
 | Keyword | Default | Meaning |
 |---|---:|---|
@@ -86,3 +88,23 @@ in solver wall time.
 | Returned orbitals lose orthogonality | Check the input Gram matrices and that the observer did not mutate its arrays. Large errors indicate invalid input or numerical failure. |
 | Recomputed and returned energies differ | During damped, unconverged local SCF the internal density can be non-idempotent. Require final stationarity and use the same interaction and scalar-offset convention. |
 | A sliced calculation is unexpectedly expensive | Use fixed `V6` for uniform slices, construct the cached backend explicitly, align `block_partition`, and account for observer work. |
+
+## Compact finite state selection
+
+On each compact cut, `state_maxdim` caps the retained active rank. Let
+``P_\sigma`` denote the product of retained probabilities in one spin
+sector. A mode made filled contributes its occupation, a mode made empty
+contributes one minus its occupation, and active modes contribute one.
+Finite UHF applies `state_cutoff` to ``1-P_\sigma`` independently in
+each spin. Finite RHF applies the cutoff to the closed-shell loss
+``1-P^2``. When the cap prevents reaching the cutoff, the selection uses
+the lowest loss among permitted whole-cluster choices.
+
+In v0.1.0 finite UHF used ``1-P_\sigma^2`` in each spin. The
+`UHFDMRGResult.maximum_alpha_discarded_squared_weight` and
+`maximum_beta_discarded_squared_weight` field names remain the same.
+They report the largest published nonlinear loss in their respective
+spins using ``1-P_\sigma``. The associated per-spin certificates during
+initialization and replay use the same probability convention. The same
+numeric cutoff can therefore yield different UHF ranks and energies.
+`exact=true` retains the existing exact-selection behavior.
