@@ -663,6 +663,31 @@ function _rel_converged(energy_old, energy_new, cutoff)
     abs(energy_old - energy_new) < cutoff * scale
 end
 
+function _local_scf_converged(previous, energy, cutoff, relative)
+    cutoff == Inf && return isfinite(energy)
+    previous === nothing && return false
+    relative ? _rel_converged(previous, energy, cutoff) :
+        abs(previous - energy) < cutoff
+end
+
+function _sweep_endpoint_energy!(F, H, density, orbitals, win)
+    mul!(density, orbitals, orbitals')
+    copyto!(F, H)
+    vee_add_fock_r!(F, density, win)
+    dot(density, F) + dot(density, H)
+end
+
+function _sweep_endpoint_energy!(Fup, Fdn, Hup, Hdn, rhoup, rhodn,
+        psiup, psidn, win)
+    mul!(rhoup, psiup, psiup')
+    mul!(rhodn, psidn, psidn')
+    copyto!(Fup, Hup)
+    copyto!(Fdn, Hdn)
+    vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
+    0.5 * (dot(rhoup, Fup) + dot(rhoup, Hup) +
+           dot(rhodn, Fdn) + dot(rhodn, Hdn))
+end
+
 function solve_hfdmrg_core(H, Vee, psiup0, psidn0; frozen_occupied = :off,
         frozen_leakage_schedule = nothing, kwargs...)
     frozen_occupied in (:off, :roundoff_exact) ||
@@ -689,6 +714,8 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
     _diagnostics = nothing,
     verbose = false) where {frozen_mode}
 
+    maxiter isa Integer && maxiter > 0 ||
+        throw(ArgumentError("maxiter must be a positive sweep count"))
     environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(H, 1)
     frozen = frozen_mode === :off ? nothing : _frozen_policy(
@@ -713,7 +740,7 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
 
     psiallup = psiup0
     psialldn = restricted ? psiup0 : psidn0
-    energyiter = 10000.0
+    energyiter = nothing
     lambda = [1.0 for _ = 1:nblocks]
     scf_cutoff === nothing && (scf_cutoff = cutoff)
 
@@ -737,7 +764,7 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                     block[b + 1 + nblockcenter].vee, Cra, Vee)
                 (H1B, Cra, win)
             end
-            energy = energylast = 1e10
+            energylast = nothing
             local_energies = detailed ? Float64[] : nothing
             rise_updates = detailed ? Int[] : nothing
             damping_before = detailed ? lambda[b] : 0.0
@@ -758,6 +785,7 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                 @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
             end
             for s = 1:4
+                evaluated_damping = lambda[b]
                 if restricted
                     evals, evecs = _eigsym_occupied(Fup, Nup)
                     psiup = evecs[:, 1:Nup]
@@ -778,11 +806,23 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
                 end
                 local_iterations = s
                 detailed && push!(local_energies, energy)
-                if energy > energylast
+                if energylast !== nothing && energy > energylast
                     detailed && push!(rise_updates, s)
                     lambda[b] *= 0.5
                 end
-                locally_converged = abs(energylast - energy) < scf_cutoff
+                locally_converged = _local_scf_converged(
+                    energylast, energy, scf_cutoff, false)
+                # These orbitals are published before the window is absorbed.
+                # The Fock for a mixed density cannot score their determinant.
+                if (locally_converged || s == 4) &&
+                        evaluated_damping < 1 && (b, dir, transdir) == last(fullsweep)
+                    energy = @timeg "endpoint energy" if restricted
+                        _sweep_endpoint_energy!(Fup, H1B, rhoup, psiup, win)
+                    else
+                        _sweep_endpoint_energy!(Fup, Fdn, H1B, H1B, rhoup,
+                            rhodn, psiup, psidn, win)
+                    end
+                end
                 (locally_converged || s == 4) && break
                 energylast = energy
             end
@@ -911,7 +951,7 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
             continue
         end
         verbose && @show iter, energy, energyiter
-        converged = abs(energyiter - energy) < cutoff
+        converged = energyiter !== nothing && abs(energyiter - energy) < cutoff
         energyiter = energy
         if frozen !== nothing
             action = _frozen_audit!(frozen, _diagnostics); converged = false
@@ -983,6 +1023,8 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
     _diagnostics = nothing,
     verbose = false) where {frozen_mode}
 
+    maxiter isa Integer && maxiter > 0 ||
+        throw(ArgumentError("maxiter must be a positive sweep count"))
     environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(Hup, 1)
     frozen = frozen_mode === :off ? nothing : _frozen_policy(
@@ -1012,7 +1054,7 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
 
     psiallup = psiup0
     psialldn = psidn0
-    energyiter = 10000.0
+    energyiter = nothing
     lambda = [1.0 for _ = 1:nblocks]
     scf_cutoff === nothing && (scf_cutoff = cutoff / 10)
 
@@ -1040,7 +1082,7 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
                     block[b + 1 + nblockcenter].vee, Cra, Vee)
                 (H1Bup, H1Bdn, Cra, win)
             end
-            energy = energylast = 1e10
+            energylast = nothing
             local_energies = detailed ? Float64[] : nothing
             rise_updates = detailed ? Int[] : nothing
             damping_before = detailed ? lambda[b] : 0.0
@@ -1054,6 +1096,7 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
             Fup, Fdn = copy(H1Bup), copy(H1Bdn)
             @timeg "Fock build" vee_add_fock!(Fup, Fdn, rhoup, rhodn, win)
             for s = 1:4
+                evaluated_damping = lambda[b]
                 evals, evecs = _eigsym_occupied(Fup, Nup)
                 psiup = evecs[:, 1:Nup]
                 rhoup = (1 - lambda[b]) * rhoup + lambda[b] * psiup * psiup'
@@ -1067,11 +1110,17 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
 
                 local_iterations = s
                 detailed && push!(local_energies, energy)
-                if energy > energylast
+                if energylast !== nothing && energy > energylast
                     detailed && push!(rise_updates, s)
                     lambda[b] *= 0.5
                 end
-                locally_converged = _rel_converged(energylast, energy, scf_cutoff)
+                locally_converged = _local_scf_converged(
+                    energylast, energy, scf_cutoff, true)
+                if (locally_converged || s == 4) &&
+                        evaluated_damping < 1 && (b, dir, transdir) == last(fullsweep)
+                    energy = @timeg "endpoint energy" _sweep_endpoint_energy!(
+                        Fup, Fdn, H1Bup, H1Bdn, rhoup, rhodn, psiup, psidn, win)
+                end
                 (locally_converged || s == 4) && break
                 energylast = energy
             end
@@ -1202,7 +1251,7 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
         end
         verbose && @show iter, energy, energyiter
         verbose && flush(stdout)
-        converged = _rel_converged(energyiter, energy, cutoff)
+        converged = energyiter !== nothing && _rel_converged(energyiter, energy, cutoff)
         energyiter = energy
         if frozen !== nothing
             action = _frozen_audit!(frozen, _diagnostics); converged = false

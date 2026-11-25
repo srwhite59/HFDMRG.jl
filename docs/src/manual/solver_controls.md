@@ -7,7 +7,7 @@ All supported `solve_hfdmrg` routes use the same moving-window controls.
 | `blocksize` | `200` | Requested number of physical functions in an interior chunk. This is not a DMRG bond dimension. Small systems may use a smaller effective size to form enough chunks. |
 | `block_partition` | `nothing` | Optional `SliceLayout` giving one physical slice per chunk. It overrides `blocksize`; when the backend has a layout, both layouts must agree. |
 | `nblockcenter` | `1` | Number of consecutive chunks kept explicit in the moving center. Larger centers enlarge the local variational space but increase local work. |
-| `maxiter` | `1000` | Maximum number of complete left-to-right plus right-to-left sweeps. |
+| `maxiter` | `1000` | Positive integer maximum number of complete left-to-right plus right-to-left sweeps. |
 | `cutoff` | `1e-11` | End-of-sweep energy stopping tolerance. Common-H routes use an absolute comparison; genuinely split-H routes scale it by `max(1, abs(E))`. |
 | `scf_cutoff` | `nothing` | Local SCF energy tolerance. `nothing` means `cutoff` for common H and `cutoff/10` for split H. Each window allows at most four microiterations. |
 | `environment_cutoff` | `1e-10` | Absolute singular-value cutoff for grown occupied-orbital environment bases. Every singular value strictly above the cutoff is retained, with at least one vector. |
@@ -35,6 +35,7 @@ its complete interaction work to the projection route.
 ## Convergence and stationarity
 
 HFDMRG's built-in convergence flag is an end-of-sweep energy-change test.
+The first completed sweep supplies the baseline for the second.
 Reaching `maxiter` without satisfying it is not an exception: the solver
 returns the last completed-sweep determinant. Conversely, a small energy
 change alone is not proof of Fock stationarity, Aufbau ordering, uniqueness, or
@@ -55,7 +56,7 @@ and physical stationarity.
 
 An observer receives a qualified `HFDMRG.SweepInfo` after each complete sweep.
 The orbitals correspond to the determinant associated with the reported
-end-of-sweep energy.
+end-of-sweep energy evaluated on those orbitals.
 
 ```julia
 last_info = Ref{Any}(nothing)

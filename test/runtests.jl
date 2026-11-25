@@ -117,22 +117,28 @@ try
         kw = (; maxiter = 1, blocksize = 2, cutoff = 0.0, verbose = false)
         density = HFDMRG.DensityDensityBackend(V)
         cached = HFDMRG.SlicedBasisBackendCached(layout, V6)
+        function evaluated_damped(window)
+            window.local_iterations > 0 && (window.damping_before < 1 ||
+                any(<(window.local_iterations), window.rise_updates))
+        end
         routes = (
-            (density, b -> HFDMRG.solve_hfdmrg_core(H, b, up, up;
-                restricted = true, scf_cutoff = 0.0, kw...)),
-            (density, b -> HFDMRG.solve_hfdmrg_core(H, b, up, dn;
-                restricted = false, scf_cutoff = 0.0, kw...)),
-            (density, b -> HFDMRG.solve_hfdmrg_core_split(H, Hdn, b, up, dn;
-                scf_cutoff = 0.0, kw...)),
-            (cached, b -> HFDMRG.solve_hfdmrg_core(H, b, up, dn;
+            (density, (b, d) -> HFDMRG.solve_hfdmrg_core(H, b, up, up;
+                restricted = true, scf_cutoff = 0.0, _diagnostics = d, kw...)),
+            (density, (b, d) -> HFDMRG.solve_hfdmrg_core(H, b, up, dn;
+                restricted = false, scf_cutoff = 0.0, _diagnostics = d, kw...)),
+            (density, (b, d) -> HFDMRG.solve_hfdmrg_core_split(H, Hdn, b, up, dn;
+                scf_cutoff = 0.0, _diagnostics = d, kw...)),
+            (cached, (b, d) -> HFDMRG.solve_hfdmrg_core(H, b, up, dn;
                 restricted = false, block_partition = layout,
-                scf_cutoff = 0.0, kw...)),
+                scf_cutoff = 0.0, _diagnostics = d, kw...)),
         )
         for (backend, run) in routes
             counted = FockCountingBackend(backend, 0, 0)
-            @test run(counted) == run(backend)
+            diagnostics = HFDMRG._RunDiagnostics()
+            @test run(counted, diagnostics) == run(backend, nothing)
             @test counted.windows > 0
-            @test counted.calls == 5 * counted.windows
+            @test counted.calls == 5 * counted.windows +
+                evaluated_damped(last(diagnostics.windows))
         end
 
         counted = FockCountingBackend(density, 0, 0)
@@ -158,11 +164,7 @@ try
             result = run(counted, diagnostics, scf)
             oracle = run(density, HFDMRG._RunDiagnostics(), scf)
             iterations = getproperty.(diagnostics.windows, :local_iterations)
-            publication_focks = count(diagnostics.windows) do window
-                prior_rises = count(<(window.local_iterations), window.rise_updates)
-                window.local_iterations > 0 &&
-                    window.damping_before * 0.5^prior_rises < 1
-            end
+            publication_focks = count(evaluated_damped, diagnostics.windows)
             @test result == oracle
             @test counted.calls ==
                 sum(n == 0 ? 0 : n + 1 for n in iterations) + publication_focks
@@ -262,9 +264,8 @@ try
                          !w.locally_converged && w.cap_exhausted, detailed.windows)
         @test detailed.windows[end].final_energy == result[3]
         for w in detailed.windows
-            expected_rises = [s for s = eachindex(w.local_energies)
-                if w.local_energies[s] >
-                   (s == 1 ? 1e10 : w.local_energies[s - 1])]
+            expected_rises = [s for s = 2:length(w.local_energies)
+                if w.local_energies[s] > w.local_energies[s - 1]]
             @test w.rise_updates == expected_rises
             @test w.damping_after ==
                   w.damping_before * 0.5^length(w.rise_updates)
@@ -692,6 +693,8 @@ try
             rtol = 0)
     end
 
+    include("historical_sweep_energy.jl")
+
     @testset "Per-sweep observer" begin
         rng = MersenneTwister(809)
         N = 12
@@ -760,10 +763,10 @@ try
         restricted = solve_hfdmrg(H, zero_backend, up0;
             maxiter = 3, blocksize = 2, cutoff = Inf, verbose = false,
             observer = info -> (push!(restricted_seen, info); false))
-        @test length(restricted_seen) == 1
-        @test restricted_seen[1].converged
-        @test restricted_seen[1].psiup === restricted_seen[1].psidn
-        @test restricted_seen[1].psiup === restricted[1]
+        @test getproperty.(restricted_seen, :sweep) == [1, 2]
+        @test !first(restricted_seen).converged && last(restricted_seen).converged
+        @test all(info -> info.psiup === info.psidn, restricted_seen)
+        @test last(restricted_seen).psiup === restricted[1]
         @test restricted[1] === restricted[2]
     end
 

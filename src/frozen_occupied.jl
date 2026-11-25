@@ -587,7 +587,7 @@ function _frozen_local!(p, li, ri, left, cra, right, Hup, Hdn, win, lambda,
     rup, rdn = Uup * Uup', Udn * Udn'
     psiup, psidn = Zup * Uup, Zdn * Udn
     energies, rises = Float64[], Int[]
-    energy, lastenergy, converged, nit = ef, 1e10, false, 0
+    energy, lastenergy, converged, nit = ef, nothing, false, 0
     evaluated_damping = one(lambda)
     if nup == 0 && ndn == 0
         converged = true
@@ -625,9 +625,9 @@ function _frozen_local!(p, li, ri, left, cra, right, Hup, Hdn, win, lambda,
             end
             nit = s
             push!(energies, energy)
-            energy > lastenergy && (push!(rises, s); lambda *= 0.5)
-            converged = relative ? _rel_converged(lastenergy, energy, scf_cutoff) :
-                abs(lastenergy - energy) < scf_cutoff
+            lastenergy !== nothing && energy > lastenergy &&
+                (push!(rises, s); lambda *= 0.5)
+            converged = _local_scf_converged(lastenergy, energy, scf_cutoff, relative)
             (converged || s == 4) && break
             lastenergy = energy
         end

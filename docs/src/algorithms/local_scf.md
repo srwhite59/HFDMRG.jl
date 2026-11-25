@@ -54,15 +54,15 @@ repeat at most four times
   mix old and new determinant densities with the window's weight lambda
   build the post-density Fock matrix/matrices
   evaluate the trace-convention energy
-  if energy rose, halve lambda for later updates at this window position
-  stop locally when the energy change is below scf_cutoff
+  if energy rose from the previous measured update, halve lambda for later updates
+  stop locally when two measured energies differ by less than the tolerance
 end
 ```
 
 The post-density Fock is reused as the next diagonalization input. Therefore
 ``n`` microiterations require exactly ``n+1`` backend Fock builds, not ``2n``.
 The mixing weight is associated with a window index and persists across
-sweeps.
+sweeps. Setting `scf_cutoff=Inf` requests one finite local update.
 
 ## Occupied eigensolves
 
@@ -88,6 +88,8 @@ eigenspace is the meaningful invariant.
   direct/exchange convention.
 - A post-update Fock is not discarded before the next microiteration.
 - Returned full-basis orbitals are expanded after the final local SCF update.
+  If that update evaluated a mixed density, the last window of the sweep
+  scores the published orbitals with one extra window Fock build.
 
 ## Convergence and stationarity
 
@@ -111,7 +113,8 @@ occupation ordering independently.
 For a full dense window, diagonalization is ``O(w^3)`` and stores ``O(w^2)``.
 Forming densities costs ``O(w^2 n_\sigma)``. The guarded subset operation
 reduces eigensolver work when the occupied fraction is small, but backend Fock
-costs can still dominate. At most five Fock builds occur per window.
+costs can still dominate. Ordinary local SCF uses at most five Fock builds
+per window, plus the endpoint build when needed to score the published state.
 
 ## Code map
 
