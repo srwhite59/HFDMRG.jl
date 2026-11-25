@@ -204,6 +204,7 @@ function _prepare_lifecycle_center!(prepared::FastRHFPreparedCenter,
     end
     _fast_h1_boundary!(h1, left, right, center_rows, rank_left, offset_right,
         one_body)
+    _fill_h1_outer_coupling!(h1, left, right, offset_right, one_body)
 
     channels = _maximum_channel_rank(operator)
     copyto!(prepared.transfer_two, _channel_transfer!(prepared.transfer,

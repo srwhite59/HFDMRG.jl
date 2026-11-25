@@ -2493,6 +2493,7 @@ try
     include("compact_nonlinear_rhf.jl")
     include("compact_rhf_compatibility.jl")
     include("compact_uhf_foundation.jl")
+    include("compact_center_hopping.jl")
     include("compact_nonlinear_uhf.jl")
     include("compact_stopping_policy.jl")
     include("compact_timing.jl")

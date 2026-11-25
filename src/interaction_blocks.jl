@@ -285,20 +285,7 @@ function _fill_merged!(workspace::BlockBuildWorkspace, left::RHFOuterBlock,
     fill!(@view(workspace.h1[1:rank, 1:rank]), 0.0)
     copyto!(@view(workspace.h1[1:rank_left, 1:rank_left]), left.h1)
     copyto!(@view(workspace.h1[rank_left+1:rank, rank_left+1:rank]), right.h1)
-    left_boundary = min(h1_bandwidth(one_body), size(left.right_edge, 1))
-    right_boundary = min(h1_bandwidth(one_body), size(right.left_edge, 1))
-    @inbounds for a = 1:rank_left, b = 1:rank_right
-        coupling = 0.0
-        for li = 1:left_boundary, rj = 1:right_boundary
-            physical_left = last(left.rows) - left_boundary + li
-            physical_right = first(right.rows) + rj - 1
-            coupling += left.right_edge[li, a] *
-                h1_entry(one_body, physical_left, physical_right) *
-                right.left_edge[rj, b]
-        end
-        workspace.h1[a, rank_left + b] = coupling
-        workspace.h1[rank_left + b, a] = coupling
-    end
+    _fill_h1_outer_coupling!(workspace.h1, left, right, rank_left, one_body)
     fill!(@view(workspace.pair_field[1:pairs, 1:pairs]), 0.0)
     fill!(@view(workspace.feature_left[1:pairs, :]), 0.0)
     fill!(@view(workspace.feature_right[1:pairs, :]), 0.0)

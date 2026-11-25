@@ -162,6 +162,7 @@ function _prepare_uhf_spin_center!(prepared::FastRHFPreparedCenter,
         end
         h1[ml+a, ro+b] = value; h1[ro+b, ml+a] = value
     end
+    _fill_h1_outer_coupling!(h1, left, right, ro, one_body)
     channels = _maximum_channel_rank(operator)
     copyto!(prepared.transfer_two, _channel_transfer!(prepared.transfer,
         prepared.transfer_scratch, operator, 2))
