@@ -2494,6 +2494,7 @@ try
     include("compact_one_body_constructor.jl")
     include("compact_rhf_lifecycle.jl")
     include("compact_terminal_fragments.jl")
+    include("compact_two_partial_groups.jl")
     include("compact_occupation_defaults.jl")
     include("compact_rhf_residual_transfer.jl")
     include("compact_nonlinear_rhf.jl")

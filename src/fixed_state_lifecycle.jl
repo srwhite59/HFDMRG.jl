@@ -111,7 +111,7 @@ mutable struct RHFLifecycleWorkspace
     prepared::FastRHFPreparedCenter
     builder::BlockBuildWorkspace
     root::RHFRootWorkspace
-    physical::RHFOuterBlock
+    physical::Union{Nothing,RHFOuterBlock}
     empty::RHFOuterBlock
     maximum_rank::Int
 end
@@ -121,15 +121,25 @@ function RHFLifecycleWorkspace(one_body::BandedOneBody,
         maximum_rhs::Int=3)
     maximum_active >= 0 || throw(ArgumentError(
         "state capacity must be nonnegative"))
-    maximum_rank = 2UNIT_CELL_WIDTH + 2maximum_active
+    first_width = _first_group_count(operator)
+    remaining = operator.sites - first_width
+    full_group = first_width == UNIT_CELL_WIDTH || remaining >= UNIT_CELL_WIDTH
+    # Without a full group, the sole two-group center has no outer basis.
+    maximum_rank = full_group ? 2UNIT_CELL_WIDTH + 2maximum_active : operator.sites
+    builder_rank = full_group ? UNIT_CELL_WIDTH + maximum_active :
+        max(first_width, remaining)
     channels = _maximum_channel_rank(operator)
     prepared = FastRHFPreparedCenter(maximum_rank, operator;
         maximum_rhs=max(maximum_rhs, channels))
-    builder = BlockBuildWorkspace(max(UNIT_CELL_WIDTH + maximum_active,
-        UNIT_CELL_WIDTH), channels)
+    builder = BlockBuildWorkspace(builder_rank, channels)
     root = RHFRootWorkspace(Matrix{Float64}(undef, maximum_rank, maximum_rank),
         Matrix{Float64}(undef, maximum_rank, maximum_rank))
-    physical = seed_cell_block(one_body, operator, 1)
+    physical = if first_width == UNIT_CELL_WIDTH
+        seed_cell_block(one_body, operator, 1)
+    elseif full_group
+        seed_interval_block(one_body, operator, 2,
+            first_width+1:first_width+UNIT_CELL_WIDTH)
+    end
     empty = _empty_outer_block(operator, UInt(0))
     RHFLifecycleWorkspace(prepared, builder, root, physical, empty,
         maximum_rank)
@@ -140,7 +150,7 @@ function _physical_block(workspace::RHFLifecycleWorkspace, cell::Int,
         operator::UnitCellInteraction, provenance::UInt;
         reflected::Bool=false)
     if length(rows) == UNIT_CELL_WIDTH
-        _prepare_physical_block!(workspace.physical, cell, rows, one_body,
+        _prepare_physical_block!(something(workspace.physical), cell, rows, one_body,
             operator, provenance; reflected)
     else
         seed_interval_block(one_body, operator, cell, rows; provenance,
