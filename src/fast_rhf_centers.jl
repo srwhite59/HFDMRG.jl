@@ -75,7 +75,7 @@ function FastRHFPreparedCenter(maximum_rank::Int,
             (maximum_rank - 2UNIT_CELL_WIDTH) ÷ 2, 1))
     maximum_rank >= 1 || throw(ArgumentError("maximum rank must be positive"))
     maximum_rhs >= 1 || throw(ArgumentError("RHS capacity must be positive"))
-    channels = max(_maximum_channel_rank(operator), 1)
+    channels = _maximum_channel_rank(operator)
     residual = max(size(operator.residual_transfer, 1), 1)
     maximum_side_rank >= 1 || throw(ArgumentError(
         "side rank capacity must be positive"))
