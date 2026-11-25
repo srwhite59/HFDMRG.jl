@@ -220,3 +220,33 @@ end
     @test limited.active_rank == 1
     @test limited.selection.limiting_reason == :maximum_rank
 end
+
+@testset "compact whole-cluster rank cap minimizes loss" begin
+    weights = [0.5, 0.99, 0.99]
+    orbitals = vcat(Diagonal(sqrt.(weights)), Diagonal(sqrt.(1 .- weights)))
+    density = orbitals * orbitals'
+    function choose(cap, cutoff)
+        HFDMRG._factor_state_link(density[1:3, 1:3], 0, 3,
+            HFDMRG.RHFStateControl(cap, cutoff);
+            cross=density[1:3, 4:6], maximum_occupied=3)
+    end
+    links = [choose(cap, 0.001) for cap = 0:3]
+    expected_loss = 1 - 0.99^4
+    for link in (links[2], links[3])
+        @test link.active_rank == 1
+        @test link.selection.completed == 2
+        @test link.selection.limiting_reason === :maximum_rank
+        @test link.selection.discarded_squared_weight ≈ expected_loss
+        @test link.close_map * link.close_map' ≈ Diagonal([1.0, 0.0, 0.0])
+    end
+    losses = [link.selection.discarded_squared_weight for link in links]
+    @test issorted(losses; rev=true)
+    @test links[4].active_rank == 3 && iszero(losses[4])
+
+    # With a looser cutoff, rank one beats the legal zero-loss rank three
+    # under the existing smallest-sufficient-rank rule.
+    cutoff_limited = choose(3, 0.05)
+    @test cutoff_limited.selection.limiting_reason === :cutoff
+    @test cutoff_limited.active_rank == 1
+    @test cutoff_limited.selection.discarded_squared_weight ≈ expected_loss
+end

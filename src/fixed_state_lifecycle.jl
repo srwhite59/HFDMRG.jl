@@ -244,9 +244,11 @@ function _finite_rhf_selection(eigenvalues, rows::Int, maximum_occupied::Int,
                     discarded < best_meeting.discarded))
             best_meeting = candidate
         end
-        if best_capped === nothing || active > best_capped.active ||
-                (active == best_capped.active &&
-                    discarded < best_capped.discarded)
+        # A binding cap sets a ceiling. A smaller whole-cluster choice can
+        # preserve more weight than the choice that uses every allowed mode.
+        if best_capped === nothing || discarded < best_capped.discarded ||
+                (discarded == best_capped.discarded &&
+                    active > best_capped.active)
             best_capped = candidate
         end
     end
