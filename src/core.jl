@@ -374,22 +374,26 @@ function addblockleft_split(cra, O, lblock, N, Hup, Hdn, Vee, finalindsH)
     end
 end
 
-function getblocksizes(N, m, blocksize; verbose = false)
-    nblocks = div(N - 2 * m, blocksize) + 2
-    while nblocks <= 4
-        blocksize -= 1
-        if blocksize == 0
-            @show N, m, blocksize
-        end
-        nblocks = div(N - 2 * m, blocksize) + 2
-    end
-    aveblocksize = div(N - 2 * m, nblocks - 2)
+function getblocksizes(N, m, blocksize; nblockcenter = 1, verbose = false)
+    blocksize isa Integer && blocksize >= 1 ||
+        throw(ArgumentError("automatic blocksize must be a positive integer"))
+    nblockcenter isa Integer && 1 <= nblockcenter <= N - 4 ||
+        throw(ArgumentError("nblockcenter must be a positive integer and leave " *
+            "room for four other nonempty blocks in a $N-row basis"))
+    # Two fixed identity edges and two other interior chunks are required
+    # by the sweep turnarounds, in addition to the explicit center.
+    minimum_interior = nblockcenter + 2
+    edge = min(max(m, 1), div(N - minimum_interior, 2))
+    interior = N - 2 * edge
+    effective_blocksize = min(blocksize, div(interior, minimum_interior))
+    nblocks = div(interior, effective_blocksize) + 2
+    aveblocksize = div(interior, nblocks - 2)
     blocksizes = [aveblocksize for _ = 1:nblocks]
-    blocksizes[1] = m
-    blocksizes[end] = m
+    blocksizes[1] = edge
+    blocksizes[end] = edge
     missing = N - sum(blocksizes)
     blocksizes[2] += missing
-    Cranges = [1:m for _ = 1:nblocks]
+    Cranges = [1:edge for _ = 1:nblocks]
     for b = 2:nblocks
         Cranges[b] = Cranges[b - 1][end] + 1:Cranges[b - 1][end] + blocksizes[b]
     end
@@ -399,16 +403,18 @@ end
 
 function getblocksizes(N, m, blocksize, nblockcenter, block_partition, Vee;
     verbose = false)
-    block_partition === nothing && return getblocksizes(N, m, blocksize; verbose)
+    block_partition === nothing && return getblocksizes(N, m, blocksize;
+        nblockcenter, verbose)
     block_partition isa SliceLayout || error("block_partition must be a SliceLayout")
-    nblockcenter >= 1 || error("block_partition requires nblockcenter >= 1")
+    nblockcenter isa Integer && nblockcenter >= 1 ||
+        error("block_partition requires a positive integer nblockcenter")
     dims, offs = block_partition.dims, block_partition.offs
     valid = !isempty(dims) && all(>(0), dims) && offs == [0; cumsum(dims)] &&
             offs[end] == N
     valid || error("block_partition must cover exactly 1:N with nonempty contiguous ranges")
     nblocks = length(dims)
     nblocks >= 5 || error("block_partition must contain at least five blocks")
-    nblocks >= nblockcenter + 4 || error("block_partition has too few blocks for nblockcenter")
+    nblockcenter <= nblocks - 4 || error("block_partition has too few blocks for nblockcenter")
     if hasproperty(Vee, :layout) && getproperty(Vee, :layout) isa SliceLayout
         layout = getproperty(Vee, :layout)
         (layout.dims == dims && layout.offs == offs) ||
@@ -719,15 +725,15 @@ function _solve_hfdmrg_core(::Val{frozen_mode}, H, Vee, psiup0, psidn0;
         throw(ArgumentError("maxiter must be a positive sweep count"))
     environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(H, 1)
+    m = restricted ? Nup : Nup + Ndn
+    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
+        block_partition, Vee; verbose)
     frozen = frozen_mode === :off ? nothing : _frozen_policy(
         H, H, Vee, psiup0, psidn0, restricted, block_partition, frozen_leakage_schedule)
     final_policy = frozen
     frozen === nothing || (maxiter = min(maxiter, 24))
     finalindsH, firstindsH = getfinal(H, N)
-    m = restricted ? Nup : Nup + Ndn
     psiall = restricted ? psiup0 : hcat(psiup0, psidn0)
-    nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
-        block_partition, Vee; verbose)
     block = @timeg "initialization" getinitialblocks(nblocks, blocksizes,
         Cranges, psiall, H, Vee, firstindsH, finalindsH; verbose,
         _diagnostics, environment_cutoff, _frozen = frozen)
@@ -1028,20 +1034,20 @@ function _solve_hfdmrg_core_split(::Val{frozen_mode}, Hup, Hdn, Vee, psiup0, psi
         throw(ArgumentError("maxiter must be a positive sweep count"))
     environment_cutoff = _check_environment_cutoff(environment_cutoff)
     Nup, Ndn, N = size(psiup0, 2), size(psidn0, 2), size(Hup, 1)
-    frozen = frozen_mode === :off ? nothing : _frozen_policy(
-        Hup, Hdn, Vee, psiup0, psidn0, false, block_partition, frozen_leakage_schedule)
-    final_policy = frozen
-    frozen === nothing || (maxiter = min(maxiter, 24))
     size(Hup, 2) == N || error("Hup must be square")
     size(Hdn) == (N, N) || error("Hdn must have the same size as Hup")
     size(psiup0, 1) == N || error("psiup0 has wrong row dimension")
     size(psidn0, 1) == N || error("psidn0 has wrong row dimension")
 
-    finalindsH, firstindsH = getfinal(Hup, Hdn, N)
     m = Nup + Ndn
-    psiall = hcat(psiup0, psidn0)
     nblocks, blocksizes, Cranges = getblocksizes(N, m, blocksize, nblockcenter,
         block_partition, Vee; verbose)
+    frozen = frozen_mode === :off ? nothing : _frozen_policy(
+        Hup, Hdn, Vee, psiup0, psidn0, false, block_partition, frozen_leakage_schedule)
+    final_policy = frozen
+    frozen === nothing || (maxiter = min(maxiter, 24))
+    finalindsH, firstindsH = getfinal(Hup, Hdn, N)
+    psiall = hcat(psiup0, psidn0)
     block = @timeg "initialization" getinitialblocks_split(nblocks, blocksizes,
         Cranges, psiall, Hup, Hdn, Vee, firstindsH, finalindsH; verbose,
         _diagnostics, environment_cutoff, _frozen = frozen)

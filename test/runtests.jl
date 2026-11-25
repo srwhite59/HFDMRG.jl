@@ -2489,6 +2489,7 @@ try
         end
     end
 
+    include("historical_block_partition.jl")
     include("compact_rhf_foundation.jl")
     include("compact_one_body_constructor.jl")
     include("compact_rhf_lifecycle.jl")

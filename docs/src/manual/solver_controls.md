@@ -8,7 +8,12 @@ The historical matrix-based `solve_hfdmrg` routes use these moving-window contro
 |---|---:|---|
 | `blocksize` | `200` | Requested number of physical functions in an interior chunk. This is not a DMRG bond dimension. Small systems may use a smaller effective size to form enough chunks. |
 | `block_partition` | `nothing` | Optional `SliceLayout` giving one physical slice per chunk. It overrides `blocksize`; when the backend has a layout, both layouts must agree. |
-| `nblockcenter` | `1` | Number of consecutive chunks kept explicit in the moving center. Larger centers enlarge the local variational space but increase local work. |
+| `nblockcenter` | `1` | Positive number of consecutive chunks kept explicit in the moving center. The partition must have at least four other nonempty chunks. Larger centers increase local work. |
+
+Automatic partitioning uses a positive integer `blocksize`. On small or
+highly occupied systems it can reduce the fixed edge spans and interior chunk
+size to fit the requested center. If there are too few physical functions,
+reduce `nblockcenter` when the basis can support a smaller window.
 | `maxiter` | `1000` | Positive integer maximum number of complete left-to-right plus right-to-left sweeps. |
 | `cutoff` | `1e-11` | End-of-sweep energy stopping tolerance. Common-H routes use an absolute comparison; genuinely split-H routes scale it by `max(1, abs(E))`. |
 | `scf_cutoff` | `nothing` | Local SCF energy tolerance. `nothing` means `cutoff` for common H and `cutoff/10` for split H. Each window allows at most four microiterations. |
