@@ -8,8 +8,8 @@ not replace a future clean-hosted run.
 
 - [x] MIT `LICENSE` with `Copyright (c) 2026 Steven R. White` and retained PPP
   donor provenance.
-- [x] Julia 1.12 and applicable stdlib compatibility bounds; package UUID and
-  version unchanged.
+- [x] Julia 1.12 and applicable stdlib compatibility bounds, with stable
+  package UUID across releases.
 - [x] No package `Manifest.toml`; temporary validation environments leave no
   repository scratch.
 - [x] Public historical RHF/UHF and compact RHF/UHF result contracts are
@@ -32,7 +32,7 @@ not replace a future clean-hosted run.
   `reference/HF_dmrg_legacy.jl` and `reference/Thouless.jl` are his or cleared
   for distribution, and selected retention of the complete existing history.
 - [x] The user confirmed Steven R. White as the sole software citation author;
-  `CITATION.cff` remains a software-only version `0.1.0` record.
+  `CITATION.cff` remains a software-only record and tracks the package version.
 
 ## Required at the public-release boundary
 

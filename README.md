@@ -17,10 +17,18 @@ tensor.
 
 ## Installation
 
-HFDMRG is currently tested with Julia 1.12. From a source checkout:
+HFDMRG is tested with Julia 1.12. To install the published v0.1.1 package
+into the active Julia project:
 
 ```sh
-cd /path/to/hfdmrg
+julia -e 'using Pkg; Pkg.add(url="https://github.com/srwhite59/HFDMRG.jl", rev="v0.1.1")'
+```
+
+To run the shipped examples, clone the tagged source and work in that checkout:
+
+```sh
+git clone --branch v0.1.1 --depth 1 https://github.com/srwhite59/HFDMRG.jl.git
+cd HFDMRG.jl
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using HFDMRG; println("HFDMRG loaded")'
 ```
@@ -234,7 +242,7 @@ rather than copying the sweep engine or adding a global four-index interaction.
 Private history acceleration is documented for maintainers but has no public
 calling syntax. Frozen-occupied operation is not presented as a recommended
 general optimization. Hosted documentation and a public acceleration interface
-remain separate release decisions. Proposed v0.1.0 contents and evidence
+remain separate release decisions. The v0.1.1 changes and evidence
 boundaries are summarized in the [release notes](RELEASE_NOTES.md).
 
 ## Citation and license
