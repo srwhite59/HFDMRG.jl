@@ -50,6 +50,17 @@ function _producer_uhf_solve(atoms)
     result, one_body, operator
 end
 
+struct _ProducerTestBand
+    matrix::Matrix{Float64}
+end
+
+Base.size(h::_ProducerTestBand) = size(h.matrix)
+Base.size(h::_ProducerTestBand, dimension::Int) = size(h.matrix, dimension)
+function Base.getindex(h::_ProducerTestBand, i::Int, j::Int)
+    abs(i - j) <= 1 || error("an out-of-band entry was requested")
+    h.matrix[i, j]
+end
+
 function _producer_fragment_fixture(remainder)
     sites = 2HFDMRG.UNIT_CELL_WIDTH + remainder
     bands = zeros(2, sites)
@@ -259,4 +270,27 @@ end
     @test_throws ArgumentError HFDMRG.producer_energy(result, bad)
     @test_throws DimensionMismatch HFDMRG.ProducerHamiltonian(zeros(2, 3),
         zeros(2, 3); h1_bandwidth=1)
+end
+
+@testset "Producer audit checks the declared one-body band" begin
+    result, one_body, operator, _, _ = _fixed_producer_case(2, :rhf, true, true)
+    _, H, V = _producer_fixture(one_body, operator)
+    @test_throws ArgumentError producer_energy(result,
+        ProducerHamiltonian(H, V; h1_bandwidth=0))
+    checked = ProducerHamiltonian(@view(H[:, :]), V; h1_bandwidth=1)
+    workspace = HFDMRG.ProducerEnergyWorkspace(result, checked)
+    reference = producer_energy(result, checked, workspace)
+    full = producer_energy(result, ProducerHamiltonian(H, V;
+        h1_bandwidth=size(H, 1)-1))
+    @test reference.total ≈ full.total atol=reference.error_envelope rtol=0
+    trusted = ProducerHamiltonian(_ProducerTestBand(H), V;
+        h1_bandwidth=1, trust_h1_bandwidth=true)
+    @test reference == producer_energy(result, trusted)
+
+    # The viewed matrix is still caller-owned. Check both triangles on reuse,
+    # including nonzero couplings far below a typical absolute tolerance.
+    H[3, 1] = 1e-25
+    reads = workspace.projector_block_reads
+    @test_throws ArgumentError producer_energy(result, checked, workspace)
+    @test workspace.projector_block_reads == reads
 end

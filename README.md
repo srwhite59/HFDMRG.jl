@@ -122,6 +122,11 @@ projector blocks from the compact lifecycle without materializing global
 occupied coefficients or a dense density matrix and without mutating the
 solver state.
 
+The declared `h1_bandwidth` must include every nonzero one-body entry.
+The audit checks ordinary dense inputs once per call, including views.
+Use `trust_h1_bandwidth=true` only for inputs whose declared band is guaranteed.
+The reported error envelope covers arithmetic on included terms.
+
 The returned `ProducerEnergy.total` is observational. It is distinct from the
 solver's `represented_energy`, does not replace it, and does not certify
 stationarity for the producer Hamiltonian. The evaluator takes `O(N^2)` time

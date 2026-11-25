@@ -1,13 +1,32 @@
+"""
+    ProducerHamiltonian(one_body, interaction; h1_bandwidth, constant=0.0,
+                        trust_h1_bandwidth=false)
+
+Reference a caller-owned density-density Hamiltonian for `producer_energy`.
+Every one-body entry outside the declared bandwidth must be exactly zero.
+The audit checks this once per call by default. Set
+`trust_h1_bandwidth=true` for a lazy or banded input whose structure already
+guarantees the declared band.
+"""
 struct ProducerHamiltonian{H,V}
     one_body::H
     interaction::V
     constant::Float64
     h1_bandwidth::Int
     sites::Int
+    trust_h1_bandwidth::Bool
 end
 
+ProducerHamiltonian{H,V}(one_body, interaction, constant, h1_bandwidth,
+        sites) where {H,V} = ProducerHamiltonian{H,V}(one_body, interaction,
+    constant, h1_bandwidth, sites, false)
+
+ProducerHamiltonian(one_body::H, interaction::V, constant::Float64,
+        h1_bandwidth::Int, sites::Int) where {H,V} = ProducerHamiltonian{H,V}(
+    one_body, interaction, constant, h1_bandwidth, sites)
+
 function ProducerHamiltonian(one_body, interaction; constant::Real=0.0,
-        h1_bandwidth::Int)
+        h1_bandwidth::Int, trust_h1_bandwidth::Bool=false)
     size(one_body, 1) == size(one_body, 2) || throw(DimensionMismatch(
         "producer one-body operator must be square"))
     size(interaction) == size(one_body) || throw(DimensionMismatch(
@@ -18,7 +37,22 @@ function ProducerHamiltonian(one_body, interaction; constant::Real=0.0,
         "producer H1 bandwidth is invalid"))
     value = Float64(constant)
     isfinite(value) || throw(ArgumentError("producer constant must be finite"))
-    ProducerHamiltonian(one_body, interaction, value, h1_bandwidth, sites)
+    ProducerHamiltonian(one_body, interaction, value, h1_bandwidth, sites,
+        trust_h1_bandwidth)
+end
+
+function _check_producer_bandwidth(producer::ProducerHamiltonian)
+    producer.trust_h1_bandwidth && return nothing
+    h1, band, sites = producer.one_body, producer.h1_bandwidth, producer.sites
+    band == sites - 1 && return nothing
+    for j = 1:sites
+        for rows in (1:j-band-1, j+band+1:sites), i in rows
+            iszero(h1[i, j]) || throw(ArgumentError(
+                "producer one-body entry ($i, $j) is nonzero outside " *
+                "h1_bandwidth=$band; increase h1_bandwidth to include it"))
+        end
+    end
+    nothing
 end
 
 struct ProducerEnergy
@@ -481,6 +515,7 @@ function producer_energy(result::Union{HFDMRGResult,UHFDMRGResult},
             result, producer))
     lifecycle = _producer_lifecycle(result)
     _check_producer_workspace(workspace, lifecycle, producer)
+    _check_producer_bandwidth(producer)
     reads_before = workspace.projector_block_reads
     alpha_h1, beta_h1 = _ProducerSum(), _ProducerSum()
     alpha_exchange, beta_exchange = _ProducerSum(), _ProducerSum()

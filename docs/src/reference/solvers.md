@@ -38,6 +38,23 @@ uncompressed one-body and density-density interaction, returning decomposed
 one-body, Hartree, exchange, constant, total, error-envelope, and block-read
 fields in `ProducerEnergy`.
 
+Supply `h1_bandwidth` as the largest distance from the diagonal at which
+the one-body matrix can be nonzero. If the band is unknown, use
+`size(one_body, 1) - 1`. The audit checks both triangles outside the declared
+band once per call, using constant extra storage. The arrays remain
+caller-owned. For a lazy or structurally banded input whose declared band
+is guaranteed, `trust_h1_bandwidth=true` skips the check and avoids indexing
+outside the band.
+
+The `error_envelope` is a Float64 arithmetic diagnostic for included terms.
+It does not bound the effect of out-of-band entries omitted by an incorrect
+trusted declaration, or the difference between the represented and producer
+Hamiltonians.
+
+```@docs
+ProducerHamiltonian
+```
+
 The operation is observational and does not assert producer-Hamiltonian
 stationarity. Historical tuple results do not dispatch to it, and neither
 solver implementation falls back to the other.
