@@ -68,6 +68,19 @@ struct UHFDMRGResult
     state::UHFCompactState
 end
 
+@inline function Base.getproperty(result::UHFDMRGResult, name::Symbol)
+    if name === :replay_alpha_root_coordinate_change
+        name = :replay_alpha_projector_change
+    elseif name === :replay_beta_root_coordinate_change
+        name = :replay_beta_projector_change
+    end
+    getfield(result, name)
+end
+
+Base.propertynames(::UHFDMRGResult, private::Bool=false) =
+    (fieldnames(UHFDMRGResult)..., :replay_alpha_root_coordinate_change,
+        :replay_beta_root_coordinate_change)
+
 UHFDMRGResult(converged, reason, represented_energy, half_sweeps,
         accepted_full, accepted_fallback, rejected_updates,
         maximum_alpha_rank, maximum_beta_rank, maximum_alpha_pair_rank,
@@ -402,12 +415,10 @@ function _solve_uhf_hfdmrg(one_body::BandedOneBody,
     end
     replay_after = _uhf_invariant_energy!(lifecycle, one_body, operator,
         workspace.lifecycle)
-    alpha_projector = lifecycle.root.alpha.rank == alpha_rank ?
-        _projector_distance(workspace.alpha_incoming,
-            lifecycle.root.alpha.covariance, alpha_rank) : Inf
-    beta_projector = lifecycle.root.beta.rank == beta_rank ?
-        _projector_distance(workspace.beta_incoming,
-            lifecycle.root.beta.covariance, beta_rank) : Inf
+    alpha_coordinates = _root_coordinate_change(workspace.alpha_incoming,
+        alpha_rank, lifecycle.root.alpha.covariance, lifecycle.root.alpha.rank)
+    beta_coordinates = _root_coordinate_change(workspace.beta_incoming,
+        beta_rank, lifecycle.root.beta.covariance, lifecycle.root.beta.rank)
     alpha_envelope = 4sqrt(outcome.max_alpha_discarded) +
         8192eps(Float64)*max(lifecycle.root.alpha.rank, 1)
     beta_envelope = 4sqrt(outcome.max_beta_discarded) +
@@ -429,7 +440,7 @@ function _solve_uhf_hfdmrg(one_body::BandedOneBody,
         outcome.max_alpha, outcome.max_beta, outcome.max_alpha_pair,
         outcome.max_beta_pair, outcome.max_alpha_discarded,
         outcome.max_beta_discarded, outcome.changes, replay_energy,
-        alpha_projector, beta_projector, alpha_envelope, beta_envelope,
+        alpha_coordinates, beta_coordinates, alpha_envelope, beta_envelope,
         outcome.requested_energy_tolerance, outcome.effective_energy_tolerance,
         outcome.stopping_tolerance_reason,
         UHFCompactState(lifecycle))

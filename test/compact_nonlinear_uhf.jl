@@ -39,6 +39,12 @@ end
         @test result.converged
         @test result.reason == :energy_converged
         @test result.accepted_full + result.accepted_fallback > 0
+        @test hasproperty(result, :replay_alpha_root_coordinate_change)
+        @test hasproperty(result, :replay_beta_root_coordinate_change)
+        @test result.replay_alpha_root_coordinate_change ==
+            result.replay_alpha_projector_change
+        @test result.replay_beta_root_coordinate_change ==
+            result.replay_beta_projector_change
         @test result.maximum_alpha_pair_rank ==
             HFDMRG.pair_dimension(result.maximum_alpha_rank)
         @test result.maximum_beta_pair_rank ==

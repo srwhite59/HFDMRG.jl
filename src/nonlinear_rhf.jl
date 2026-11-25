@@ -54,6 +54,14 @@ struct HFDMRGResult
     state::RHFCompactState
 end
 
+@inline function Base.getproperty(result::HFDMRGResult, name::Symbol)
+    name === :replay_root_coordinate_change && (name = :replay_projector_change)
+    getfield(result, name)
+end
+
+Base.propertynames(::HFDMRGResult, private::Bool=false) =
+    (fieldnames(HFDMRGResult)..., :replay_root_coordinate_change)
+
 HFDMRGResult(converged, reason, represented_energy, half_sweeps,
         accepted_full, accepted_fallback, rejected_updates,
         maximum_state_rank, maximum_pair_rank,
@@ -218,6 +226,10 @@ end
     maximum(abs(first[row, column] - second[row, column])
         for column = 1:rank, row = 1:rank; init=0.0)
 end
+
+@inline _root_coordinate_change(first, first_rank::Int, second,
+    second_rank::Int) = first_rank == second_rank ?
+        _projector_distance(first, second, first_rank) : Inf
 
 function _preflight_nonlinear(lifecycle, one_body, operator, control,
         workspace)
@@ -427,9 +439,8 @@ function solve_hfdmrg(one_body::BandedOneBody,
     end
     replay_after = _invariant_energy!(lifecycle, one_body, operator,
         workspace.lifecycle)
-    replay_projector = lifecycle.root.rank == rank_before ?
-        _projector_distance(workspace.incoming, lifecycle.root.covariance,
-            rank_before) : Inf
+    replay_coordinates = _root_coordinate_change(workspace.incoming, rank_before,
+        lifecycle.root.covariance, lifecycle.root.rank)
     projector_envelope = 4sqrt(outcome[10]) +
         8192eps(Float64)*max(lifecycle.root.rank, 1)
     converged = outcome[1]
@@ -450,7 +461,7 @@ function solve_hfdmrg(one_body::BandedOneBody,
     end
     HFDMRGResult(converged, reason, replay_after, length(outcome[3]),
         outcome[5], outcome[6], outcome[7], outcome[8], outcome[9],
-        outcome[10], outcome[4], replay_energy, replay_projector,
+        outcome[10], outcome[4], replay_energy, replay_coordinates,
         projector_envelope, outcome[12], outcome[13], outcome[14],
         RHFCompactState(lifecycle))
 end

@@ -30,6 +30,17 @@ The compact typed route returns `HFDMRGResult` for RHF or `UHFDMRGResult` for
 UHF. These records retain compact block/root state and a `represented_energy`;
 they do not materialize global occupied coefficients.
 
+The replay diagnostics compare the state before and after transport and
+recompression with updates disabled. `replay_energy_change` measures the
+change in represented energy. `replay_root_coordinate_change` (RHF) and
+`replay_alpha_root_coordinate_change` / `replay_beta_root_coordinate_change`
+(UHF) report the maximum absolute entrywise change of the root covariance
+in its two local bases, or `Inf` when the corresponding root rank changes.
+A rotation of the root basis can change this number even for an identical
+physical projector. Only the energy change gates replay convergence. The
+original `replay_projector_change`, `replay_alpha_projector_change`, and
+`replay_beta_projector_change` properties remain available as aliases.
+
 ## Producer-energy audit
 
 `producer_energy(result, producer)` accepts only a compact RHF/UHF result and
@@ -52,7 +63,7 @@ trusted declaration, or the difference between the represented and producer
 Hamiltonians.
 
 ```@docs
-ProducerHamiltonian
+HFDMRG.ProducerHamiltonian
 ```
 
 The operation is observational and does not assert producer-Hamiltonian

@@ -20,6 +20,15 @@ function warmed_publication_allocation(lifecycle, candidate)
     @allocated HFDMRG._publish_advance_candidate!(lifecycle, candidate)
 end
 
+@testset "Replay compares root coordinates in their own gauges" begin
+    P = [1.0 0.0; 0.0 0.0]
+    Q = [0.0 -1.0; 1.0 0.0]
+    rotated = Q' * P * Q
+    @test Q * rotated * Q' == P
+    @test HFDMRG._root_coordinate_change(P, 2, rotated, 2) == 1.0
+    @test HFDMRG._root_coordinate_change(P, 2, rotated, 1) == Inf
+end
+
 @testset "standalone monotone RHF facade" begin
     energies = Dict{Tuple{Int,Bool,Symbol},Float64}()
     for atoms in (2, 10), exact in (false, true),
@@ -36,6 +45,8 @@ end
             HFDMRG.pair_dimension(result.maximum_state_rank)
         @test result.maximum_discarded_squared_weight >= 0.0
         @test abs(result.replay_energy_change) <= 1.0e-10
+        @test hasproperty(result, :replay_root_coordinate_change)
+        @test result.replay_root_coordinate_change == result.replay_projector_change
         @test result.projector_envelope >=
             4sqrt(result.maximum_discarded_squared_weight)
         lifecycle = result.state.lifecycle

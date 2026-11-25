@@ -17,6 +17,7 @@ function result_record(result::HFDMRGResult)
         "maximum_discarded_squared_weight" =>
             result.maximum_discarded_squared_weight,
         "replay_energy_change_ha" => result.replay_energy_change,
+        "replay_root_coordinate_change" => result.replay_root_coordinate_change,
         "replay_projector_change" => result.replay_projector_change,
         "projector_envelope" => result.projector_envelope,
         "requested_energy_tolerance_ha" =>
@@ -43,6 +44,10 @@ function result_record(result::UHFDMRGResult)
         "maximum_beta_discarded_squared_weight" =>
             result.maximum_beta_discarded_squared_weight,
         "replay_energy_change_ha" => result.replay_energy_change,
+        "replay_alpha_root_coordinate_change" =>
+            result.replay_alpha_root_coordinate_change,
+        "replay_beta_root_coordinate_change" =>
+            result.replay_beta_root_coordinate_change,
         "replay_alpha_projector_change" =>
             result.replay_alpha_projector_change,
         "replay_beta_projector_change" => result.replay_beta_projector_change,

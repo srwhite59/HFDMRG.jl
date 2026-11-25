@@ -89,8 +89,10 @@ The public H10/H20 reproductions use Julia 1.12.6 with four BLAS threads,
 physical orientation, and explicit atom intervals. RHF uses the dimer-product
 start; UHF uses the atomic-Neel start. Compact results report requested and
 effective stopping tolerances separately, plus the reason for any effective
-Float64 floor. Projector replay changes are interpreted at their appropriate
-square-root scale rather than as an energy tolerance.
+Float64 floor. The physical example also reports the
+[root-coordinate replay diagnostics](@ref "Solvers and controls").
+These entrywise changes depend on the root basis and carry no physical
+projector-distance certificate.
 
 ## Energy boundary
 
