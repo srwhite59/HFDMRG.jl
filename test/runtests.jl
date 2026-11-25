@@ -694,6 +694,7 @@ try
     end
 
     include("historical_sweep_energy.jl")
+    include("historical_one_body_ranges.jl")
 
     @testset "Per-sweep observer" begin
         rng = MersenneTwister(809)

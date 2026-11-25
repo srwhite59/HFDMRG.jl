@@ -431,8 +431,9 @@ function getfinal(H, N)
         res === nothing && (res = N)
         res
     end
-    finalindsH = [fl(i -> abs(H[j, i]) > 1e-13, 1:N) for j = 1:N]
-    firstindsH = [ff(i -> abs(H[j, i]) > 1e-13, 1:N) for j = 1:N]
+    # This is a structural range, independent of the units used for H.
+    finalindsH = [fl(i -> !iszero(H[j, i]), 1:N) for j = 1:N]
+    firstindsH = [ff(i -> !iszero(H[j, i]), 1:N) for j = 1:N]
     finalindsH, firstindsH
 end
 
