@@ -2490,6 +2490,7 @@ try
     end
 
     include("compact_rhf_foundation.jl")
+    include("compact_one_body_constructor.jl")
     include("compact_rhf_lifecycle.jl")
     include("compact_terminal_fragments.jl")
     include("compact_occupation_defaults.jl")

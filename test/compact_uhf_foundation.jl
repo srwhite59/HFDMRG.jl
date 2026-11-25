@@ -149,7 +149,9 @@ end
 function finite_fragment_fixture()
     one_body_full, operator_full = nucleus_fixture(3)
     sites = 37
-    one_body = HFDMRG.BandedOneBody(one_body_full.bands[:, 1:sites])
+    bands = one_body_full.bands[:, 1:sites]
+    bands[2, end] = 0.0 # The cropped chain no longer has this outgoing hop.
+    one_body = HFDMRG.BandedOneBody(bands)
     operator = HFDMRG.UnitCellInteraction(sites, 1,
         operator_full.tail_transfer, operator_full.residual_transfer,
         operator_full.phase_source, operator_full.phase_sink,
